@@ -20,10 +20,12 @@ intents.message_content = True
 bot = commands.Bot(command_prefix=PREFIX, intents=intents, help_command=None)
 
 COLOURS = {
-    "report": discord.Colour.red(),
-    "support": discord.Colour.blurple(),
-    "appeal": discord.Colour.gold(),
-    "other": discord.Colour.green(),
+    "general": discord.Colour.blurple(),
+    "base": discord.Colour.green(),
+    "clan": discord.Colour.purple(),
+    "shop": discord.Colour.gold(),
+    "raid": discord.Colour.red(),
+    "bug": discord.Colour.orange(),
 }
 
 
@@ -132,10 +134,12 @@ class TransferModal(discord.ui.Modal, title="Transfer ticket"):
 class TicketTypeSelect(discord.ui.Select):
     def __init__(self):
         options = [
-            discord.SelectOption(label="Player report", value="report", emoji="🚩", description="Report cheating, griefing, or rule breaking"),
-            discord.SelectOption(label="Server support", value="support", emoji="🛠️", description="Get help with the community or server"),
-            discord.SelectOption(label="Ban appeal", value="appeal", emoji="⚖️", description="Appeal a moderation action"),
-            discord.SelectOption(label="Something else", value="other", emoji="🎫", description="Any other private request"),
+            discord.SelectOption(label="Ticket General", value="general", emoji="📄", description="General requests and questions"),
+            discord.SelectOption(label="Ticket Base", value="base", emoji="🏠", description="Questions about your base or area"),
+            discord.SelectOption(label="Ticket Clan", value="clan", emoji="👥", description="Clan requests or specific problems"),
+            discord.SelectOption(label="Ticket Shop", value="shop", emoji="💎", description="Store and product information"),
+            discord.SelectOption(label="Ticket Raid", value="raid", emoji="⚠️", description="Bounty raid or raid-related problems"),
+            discord.SelectOption(label="Ticket Bug", value="bug", emoji="🐛", description="Report an in-game or bot bug"),
         ]
         super().__init__(placeholder="Choose what you need help with…", min_values=1, max_values=1, options=options, custom_id="manager:ticket:type")
 
