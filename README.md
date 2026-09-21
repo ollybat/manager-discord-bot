@@ -1,13 +1,21 @@
-# Manager Discord Bot — Ticket System
+# Manager Discord Bot — Premium Ticket System
 
-Standalone Python `discord.py` bot, built from scratch for Rust Console community support. This is not a website and does not use RCON or control a game server.
+Standalone Python `discord.py` bot for Rust Console community support. Built from scratch; it is not a website and does not use RCON or control a game server.
 
-## Ticket commands
+## Ticket UX
 
-- `/ticket setup channel category archive` — saves the category/archive configuration and deploys a private ticket panel with issue buttons.
-- `/ticket claim` — locks the ticket to the moderator using it.
-- `/ticket transfer staff_member` — grants the ticket to another staff member.
-- `/ticket close reason` — creates an HTML transcript with message text and attachment links in the archive channel, then deletes the ticket.
+- `/ticket setup channel category archive` deploys a polished support embed.
+- Dropdown menu with 🚩 Player Report, 🛠️ Server Support, ⚖️ Ban Appeal, and 🎫 Other.
+- Modal form asks for a detailed initial report before creating a ticket.
+- Private channels with emojis and readable issue names.
+- One-open-ticket limit per user.
+- Interactive buttons for 🙋 Claim, 🔁 Transfer, and 🔒 Close.
+- Staff-only claim and transfer controls.
+- Transfer modal accepts a staff member ID.
+- Close modal requires a reason.
+- HTML transcript includes usernames, timestamps, messages, attachment links, and inline images when available.
+- Transcript is sent to a hidden archive channel before deletion.
+- Persistent buttons and dropdowns survive bot restarts.
 
 ## Run
 
@@ -18,6 +26,6 @@ cp .env.example .env
 python bot.py
 ```
 
-Enable **Message Content Intent** and **Server Members Intent** in the Discord Developer Portal. The bot needs Manage Channels, View Channel, Send Messages, Read Message History, Attach Files, and Manage Permissions as appropriate.
+Enable Message Content Intent and Server Members Intent in Discord Developer Portal. The bot needs View Channel, Send Messages, Read Message History, Manage Channels, Manage Permissions, Attach Files, and Embed Links as appropriate.
 
-Never commit `.env` or your bot token. GitHub publishing is not configured because no repository target has been provided.
+Never commit `.env` or your bot token.
