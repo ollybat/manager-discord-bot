@@ -1,5 +1,5 @@
 from __future__ import annotations
-import logging,os
+import logging,os,sys
 from dataclasses import dataclass
 from pathlib import Path
 from dotenv import load_dotenv
@@ -16,4 +16,8 @@ class Settings:
         try:owner=int(owner_raw) if owner_raw else None
         except ValueError:raise ValueError("OWNER_ID must be an integer Discord user ID") from None
         return cls(os.getenv("DISCORD_TOKEN"),os.getenv("PREFIX","!"),Path(os.getenv("DATABASE_PATH","manager.sqlite3")),gid,owner,os.getenv("LOG_LEVEL","INFO").upper())
-def configure_logging(level:str)->None:logging.basicConfig(level=getattr(logging,level,logging.INFO),format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+def configure_logging(level:str)->None:
+    numeric = getattr(logging, level.upper(), logging.INFO)
+    logging.basicConfig(level=numeric, format="%(asctime)s %(levelname)s %(name)s: %(message)s", stream=sys.stdout, force=True)
+    logging.getLogger("discord.client").setLevel(logging.INFO)
+    logging.getLogger("discord.gateway").setLevel(logging.INFO)
