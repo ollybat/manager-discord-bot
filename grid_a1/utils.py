@@ -1,3 +1,5 @@
+"""Shared ticket metadata, time, naming, and staff helpers."""
+
 from __future__ import annotations
 
 import re
