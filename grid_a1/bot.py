@@ -1,5 +1,6 @@
 from __future__ import annotations
 import logging
+import time
 import discord
 from discord import app_commands
 from discord.ext import commands, tasks
@@ -17,12 +18,34 @@ intents = discord.Intents.default(); intents.members = True; intents.message_con
 class GridA1Bot(commands.Bot):
     def __init__(self):
         super().__init__(command_prefix=settings.prefix, intents=intents, help_command=None)
-        self.database = Database(settings.database_path); self.tickets = TicketService(self.database); register_commands(self)
+        self.database = Database(settings.database_path); self.tickets = TicketService(self.database)
+        self._global_sync_last_at = 0.0
+        self._global_sync_in_progress = False
+        register_commands(self)
     async def setup_hook(self):
         self.database.migrate(); self.add_view(TicketPanel(self.tickets)); self.add_view(TicketControls(self.tickets)); self.refresh_panels.start()
+        # Never PUT global commands during startup; global sync is owner-only via /sync.
         if settings.test_guild_id:
-            guild = discord.Object(id=settings.test_guild_id); self.tree.copy_global_to(guild=guild); await self.tree.sync(guild=guild)
-        await self.tree.sync()
+            guild = discord.Object(id=settings.test_guild_id); self.tree.copy_global_to(guild=guild)
+            try:
+                synced = await self.tree.sync(guild=guild)
+                log.info("Synced %d application commands to test guild %s on startup", len(synced), settings.test_guild_id)
+            except discord.HTTPException as error:
+                if error.status == 429: log.warning("Test-guild sync was rate limited on startup; no global sync was attempted")
+                else: log.exception("Test-guild command sync failed on startup")
+    async def sync_commands_on_request(self):
+        """Run an explicit owner-requested sync with an in-memory cooldown/guard."""
+        now = time.monotonic(); cooldown = 60.0
+        if self._global_sync_in_progress: raise RuntimeError("A command sync is already in progress; please wait for its response.")
+        remaining = cooldown - (now - self._global_sync_last_at)
+        if remaining > 0: raise RuntimeError(f"Global command sync is on cooldown; try again in {remaining:.0f}s.")
+        self._global_sync_in_progress = True; self._global_sync_last_at = now
+        try:
+            out=[]
+            if settings.test_guild_id:
+                guild=discord.Object(id=settings.test_guild_id); self.tree.copy_global_to(guild=guild); synced_guild=await self.tree.sync(guild=guild); out.append(f"test guild `{settings.test_guild_id}`: {len(synced_guild)}")
+            synced_global=await self.tree.sync(); out.append(f"global: {len(synced_global)}"); return out
+        finally: self._global_sync_in_progress = False
     @tasks.loop(seconds=60)
     async def refresh_panels(self):
         for guild in self.guilds:
@@ -89,8 +112,11 @@ async def on_ready(): log.info("Grid A1 bot logged in as %s",bot.user)
 @bot.tree.error
 async def on_app_command_error(i,error):
     log.exception("Application command failed",exc_info=error)
-    if isinstance(error,app_commands.MissingPermissions): msg="You do not have permission to use that command."
+    original=getattr(error,"original",error)
+    if isinstance(original,discord.HTTPException) and original.status==429: msg="Discord rate-limited this sync. Please wait before trying /sync again; startup does not perform a global sync."
+    elif isinstance(error,app_commands.MissingPermissions): msg="You do not have permission to use that command."
     elif isinstance(error,(OwnerConfigurationError,OwnerOnlyError)): msg=str(error)
+    elif isinstance(error,RuntimeError): msg=str(error)
     else: msg="That command could not be completed. Check setup and bot permissions."
     if i.response.is_done(): await i.followup.send(msg,ephemeral=True)
     else: await i.response.send_message(msg,ephemeral=True)
