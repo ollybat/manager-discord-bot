@@ -36,7 +36,20 @@ class TicketService:
             await channel.delete(reason="Grid A1 ticket record could not be created"); raise
         from .views import TicketControls
         await channel.send(content=interaction.user.mention, embed=ticket_embed(label, region, details), view=TicketControls(self))
+        await self.notify_staff(guild, channel, ticket_id, label, region, interaction.user.id)
         await interaction.response.send_message(f"✅ Ticket **{ticket_id}** created: {channel.mention}", ephemeral=True)
+
+
+    async def notify_staff(self, guild, channel, ticket_id, issue, region, owner_id):
+        role_ids = self.db.staff_role_ids(guild.id)
+        if not role_ids: return
+        members = {member.id: member for role_id in role_ids for role in [guild.get_role(role_id)] if role for member in role.members}
+        for member in members.values():
+            if member.id == owner_id or member.bot: continue
+            try:
+                await member.send(f"📩 New Grid A1 ticket **{ticket_id}** was created in **{guild.name}**.\nIssue: **{issue}** | Region: **{region}**\nPlease review it here: {channel.mention}")
+            except discord.DiscordException:
+                log.info("Could not DM staff member %s about ticket %s", member.id, ticket_id)
 
     async def transcript(self, channel: discord.TextChannel) -> str:
         from .transcript import render
