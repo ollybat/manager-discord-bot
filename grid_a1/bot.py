@@ -109,6 +109,24 @@ async def verifypanel(i: discord.Interaction, channel: discord.TextChannel, role
     bot.database.upsert_config(i.guild.id, verify_panel_channel=channel.id, verify_panel_message=message.id, verify_role=role.id)
     await i.response.send_message(f"✅ Verification panel created in {channel.mention} for {role.mention}.", ephemeral=True)
 
+
+@setup_group.command(name="staff", description="Manage optional ticket staff notification roles")
+@app_commands.checks.has_permissions(manage_guild=True)
+@app_commands.describe(action="Type add or remove", role="Staff role to notify")
+async def setup_staff(i: discord.Interaction, action: str, role: discord.Role):
+    action = action.lower()
+    if action not in ("add", "remove"):
+        return await i.response.send_message("Use action add or remove.", ephemeral=True)
+    try:
+        changed = bot.database.add_staff_role(i.guild.id, role.id) if action == "add" else bot.database.remove_staff_role(i.guild.id, role.id)
+    except ValueError as error:
+        return await i.response.send_message(f"❌ {error}", ephemeral=True)
+    if action == "add":
+        message = f"✅ {role.mention} will be notified when a new ticket is created." if changed else f"{role.mention} is already configured."
+    else:
+        message = f"✅ Removed {role.mention} from ticket notifications." if changed else f"{role.mention} was not configured."
+    await i.response.send_message(message, ephemeral=True)
+
 @setup_group.command(name="tickets", description="Configure ticket channels and deploy the support panel")
 @admin()
 async def setup_tickets(i, panel_channel: discord.TextChannel, logs_channel: discord.TextChannel, category: discord.CategoryChannel, inactivity_hours: app_commands.Range[int,1,720]):
