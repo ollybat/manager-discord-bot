@@ -6,10 +6,10 @@ from discord import app_commands
 from discord.ext import commands, tasks
 from .config import Settings, configure_logging
 from .database import Database
-from .embeds import embed, support_panel
+from .embeds import embed, support_panel, inactivity_indicator
 from .tickets import TicketService, claim
 from .utils import is_ticket, parse_ticket_topic, staff_member
-from .views import TicketControls, TicketPanel
+from .views import OwnerInactivityView, TicketControls, TicketPanel
 from .welcomer import missing, send_welcome, welcome_embed
 from .commands import OwnerConfigurationError, OwnerOnlyError, register_commands
 settings = Settings.from_env(); configure_logging(settings.log_level)
@@ -23,7 +23,7 @@ class GridA1Bot(commands.Bot):
         self._global_sync_in_progress = False
         register_commands(self)
     async def setup_hook(self):
-        self.database.migrate(); self.add_view(TicketPanel(self.tickets)); self.add_view(TicketControls(self.tickets)); self.refresh_panels.start()
+        self.database.migrate(); self.add_view(TicketPanel(self.tickets)); self.add_view(TicketControls(self.tickets)); self.refresh_panels.start(); self.inactivity_loop.start()
         # Never PUT global commands during startup; global sync is owner-only via /sync.
         if settings.test_guild_id:
             guild = discord.Object(id=settings.test_guild_id); self.tree.copy_global_to(guild=guild)
@@ -60,6 +60,33 @@ class GridA1Bot(commands.Bot):
                     message = await channel.send(embed=support_panel(guild, self.database), view=TicketPanel(self.tickets)); self.database.upsert_config(guild.id, panel_message=message.id)
                 except discord.DiscordException: log.exception("Panel recovery failed")
             except discord.DiscordException: log.exception("Panel refresh failed")
+    @tasks.loop(minutes=5)
+    async def inactivity_loop(self):
+        from datetime import datetime, timezone, timedelta
+        for guild in self.guilds:
+            config = self.database.config(guild.id)
+            if not config: continue
+            threshold = int(config['inactivity_hours'])
+            for row in self.database.open_tickets(guild.id):
+                channel = guild.get_channel(row['channel_id'])
+                if not isinstance(channel, discord.TextChannel): continue
+                indicator, duration = inactivity_indicator(row['last_activity_at'], threshold, bool(row['owner_left']))
+                red = indicator == '🔴'
+                if red and not row['inactivity_notice_at']:
+                    owner = guild.get_member(row['owner_id'])
+                    now = datetime.now(timezone.utc); notice_at = now.isoformat()
+                    if owner:
+                        try:
+                            await owner.send(f'🔴 Your Grid A1 ticket **{row["ticket_id"]}** has been inactive for **{duration}**. Please choose an option below within 24 hours.', view=OwnerInactivityView(self.tickets, row["ticket_id"]))
+                        except discord.DiscordException: log.info('Could not DM inactive ticket owner %s', row['owner_id'])
+                    self.database.update_ticket(row['ticket_id'], inactivity_notice_at=notice_at, auto_close_at=(now + timedelta(hours=24)).isoformat())
+                    self.database.audit(guild.id,row['ticket_id'],0,'inactivity_notice', '{"indicator":"red"}')
+                elif red and row['auto_close_at'] and datetime.fromisoformat(row['auto_close_at']) <= datetime.now(timezone.utc):
+                    await self.tickets.close_system(guild, channel, 'Auto-closed after inactivity grace period')
+                await self.tickets.refresh_status(channel, row)
+
+    @inactivity_loop.before_loop
+    async def before_inactivity_loop(self): await self.wait_until_ready()
     @refresh_panels.before_loop
     async def before_refresh_panels(self): await self.wait_until_ready()
 bot = GridA1Bot()
@@ -106,7 +133,19 @@ async def ticket_requestclose(i,reason:str):
 @staff()
 async def ticket_close(i,reason:str="No reason provided"): await bot.tickets.close(i,reason)
 @bot.event
+async def on_message(message: discord.Message):
+    if not message.author.bot and isinstance(message.channel, discord.TextChannel):
+        row = bot.database.ticket_by_channel(message.channel.id)
+        if row:
+            bot.database.mark_activity(row["ticket_id"])
+    await bot.process_commands(message)
+
+@bot.event
 async def on_member_join(member): await send_welcome(bot,bot.database,member)
+@bot.event
+async def on_member_remove(member):
+    ticket_ids = bot.database.mark_owner_left(member.guild.id, member.id)
+    for ticket_id in ticket_ids: bot.database.audit(member.guild.id, ticket_id, 0, 'owner_left')
 @bot.event
 async def on_ready(): log.info("Grid A1 bot logged in as %s",bot.user)
 @bot.tree.error
