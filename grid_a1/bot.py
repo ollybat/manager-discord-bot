@@ -181,4 +181,25 @@ async def on_member_remove(member):
     ticket_ids = bot.database.mark_owner_left(member.guild.id, member.id)
     for ticket_id in ticket_ids: bot.database.audit(member.guild.id, ticket_id, 0, 'owner_left')
 
-[18 more lines in file. Use offset=181 to continue.]
+@bot.tree.error
+async def on_app_command_error(i,error):
+    log.exception("Application command failed", exc_info=error)
+    original = getattr(error, "original", error)
+    if isinstance(original, discord.HTTPException) and original.status == 429:
+        msg = "Discord rate-limited this sync. Please wait before trying /sync again."
+    elif isinstance(error, app_commands.MissingPermissions):
+        msg = "You do not have permission to use that command."
+    elif isinstance(error, (OwnerConfigurationError, OwnerOnlyError)):
+        msg = str(error)
+    elif isinstance(error, RuntimeError):
+        msg = str(error)
+    else:
+        msg = "That command could not be completed. Check setup and bot permissions."
+    if i.response.is_done(): await i.followup.send(msg, ephemeral=True)
+    else: await i.response.send_message(msg, ephemeral=True)
+
+def run():
+    if not settings.token: raise RuntimeError("DISCORD_TOKEN is missing. Copy .env.example to .env and set it outside Discord.")
+    bot.run(settings.token, log_handler=None)
+
+if __name__ == "__main__": run()
