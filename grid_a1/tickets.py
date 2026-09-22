@@ -137,4 +137,8 @@ async def claim(interaction: discord.Interaction, service: TicketService, member
     data = parse_ticket_topic(interaction.channel); ticket_id = data.get('id')
     if ticket_id: service.db.update_ticket(ticket_id, claimed_by=(member or interaction.user).id)
 
-[6 more lines in file. Use offset=131 to continue.]
+    service.db.audit(interaction.guild.id, ticket_id, interaction.user.id, "claimed")
+    target = interaction.user if member is None else member
+    if member is not None and not staff_member(member): return await interaction.response.send_message("Only staff members can receive a ticket transfer.", ephemeral=True)
+    await interaction.channel.set_permissions(target, view_channel=True, send_messages=True, read_message_history=True, attach_files=True)
+    await interaction.response.send_message(embed=embed("🙋 Ticket claimed", f"Assigned to {target.mention}."))
