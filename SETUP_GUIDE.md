@@ -55,4 +55,12 @@ PyNaCl/davey warnings can be ignored for the bot's current text, ticket, moderat
 | `/embed-edit` | Manage Messages | Edit a bot-authored embed |
 | `/sync` | `OWNER_ID` only | Explicitly sync test guild (if configured) and global commands |
 
-Existing setup, ticket, and welcomer commands remain in the bot architecture. No live Discord runtime test is claimed by this documentation.
+Existing setup, ticket, and welcomer commands remain in the bot architecture.
+
+## Ticket inactivity policy
+
+Run `/setup tickets` with `inactivity_hours` to configure the per-guild inactivity baseline (1–720 hours). Status is derived from the last recorded activity: 🟢 newly/open and active when inactive for less than `inactivity_hours`; 🟡 inactive when inactive for at least `inactivity_hours` but less than `2 * inactivity_hours`; 🔴 nearing auto-close when inactive for at least `2 * inactivity_hours`. The ticket embed is refreshed with the indicator and a human-readable duration.
+
+Red status sends one DM to the ticket owner and records `inactivity_notice_at`; the DM has unambiguous persistent buttons for **Keep ticket open**, **Close ticket**, and **Request another staff member**. It starts a 24-hour grace window rather than closing on first detection. Keep open resets activity and clears the notice. Request another staff member clears any claim, records an audit event, and alerts staff in the ticket. Close uses the existing transcript archive/delete service. If `on_member_remove` detects that the owner left, the row records `owner_left` and the bot does not DM; it remains red and follows the safe auto-close policy. SQLite migration version 3 adds the notice, owner-left, and auto-close metadata columns.
+
+No live Discord runtime test is claimed by this documentation.
