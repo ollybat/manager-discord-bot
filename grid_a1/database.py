@@ -25,6 +25,9 @@ class Database:
                 opened_at TEXT NOT NULL, last_activity_at TEXT NOT NULL, inactivity_notice_at TEXT,
                 owner_left INTEGER NOT NULL DEFAULT 0, auto_close_at TEXT, auto_close_reason TEXT,
                 closed_at TEXT, closed_by INTEGER, close_reason TEXT, transcript_filename TEXT)''')
+            config_existing = {r[1] for r in db.execute('PRAGMA table_info(guild_config)')}
+            for name in ['verify_panel_channel','verify_panel_message','verify_role', *[f'staff_role_{n}' for n in range(1, 11)]]:
+                if name not in config_existing: db.execute(f'ALTER TABLE guild_config ADD COLUMN {name} INTEGER')
             existing = {r[1] for r in db.execute('PRAGMA table_info(tickets)')}
             for name, definition in {'inactivity_notice_at':'TEXT','owner_left':'INTEGER NOT NULL DEFAULT 0','auto_close_at':'TEXT','auto_close_reason':'TEXT'}.items():
                 if name not in existing: db.execute(f'ALTER TABLE tickets ADD COLUMN {name} {definition}')
