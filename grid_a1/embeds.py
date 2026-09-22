@@ -37,11 +37,23 @@ def support_panel(guild: discord.Guild, database: Database) -> discord.Embed:
     return result
 
 
-def ticket_embed(issue: str, region: str, details: str) -> discord.Embed:
-    result = embed("🎫 Grid A1 • Support ticket opened", "Your request is now in the support queue. A moderator will review it shortly.", COLOURS.get(issue, discord.Colour.blurple()))
+def inactivity_indicator(last_activity_at: str, inactivity_hours: int, owner_left: bool = False) -> tuple[str, str]:
+    from datetime import datetime, timezone
+    last = datetime.fromisoformat(last_activity_at)
+    elapsed = max(0, int((datetime.now(timezone.utc) - last).total_seconds()))
+    hours, remainder = divmod(elapsed, 3600); minutes = remainder // 60
+    duration = f"{hours}h {minutes}m" if hours else f"{minutes}m"
+    if owner_left or elapsed >= 2 * inactivity_hours * 3600: return "🔴", duration
+    if elapsed >= inactivity_hours * 3600: return "🟡", duration
+    return "🟢", duration
+
+
+def ticket_embed(issue: str, region: str, details: str, status: str = "🟢", inactive_for: str = "0m") -> discord.Embed:
+    result = embed(f"{status} 🎫 Grid A1 • Support ticket opened", "Your request is now in the support queue. A moderator will review it shortly.", COLOURS.get(issue, discord.Colour.blurple()))
     result.add_field(name="Issue", value=issue.title()[:1024], inline=True)
     result.add_field(name="Region", value=f"🇪🇺 {region}", inline=True)
     result.add_field(name="Initial report", value=discord.utils.escape_markdown(details)[:1024], inline=False)
+    result.add_field(name="Activity", value=f"Inactive for **{inactive_for}**", inline=True)
     result.set_footer(text="Please keep replies in this channel • Times shown in UTC")
     return result
 
