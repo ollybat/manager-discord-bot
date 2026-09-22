@@ -132,7 +132,7 @@ class TicketService:
         await channel.delete(reason=f"Grid A1 ticket {ticket_id} closed by {interaction.user}")
 
 async def claim(interaction: discord.Interaction, service: TicketService, member: discord.Member | None = None) -> None:
-    if not staff_member(interaction.user): return await interaction.response.send_message("Only staff can claim tickets.", ephemeral=True)
+    if not staff_member(interaction.user): return await interaction.response.send_message("Only staff, administrators, the server owner, or the bot owner can claim tickets.", ephemeral=True)
     if not isinstance(interaction.channel, discord.TextChannel) or not is_ticket(interaction.channel): return await interaction.response.send_message("This only works inside a ticket.", ephemeral=True)
     data = parse_ticket_topic(interaction.channel); ticket_id = data.get('id')
     if ticket_id: service.db.update_ticket(ticket_id, claimed_by=(member or interaction.user).id)
