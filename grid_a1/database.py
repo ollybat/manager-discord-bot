@@ -79,6 +79,7 @@ class Database:
         row = self.config(guild_id)
         return [int(row[f"staff_role_{n}"]) for n in range(1, 11) if row and row[f"staff_role_{n}"]]
     def add_staff_role(self, guild_id, role_id):
+        self.upsert_config(guild_id)
         roles = self.staff_role_ids(guild_id)
         if role_id in roles: return False
         if len(roles) >= 10: raise ValueError("You can configure up to 10 staff roles.")
