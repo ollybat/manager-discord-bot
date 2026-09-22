@@ -1,16 +1,48 @@
-# 🟦 Grid A1 Manager Bot
+# Grid A1 Manager Discord Bot
 
-Standalone Python `discord.py` bot for Grid A1 community support on Discord.
+## Ticket inactivity policy
 
-See **[SETUP_GUIDE.md](SETUP_GUIDE.md)** for installation and command-sync workflow.
+Grid A1 checks open tickets every five minutes using the `inactivity_hours` value from `/setup tickets`.
 
-## Command sync safety
+- 🟢 **Open** — recent activity is below the configured threshold.
+- 🟡 **Inactive** — no ticket message for at least `inactivity_hours`.
+- 🔴 **Closing soon** — no activity for at least twice `inactivity_hours`.
 
-- On startup, **no global application-command sync is performed**.
-- If `TEST_GUILD_ID` is set, startup syncs only that guild and logs the synced command count for fast testing.
-- Global sync is explicit through owner-only `/sync`, gated by `OWNER_ID` and protected by an in-memory cooldown/duplicate-request guard. Restarting the process resets that guard.
-- If Discord returns HTTP 429, wait for the cooldown and retry; this is a Discord API rate limit, not a missing command. Commands are not removed by this change.
+When a ticket reaches 🔴:
 
-Optional PyNaCl/davey voice-library warnings are harmless for this bot's text, tickets, moderation, and setup features. Install voice dependencies only if voice functionality is added or required.
+1. Grid A1 sends the owner one friendly private message.
+2. The message has clear buttons: **Keep ticket open**, **Request another staff member**, and **Close ticket**.
+3. The owner has 24 hours to respond.
+4. Keep open resets the activity timer.
+5. Request another staff member clears the current claim and records a staff request.
+6. Close archives the transcript and removes the ticket.
+7. If the owner has left the Discord server, Grid A1 cannot DM them and the ticket proceeds to the automatic-close policy.
+8. If there is no response after the 24-hour grace period, the ticket is automatically archived and closed.
 
-No live Discord runtime test is claimed by this documentation.
+A message sent in a ticket resets its activity timer. The five-minute task does not delete tickets merely because they are yellow or red; red first starts the notice/grace process. NA remains Coming Soon and EU remains the only selectable region.
+
+## Setup
+
+```text
+/setup tickets panel_channel logs_channel category inactivity_hours
+/setup welcomer welcome_channel link_channel bot_commands_channel shop_channel verify_channel
+```
+
+## Commands
+
+```text
+/help
+/rules
+/ping
+/embed
+/embed-edit
+/sync
+/welcomer preview
+/welcomer test
+/ticket claim
+/ticket transfer
+/ticket requestclose
+/ticket close
+```
+
+Run `python bot.py` after installing `requirements.txt`. Keep `.env`, the Discord token, SQLite files, logs, and transcripts private.
