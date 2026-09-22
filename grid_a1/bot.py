@@ -115,6 +115,7 @@ async def verifypanel(i: discord.Interaction, channel: discord.TextChannel, role
 @app_commands.describe(action="Choose whether to add or remove this staff role", role="Staff role to notify")
 @app_commands.choices(action=[app_commands.Choice(name="Add staff notifications", value="add"), app_commands.Choice(name="Remove staff notifications", value="remove")])
 async def setup_staff(i: discord.Interaction, action: app_commands.Choice[str], role: discord.Role):
+    if role.is_default() or role.is_managed(): return await i.response.send_message("❌ Choose a normal staff role, not @everyone or an integration role.", ephemeral=True)
     action = action.value.lower()
     if action not in ("add", "remove"):
         return await i.response.send_message("Use action add or remove.", ephemeral=True)
