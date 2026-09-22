@@ -133,6 +133,31 @@ async def staff_list(i: discord.Interaction):
     e.add_field(name="Configured roles", value="\n".join(f"{n}. {role.mention}" for n, role in enumerate(roles, 1)) if roles else "No staff notification roles configured.", inline=False)
     await i.response.send_message(embed=e, ephemeral=True)
 
+wipefeed_group = app_commands.Group(name="wipefeed", description="Manage EU 6X wipe announcements")
+bot.tree.add_command(wipefeed_group)
+
+@wipefeed_group.command(name="enable", description="Enable or disable wipefeed announcements")
+@app_commands.checks.has_permissions(manage_guild=True)
+async def wipefeed_enable(i: discord.Interaction, enabled: bool):
+    bot.database.upsert_config(i.guild.id, wipefeed_enabled=int(enabled))
+    state = "enabled" if enabled else "disabled"
+    await i.response.send_message(f"✅ Wipefeed is now **{state}**.", ephemeral=True)
+
+@wipefeed_group.command(name="send", description="Post an EU 6X wipe announcement")
+@app_commands.checks.has_permissions(manage_guild=True)
+@app_commands.describe(timestamp="Unix timestamp, for example 1785524400", channel="Channel where the wipe announcement will be posted")
+async def wipefeed_send(i: discord.Interaction, timestamp: str, channel: discord.TextChannel):
+    config = bot.database.config(i.guild.id)
+    if not config or not config["wipefeed_enabled"]: return await i.response.send_message("⚠️ Wipefeed is disabled. Run `/wipefeed enable enabled:true` first.", ephemeral=True)
+    try: unix = int(timestamp.strip().replace("<t:", "").split(":", 1)[0])
+    except ValueError: return await i.response.send_message("❌ Timestamp must be a Unix timestamp, such as `1785524400`.", ephemeral=True)
+    if unix < 0: return await i.response.send_message("❌ Timestamp cannot be negative.", ephemeral=True)
+    content = (f"🇪🇺 **a rust server EU 6X WIPE 2 months ago !** <t:{unix}:R> 🇪🇺\n\n" f"**Server Name**\nVALORA | CLAN | 5X | EU | WEEKLY | .gg/valora5x\n\n" f"Search the name displayed above and add the server to your favorites to be ready.\n\n" f"**Server Information**\n:jack: 5X Gather Rates\n:bp: Instant Crafting\n:crate: Fast Respawn\n:Time: Automatic Events\n:player: 100+ Players\n\n" f"**Latest wipe** • <t:{unix}:F> (<t:{unix}:R>)")
+    try: await channel.send(content)
+    except discord.Forbidden: return await i.response.send_message("❌ I cannot post in that channel. Check View Channel and Send Messages permissions.", ephemeral=True)
+    bot.database.upsert_config(i.guild.id, wipefeed_channel=channel.id)
+    await i.response.send_message(f"✅ EU 6X wipe announcement posted in {channel.mention}.", ephemeral=True)
+
 roles_group = app_commands.Group(name="roles", description="Display server roles")
 bot.tree.add_command(roles_group)
 @roles_group.command(name="setchannel", description="Post a stylish list of server roles")
