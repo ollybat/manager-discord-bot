@@ -52,20 +52,31 @@ class TicketPanel(discord.ui.View):
 
 
 class VerifyPanel(discord.ui.View):
+    """Persistent neon-purple verification panel."""
     def __init__(self, database):
         super().__init__(timeout=None); self.database = database
-    @discord.ui.button(label="Verify", style=discord.ButtonStyle.success, emoji="✅", custom_id="grid-a1:verify")
-    async def verify(self, interaction, button):
-        config = self.database.config(interaction.guild.id) if interaction.guild else None
-        role = interaction.guild.get_role(config["verify_role"]) if config and interaction.guild else None
-        if not isinstance(role, discord.Role): return await interaction.response.send_message("Verification is not configured yet.", ephemeral=True)
-        if role.is_default() or role >= interaction.guild.me.top_role: return await interaction.response.send_message("The verification role cannot be managed by Grid A1. Ask an administrator to move the bot role above it.", ephemeral=True)
-        if role in interaction.user.roles: return await interaction.response.send_message("You are already verified.", ephemeral=True)
-        try:
-            await interaction.user.add_roles(role, reason="Grid A1 verification panel")
-        except discord.Forbidden:
-            return await interaction.response.send_message("I cannot assign the verification role. Check my permissions and role position.", ephemeral=True)
-        await interaction.response.send_message(f"✅ You are verified and received {role.mention}.", ephemeral=True)
+    @discord.ui.button(label="Start verification", style=discord.ButtonStyle.primary, emoji="💜", custom_id="grid-a1:verify:start")
+    async def verify(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not interaction.guild or not isinstance(interaction.user, discord.Member): return await interaction.response.send_message("❌ Verification is only available inside the server.", ephemeral=True)
+        config = self.database.config(interaction.guild.id); role = interaction.guild.get_role(config["verify_role"]) if config and config["verify_role"] else None; me = interaction.guild.me
+        if not isinstance(role, discord.Role): return await interaction.response.send_message("⚠️ Verification is not configured yet.", ephemeral=True)
+        if not me or role.is_default() or role.is_managed() or role >= me.top_role: return await interaction.response.send_message("⚠️ Grid A1 cannot manage this role. Move the bot role above it.", ephemeral=True)
+        if role in interaction.user.roles: return await interaction.response.send_message("✅ You are already verified.", ephemeral=True)
+        age_days = max(0, (discord.utils.utcnow() - interaction.user.created_at).days)
+        if age_days < 7: return await interaction.response.send_message(f"🛡️ Your Discord account is **{age_days} days old**. Accounts under 7 days require staff review. Please open a ticket.", ephemeral=True)
+        text = f"Your Discord account is **{age_days} days old**.\n\n✅ Confirm you have read and will follow the server rules.\n✅ Confirm this account belongs to you.\n\nClick **Confirm rules** to receive {role.mention}."
+        await interaction.response.send_message(embed=embed("💜 Verification review", text), view=VerificationConfirm(self.database, role.id), ephemeral=True)
+class VerificationConfirm(discord.ui.View):
+    def __init__(self, database, role_id):
+        super().__init__(timeout=300); self.database, self.role_id = database, role_id
+    @discord.ui.button(label="Confirm rules", style=discord.ButtonStyle.success, emoji="✅")
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not interaction.guild or not isinstance(interaction.user, discord.Member): return await interaction.response.send_message("❌ Complete this in the server.", ephemeral=True)
+        role = interaction.guild.get_role(self.role_id); me = interaction.guild.me
+        if not role or not me or role >= me.top_role: return await interaction.response.send_message("⚠️ The verification role is not currently manageable.", ephemeral=True)
+        try: await interaction.user.add_roles(role, reason="Grid A1 verification completed")
+        except discord.Forbidden: return await interaction.response.send_message("❌ I cannot assign the role. Check Manage Roles and role order.", ephemeral=True)
+        await interaction.response.edit_message(embed=embed("💜 Verification complete", f"🎉 Welcome, {interaction.user.mention}! You now have {role.mention}."), view=None)
 
 class OwnerInactivityView(discord.ui.View):
     """Buttons sent privately to a ticket owner after a red inactivity warning."""
