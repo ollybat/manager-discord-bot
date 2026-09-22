@@ -52,7 +52,7 @@ def ticket_embed(issue: str, region: str, details: str, status: str = "🟢", in
     result.add_field(name="Issue", value=issue.title()[:1024], inline=True)
     result.add_field(name="Region", value=f"🇪🇺 {region}", inline=True)
     result.add_field(name="Initial report", value=discord.utils.escape_markdown(details)[:1024], inline=False)
-    result.add_field(name="Activity", value=f"Inactive for **{inactive_for}**", inline=True)
+    result.add_field(name="Activity", value=(f"Active • **{inactive_for}**" if status == "🟢" and inactive_for == "0m" else f"Inactive for **{inactive_for}**"), inline=True)
     result.set_footer(text="Please keep replies in this channel • Times shown in UTC")
     return result
 
