@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Any
 from .utils import utcnow
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 class Database:
     def __init__(self, path: Path): self.path = path
@@ -17,7 +17,7 @@ class Database:
                 guild_id INTEGER PRIMARY KEY, panel_channel INTEGER, panel_message INTEGER,
                 logs_channel INTEGER, ticket_category INTEGER, inactivity_hours INTEGER NOT NULL DEFAULT 24,
                 welcome_channel INTEGER, verify_channel INTEGER, link_channel INTEGER,
-                bot_commands_channel INTEGER, shop_channel INTEGER, verify_panel_channel INTEGER, verify_panel_message INTEGER, verify_role INTEGER)''')
+                bot_commands_channel INTEGER, shop_channel INTEGER, verify_panel_channel INTEGER, verify_panel_message INTEGER, verify_role INTEGER, staff_role_1 INTEGER, staff_role_2 INTEGER, staff_role_3 INTEGER, staff_role_4 INTEGER, staff_role_5 INTEGER, staff_role_6 INTEGER, staff_role_7 INTEGER, staff_role_8 INTEGER, staff_role_9 INTEGER, staff_role_10 INTEGER)''')
             db.execute('''CREATE TABLE IF NOT EXISTS tickets (
                 ticket_id TEXT PRIMARY KEY, guild_id INTEGER NOT NULL, channel_id INTEGER UNIQUE NOT NULL,
                 owner_id INTEGER NOT NULL, issue TEXT NOT NULL, region TEXT NOT NULL,
@@ -35,7 +35,7 @@ class Database:
     def config(self, guild_id):
         with self.connect() as db: return db.execute('SELECT * FROM guild_config WHERE guild_id=?',(guild_id,)).fetchone()
     def upsert_config(self, guild_id, **values: Any):
-        allowed={'panel_channel','panel_message','logs_channel','ticket_category','inactivity_hours','welcome_channel','verify_channel','link_channel','bot_commands_channel','shop_channel','verify_panel_channel','verify_panel_message','verify_role'}
+        allowed={'panel_channel','panel_message','logs_channel','ticket_category','inactivity_hours','welcome_channel','verify_channel','link_channel','bot_commands_channel','shop_channel','verify_panel_channel','verify_panel_message','verify_role','staff_role_1','staff_role_2','staff_role_3','staff_role_4','staff_role_5','staff_role_6','staff_role_7','staff_role_8','staff_role_9','staff_role_10'}
         if not set(values)<=allowed: raise ValueError(f'unknown config field: {set(values)-allowed}')
         with self.connect() as db:
             db.execute('INSERT INTO guild_config(guild_id) VALUES(?) ON CONFLICT DO NOTHING',(guild_id,))
@@ -71,3 +71,22 @@ class Database:
     def ticket_by_channel(self,channel_id):
         with self.connect() as db: return db.execute("SELECT * FROM tickets WHERE channel_id=? AND status IN ('open','close_requested')",(channel_id,)).fetchone()
     def set_claim(self,ticket_id,claimed_by): self.update_ticket(ticket_id,claimed_by=claimed_by)
+
+    def staff_role_ids(self, guild_id):
+        row = self.config(guild_id)
+        return [int(row[f"staff_role_{n}"]) for n in range(1, 11) if row and row[f"staff_role_{n}"]]
+    def add_staff_role(self, guild_id, role_id):
+        roles = self.staff_role_ids(guild_id)
+        if role_id in roles: return False
+        if len(roles) >= 10: raise ValueError("You can configure up to 10 staff roles.")
+        row = self.config(guild_id)
+        slot = next(n for n in range(1, 11) if not row[f"staff_role_{n}"])
+        self.upsert_config(guild_id, **{f"staff_role_{slot}": role_id})
+        return True
+    def remove_staff_role(self, guild_id, role_id):
+        row = self.config(guild_id)
+        if not row: return False
+        for n in range(1, 11):
+            if row[f"staff_role_{n}"] == role_id:
+                self.upsert_config(guild_id, **{f"staff_role_{n}": None}); return True
+        return False
