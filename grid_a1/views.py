@@ -4,6 +4,7 @@ import discord
 
 from .embeds import embed
 from .tickets import TicketService, claim
+from .utils import is_ticket, parse_ticket_topic, staff_member
 
 class DetailsModal(discord.ui.Modal, title="Open a support ticket"):
     details = discord.ui.TextInput(label="Tell us what happened", style=discord.TextStyle.paragraph, min_length=5, max_length=1500)
@@ -34,10 +35,42 @@ class TicketPanel(discord.ui.View):
     @discord.ui.button(label="How it works", style=discord.ButtonStyle.secondary, emoji="❔", custom_id="grid-a1:ticket:help")
     async def how_it_works(self, interaction: discord.Interaction, button: discord.ui.Button): await interaction.response.send_message(embed=embed("How support works", "1. Pick a category.\n2. Choose EU.\n3. Describe the issue.\n4. Add screenshots if useful.\n5. Staff will handle the ticket."), ephemeral=True)
 
+class OwnerInactivityView(discord.ui.View):
+    """Buttons sent privately to a ticket owner after a red inactivity warning."""
+    def __init__(self, service: TicketService, ticket_id: str):
+        super().__init__(timeout=86400); self.service = service; self.ticket_id = ticket_id
+    @discord.ui.button(label="Keep ticket open", style=discord.ButtonStyle.success, emoji="🟢", custom_id="grid-a1:inactive:keep")
+    async def keep(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.service.db.mark_activity(self.ticket_id)
+        await interaction.response.send_message("✅ The ticket will stay open. Staff have been notified.", ephemeral=True)
+    @discord.ui.button(label="Request another staff member", style=discord.ButtonStyle.secondary, emoji="🙋", custom_id="grid-a1:inactive:staff")
+    async def staff(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.service.db.set_claim(self.ticket_id, None); self.service.db.mark_activity(self.ticket_id); self.service.db.audit(interaction.guild.id if interaction.guild else 0, self.ticket_id, interaction.user.id, "staff_requested")
+        await interaction.response.send_message("✅ Your request was sent to staff.", ephemeral=True)
+    @discord.ui.button(label="Close ticket", style=discord.ButtonStyle.danger, emoji="🔒", custom_id="grid-a1:inactive:close")
+    async def close(self, interaction: discord.Interaction, button: discord.ui.Button):
+        channel = interaction.guild.get_channel(self.service.db.ticket(self.ticket_id)["channel_id"]) if interaction.guild and self.service.db.ticket(self.ticket_id) else None
+        if not isinstance(channel, discord.TextChannel): return await interaction.response.send_message("This ticket is already closed.", ephemeral=True)
+        await self.service.close_owner_from_dm(interaction, self.ticket_id, "Closed by ticket owner from inactivity notice")
+
+
 class TicketControls(discord.ui.View):
     def __init__(self, service: TicketService): super().__init__(timeout=None); self.service = service
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if not is_ticket(interaction.channel): await interaction.response.send_message('This ticket is no longer active.', ephemeral=True); return False
+        return True
     @discord.ui.button(label="Claim", style=discord.ButtonStyle.primary, emoji="🙋", custom_id="grid-a1:ticket:claim")
     async def claim_button(self, interaction: discord.Interaction, button: discord.ui.Button): await claim(interaction, self.service)
+    @discord.ui.button(label="Keep ticket open", style=discord.ButtonStyle.success, emoji="🟢", custom_id="grid-a1:ticket:keep-open")
+    async def keep_open(self, interaction: discord.Interaction, button: discord.ui.Button):
+        data=parse_ticket_topic(interaction.channel); self.service.db.mark_activity(data.get('id','')); await interaction.response.send_message('✅ Your ticket will remain open. Thanks for checking in!', ephemeral=True)
+    @discord.ui.button(label="Request another staff member", style=discord.ButtonStyle.secondary, emoji="🙋", custom_id="grid-a1:ticket:request-staff")
+    async def request_staff(self, interaction: discord.Interaction, button: discord.ui.Button):
+        data=parse_ticket_topic(interaction.channel)
+        if not isinstance(interaction.user, discord.Member) or interaction.user.id != int(data.get('owner','0')): return await interaction.response.send_message('Only the ticket owner can use this button.', ephemeral=True)
+        self.service.db.set_claim(data.get('id',''), None); self.service.db.mark_activity(data.get('id','')); self.service.db.audit(interaction.guild.id,data.get('id'),interaction.user.id,'staff_requested')
+        await interaction.channel.send('📣 The ticket owner requested another staff member. Please review this ticket.')
+        await interaction.response.send_message('✅ Staff have been alerted and the current claim was cleared.', ephemeral=True)
     @discord.ui.button(label="Close ticket", style=discord.ButtonStyle.danger, emoji="🔒", custom_id="grid-a1:ticket:close")
     async def close_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not isinstance(interaction.user, discord.Member) or not interaction.user.guild_permissions.manage_channels: return await interaction.response.send_message("Only staff can close tickets.", ephemeral=True)
