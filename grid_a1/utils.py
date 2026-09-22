@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from datetime import datetime, timezone
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 
 import discord
 
@@ -28,7 +28,7 @@ def parse_ticket_topic(channel: discord.abc.GuildChannel | None) -> dict[str, st
     for part in channel.topic.split(";", 1)[1].split(";"):
         if "=" in part:
             key, value = part.split("=", 1)
-            result[key] = value
+            result[key] = unquote(value)
     return result
 
 def is_ticket(channel: discord.abc.GuildChannel | None) -> bool:
