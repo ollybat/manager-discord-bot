@@ -17,23 +17,12 @@ def support_panel(guild: discord.Guild, database: Database) -> discord.Embed:
     counts = database.open_counts(guild.id)
     closed = database.closed_count(guild.id)
     closed_eu = database.closed_count(guild.id, "EU")
-    result = embed(
-        "Support Tickets",
-        "Choose a category below, then select EU and describe the issue.\nNA support is coming soon.",
-        discord.Colour.from_rgb(35, 91, 166),
-    )
-    result.add_field(name="Open tickets", value=f"**{sum(counts.values())}** total", inline=True)
-    result.add_field(name="EU tickets", value=f"**{counts.get('EU', 0)}**", inline=True)
-    result.add_field(name="NA", value="**Coming Soon**", inline=True)
-    result.add_field(name="Closed tickets", value=f"**{closed}** total ({closed_eu} EU)", inline=True)
-    result.add_field(
-        name="Categories",
-        value=("**General** — questions and requests\n**Base** — base or area help\n**Clan** — clan requests\n"
-               "**Shop** — store information\n**Raid** — raid-related problems\n**Bug** — in-game or bot bugs"),
-        inline=False,
-    )
-    result.add_field(name="How to open a ticket", value="Pick a category → choose **EU** → describe what happened. Add screenshots or other useful details when you can. Staff will take it from there.", inline=False)
-    result.set_footer(text="Grid A1 • Manager")
+    result = embed("💜 Grid A1 • Support Center", "✨ Choose the type of help you need, select the EU region, and complete the short ticket form.", NEON_PURPLE)
+    result.add_field(name="📊 Live queue", value=f"🟢 Open: **{sum(counts.values())}**\n🇪🇺 EU: **{counts.get('EU', 0)}**\n📁 Closed: **{closed}** ({closed_eu} EU)", inline=True)
+    result.add_field(name="🧭 How it works", value="1️⃣ Choose a category\n2️⃣ Select EU\n3️⃣ Add your in-game name\n4️⃣ Answer the questions\n5️⃣ Staff will help you", inline=True)
+    result.add_field(name="🗂️ Support categories", value="📄 General • 🏠 Base • 👥 Clan\n💎 Shop • ⚠️ Raid • 🐛 Bug", inline=False)
+    result.add_field(name="📌 Before opening", value="Please include clear details, screenshots when useful, and keep replies inside your ticket.", inline=False)
+    result.set_footer(text="Grid A1 • EU Support • Manager")
     return result
 
 
