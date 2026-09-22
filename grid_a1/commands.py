@@ -50,10 +50,8 @@ def register_commands(bot)->None:
         f=await image.to_file() if image else None
         if f:e.set_image(url=f"attachment://{f.filename}")
         try:
-            if f:
-                await m.edit(embed=e, attachments=[f])
-            else:
-                await m.edit(embed=e)
+            if f: await m.edit(embed=e, attachments=[f])
+            else: await m.edit(embed=e)
         except discord.Forbidden:return await i.response.send_message("❌ I cannot edit that message.",ephemeral=True)
         await i.response.send_message("✅ Embed updated.",ephemeral=True)
     @bot.tree.command(name="sync",description="Sync application commands (owner only)")
@@ -63,9 +61,8 @@ def register_commands(bot)->None:
         try:owner=int(raw)
         except ValueError:raise OwnerConfigurationError("OWNER_ID is not a valid Discord user ID.") from None
         if i.user.id!=owner:raise OwnerOnlyError("Only the configured bot owner can use /sync.")
-        out=[];gid=os.getenv("TEST_GUILD_ID","").strip()
-        if gid:
-            try:g=discord.Object(id=int(gid))
-            except ValueError:raise OwnerConfigurationError("TEST_GUILD_ID is not a valid Discord guild ID.") from None
-            bot.tree.copy_global_to(guild=g);out.append(f"test guild `{gid}`: {len(await bot.tree.sync(guild=g))}")
-        out.append(f"global: {len(await bot.tree.sync())}");await i.response.send_message("✅ Synced commands — "+"; ".join(out)+".",ephemeral=True)
+        try: out=await bot.sync_commands_on_request()
+        except discord.HTTPException as error:
+            if error.status==429: raise RuntimeError("Discord rate-limited the sync. Wait before trying /sync again; the cooldown is active.") from error
+            raise RuntimeError(f"Discord rejected the sync (HTTP {error.status}).") from error
+        await i.response.send_message("✅ Explicitly synced commands — "+"; ".join(out)+". Global sync is never automatic.",ephemeral=True)
