@@ -114,6 +114,40 @@ async def verifypanel(i: discord.Interaction, channel: discord.TextChannel, role
     await i.response.send_message(f"✅ Verification panel created in {channel.mention} for {role.mention}.", ephemeral=True)
 
 
+@ticket_group.command(name="remove", description="Remove a user from the current ticket")
+@staff()
+async def ticket_remove(i: discord.Interaction, user: discord.Member):
+    if not isinstance(i.channel, discord.TextChannel) or not is_ticket(i.channel): return await i.response.send_message("❌ This only works inside a ticket.", ephemeral=True)
+    data = parse_ticket_topic(i.channel)
+    if user.id == int(data.get("owner", "0")): return await i.response.send_message("❌ You cannot remove the ticket owner.", ephemeral=True)
+    try: await i.channel.set_permissions(user, overwrite=None, reason=f"Removed from ticket by {i.user}")
+    except discord.Forbidden: return await i.response.send_message("❌ I cannot remove that user from this ticket.", ephemeral=True)
+    await i.response.send_message(f"✅ Removed {user.mention} from this ticket.", ephemeral=True)
+
+@bot.tree.command(name="staff", description="List configured ticket staff roles")
+@app_commands.checks.has_permissions(manage_guild=True)
+async def staff_list(i: discord.Interaction):
+    roles = [i.guild.get_role(role_id) for role_id in bot.database.staff_role_ids(i.guild.id)]
+    roles = [role for role in roles if role]
+    e = embed("💜 Grid A1 • Staff notification roles", "Roles that receive ticket alerts.", discord.Colour.from_rgb(177, 77, 255))
+    e.add_field(name="Configured roles", value="\n".join(f"{n}. {role.mention}" for n, role in enumerate(roles, 1)) if roles else "No staff notification roles configured.", inline=False)
+    await i.response.send_message(embed=e, ephemeral=True)
+
+roles_group = app_commands.Group(name="roles", description="Display server roles")
+bot.tree.add_command(roles_group)
+@roles_group.command(name="setchannel", description="Post a stylish list of server roles")
+@app_commands.checks.has_permissions(manage_guild=True)
+async def roles_setchannel(i: discord.Interaction, channel: discord.TextChannel):
+    roles = [role for role in i.guild.roles if not role.is_default()]
+    roles.sort(key=lambda role: role.position, reverse=True)
+    lines = [f"{role.mention} — {len(role.members)} members" for role in roles]
+    description = "\n".join(lines)[:4000] if lines else "No custom roles found."
+    e = embed("💜 Grid A1 • Server role directory", "✨ All custom server roles, arranged from highest to lowest.\n\n" + description, discord.Colour.from_rgb(177, 77, 255))
+    e.set_footer(text=f"{len(roles)} custom roles • Grid A1 Manager")
+    try: await channel.send(embed=e)
+    except discord.Forbidden: return await i.response.send_message("❌ I cannot post in that channel.", ephemeral=True)
+    await i.response.send_message(f"✅ Role directory posted in {channel.mention}.", ephemeral=True)
+
 @setup_group.command(name="staff", description="Manage optional ticket staff notification roles")
 @app_commands.checks.has_permissions(manage_guild=True)
 @app_commands.describe(action="Choose whether to add or remove this staff role", role="Staff role to notify")
