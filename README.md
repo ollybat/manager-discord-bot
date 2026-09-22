@@ -1,38 +1,52 @@
-# Luna Manager bot — Ticket & Welcomer System
+# Grid A1 — Manager Discord Bot
 
 Standalone Python `discord.py` bot for Rust Console community support. It is a bot, not a website, and does not use RCON or control a game server.
 
-## Important: slash-command registration
+## Grid A1 ticket panel
 
-Luna registers the commands in `setup_hook` and logs the sync result. Discord global commands can take time to appear. For instant testing, set your server ID in `.env`:
-
-```env
-TEST_GUILD_ID=123456789012345678
-```
-
-Then restart the bot. The bot must be invited with both OAuth scopes:
+The panel displays:
 
 ```text
-bot
-applications.commands
+Support Tickets
+Select a support option, then choose EU before filling your questions.
+
+Support Status
+Open Tickets (Total): 0
+Open EU Tickets: 0
+Open NA Tickets: 0
+Response Speed: Fast
+Estimated Help Time: 12 mins
+
+Grid A1 • Manager
 ```
 
-If commands still do not appear, remove and reinvite the bot with those scopes, confirm the bot is in the server identified by `TEST_GUILD_ID`, and check startup logs for `Test-guild command sync complete` or `Global application-command sync complete`.
+NA is explicitly **Coming Soon** and is not offered as a selectable region. Current tickets are EU only. The panel refreshes every 60 seconds without deleting or resetting tickets. Open counts are calculated from live ticket channels, and closed tickets are recorded in SQLite and shown as a closed-ticket statistic.
+
+## Setup
+
+```text
+/setup tickets panel_channel logs_channel category inactivity_hours
+/setup welcomer welcome_channel link_channel bot_commands_channel shop_channel verify_channel
+```
+
+`/setup tickets` stores the panel message so Grid A1 can refresh it every minute. If the panel message is deleted, rerun setup to deploy a new one.
 
 ## Commands
 
-- `/setup tickets panel_channel logs_channel category inactivity_hours`
-- `/setup welcomer welcome_channel link_channel bot_commands_channel shop_channel verify_channel`
-- `/welcomer preview`
-- `/welcomer test`
-- `/ticket claim`
-- `/ticket transfer staff_member`
-- `/ticket requestclose reason`
-- `/ticket close reason`
+```text
+/welcomer preview
+/welcomer test
+/ticket claim
+/ticket transfer staff_member
+/ticket requestclose reason
+/ticket close reason
+```
 
-The ticket panel supports dropdown categories, EU/NA selection, modal intake, persistent buttons, private channels, claim/transfer/close actions, and HTML transcript archiving.
+Tickets use dropdown categories, EU selection, a modal intake form, private channels, persistent buttons, HTML transcripts, and closure records.
 
-The welcomer sends a rich branded **Luna • Manager** welcome with member number, channel navigation, support workflow, command overview, and clear test/setup errors.
+## Slash command visibility
+
+For instant testing, set `TEST_GUILD_ID` in `.env` to the Discord server ID and restart. The bot must be invited with both `bot` and `applications.commands` OAuth scopes. Global commands can take time to propagate.
 
 ## Run
 
@@ -43,4 +57,4 @@ cp .env.example .env
 python bot.py
 ```
 
-Enable **Server Members Intent** in the Discord Developer Portal for join welcomes. Never commit `.env` or your Discord bot token.
+Enable **Server Members Intent** for join welcomes. Never commit `.env` or the Discord bot token.
