@@ -18,26 +18,21 @@ def support_panel(guild: discord.Guild, database: Database) -> discord.Embed:
     closed_eu = database.closed_count(guild.id, "EU")
     result = embed(
         "Support Tickets",
-        "Select a support option, then choose EU before filling your questions.\n\n🇺🇸 NA is Coming Soon.\n\nGrid A1 support is organized, private, and easy to follow.",
+        "Choose a category below, then select EU and describe the issue.\nNA support is coming soon.",
         discord.Colour.from_rgb(35, 91, 166),
     )
-    result.add_field(name="📊 Support Status", value="🟢 **Online**\nPanel refreshes every **60 seconds**", inline=False)
-    result.add_field(name="Open Tickets (Total)", value=f"**{sum(counts.values())}**", inline=True)
-    result.add_field(name="Open EU Tickets", value=f"🇪🇺 **{counts.get('EU', 0)}**", inline=True)
-    result.add_field(name="Open NA Tickets", value="🇺🇸 **0**", inline=True)
-    result.add_field(name="Closed Tickets", value=f"**{closed}**", inline=True)
-    result.add_field(name="Closed EU Tickets", value=f"🇪🇺 **{closed_eu}**", inline=True)
-    result.add_field(name="Response Speed", value="⚡ **Fast**", inline=True)
-    result.add_field(name="Estimated Help Time", value="⏱️ **12 mins**", inline=True)
-    result.add_field(name="NA availability", value="🇺🇸 **Coming Soon**", inline=True)
+    result.add_field(name="Open tickets", value=f"**{sum(counts.values())}** total", inline=True)
+    result.add_field(name="EU tickets", value=f"**{counts.get('EU', 0)}**", inline=True)
+    result.add_field(name="NA", value="**Coming Soon**", inline=True)
+    result.add_field(name="Closed tickets", value=f"**{closed}** total ({closed_eu} EU)", inline=True)
     result.add_field(
-        name="Category guide",
-        value=("📄 **General** — questions and requests\n🏠 **Base** — base or area help\n👥 **Clan** — clan requests\n"
-               "💎 **Shop** — store information\n⚠️ **Raid** — raid-related problems\n🐛 **Bug** — in-game or bot bugs"),
+        name="Categories",
+        value=("**General** — questions and requests\n**Base** — base or area help\n**Clan** — clan requests\n"
+               "**Shop** — store information\n**Raid** — raid-related problems\n**Bug** — in-game or bot bugs"),
         inline=False,
     )
-    result.add_field(name="✅ How to open a ticket", value="Use the category menu below → choose **EU** → explain what happened → attach screenshots or proof if useful. Staff will claim and close the ticket when resolved.", inline=False)
-    result.set_footer(text=f"Grid A1 • Manager  •  {guild.name}  •  Live status")
+    result.add_field(name="How to open a ticket", value="Pick a category → choose **EU** → describe what happened. Add screenshots or other useful details when you can. Staff will take it from there.", inline=False)
+    result.set_footer(text="Grid A1 • Manager")
     result.timestamp = utcnow()
     return result
 
