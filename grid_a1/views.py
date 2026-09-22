@@ -35,6 +35,23 @@ class TicketPanel(discord.ui.View):
     @discord.ui.button(label="How it works", style=discord.ButtonStyle.secondary, emoji="❔", custom_id="grid-a1:ticket:help")
     async def how_it_works(self, interaction: discord.Interaction, button: discord.ui.Button): await interaction.response.send_message(embed=embed("How support works", "1. Pick a category.\n2. Choose EU.\n3. Describe the issue.\n4. Add screenshots if useful.\n5. Staff will handle the ticket."), ephemeral=True)
 
+
+class VerifyPanel(discord.ui.View):
+    def __init__(self, database):
+        super().__init__(timeout=None); self.database = database
+    @discord.ui.button(label="Verify", style=discord.ButtonStyle.success, emoji="✅", custom_id="grid-a1:verify")
+    async def verify(self, interaction, button):
+        config = self.database.config(interaction.guild.id) if interaction.guild else None
+        role = interaction.guild.get_role(config["verify_role"]) if config and interaction.guild else None
+        if not isinstance(role, discord.Role): return await interaction.response.send_message("Verification is not configured yet.", ephemeral=True)
+        if role.is_default() or role >= interaction.guild.me.top_role: return await interaction.response.send_message("The verification role cannot be managed by Grid A1. Ask an administrator to move the bot role above it.", ephemeral=True)
+        if role in interaction.user.roles: return await interaction.response.send_message("You are already verified.", ephemeral=True)
+        try:
+            await interaction.user.add_roles(role, reason="Grid A1 verification panel")
+        except discord.Forbidden:
+            return await interaction.response.send_message("I cannot assign the verification role. Check my permissions and role position.", ephemeral=True)
+        await interaction.response.send_message(f"✅ You are verified and received {role.mention}.", ephemeral=True)
+
 class OwnerInactivityView(discord.ui.View):
     """Buttons sent privately to a ticket owner after a red inactivity warning."""
     def __init__(self, service: TicketService, ticket_id: str):
