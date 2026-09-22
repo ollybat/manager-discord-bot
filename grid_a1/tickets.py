@@ -141,4 +141,15 @@ async def claim(interaction: discord.Interaction, service: TicketService, member
     target = interaction.user if member is None else member
     if member is not None and not staff_member(member): return await interaction.response.send_message("Only staff members can receive a ticket transfer.", ephemeral=True)
     await interaction.channel.set_permissions(target, view_channel=True, send_messages=True, read_message_history=True, attach_files=True)
+    try:
+        async for message in interaction.channel.history(limit=100, oldest_first=True):
+            if message.author == interaction.guild.me and message.embeds and message.embeds[0].fields:
+                ticket_embed_obj = message.embeds[0].copy()
+                status_index = next((index for index, field in enumerate(ticket_embed_obj.fields) if field.name in ("🟢 Status", "Status")), None)
+                if status_index is not None:
+                    ticket_embed_obj.set_field_at(status_index, name="🟣 Status", value=f"Claimed by {target.mention}", inline=True)
+                    await message.edit(embed=ticket_embed_obj)
+                    break
+    except discord.DiscordException:
+        log.info("Could not update claimed status for ticket %s", ticket_id)
     await interaction.response.send_message(embed=embed("🙋 Ticket claimed", f"Assigned to {target.mention}."))
