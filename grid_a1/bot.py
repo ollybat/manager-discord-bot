@@ -104,6 +104,13 @@ def _privileged(interaction: discord.Interaction, require_staff: bool = False) -
     if permissions.administrator or permissions.manage_guild: return True
     return require_staff and (permissions.manage_channels or bool(set(role.id for role in interaction.user.roles) & set(bot.database.staff_role_ids(interaction.guild.id))))
 
+def _prefix_privileged(ctx, require_staff: bool = False) -> bool:
+    if not ctx.guild or not isinstance(ctx.author, discord.Member): return False
+    if ctx.author.id == ctx.guild.owner_id or ctx.author.id == settings.owner_id: return True
+    permissions = ctx.author.guild_permissions
+    if permissions.administrator or permissions.manage_guild: return True
+    return require_staff and (permissions.manage_channels or bool(set(role.id for role in ctx.author.roles) & set(bot.database.staff_role_ids(ctx.guild.id))))
+
 def _permission_check(require_staff: bool = False):
     async def predicate(interaction: discord.Interaction) -> bool:
         return _privileged(interaction, require_staff)
@@ -111,6 +118,60 @@ def _permission_check(require_staff: bool = False):
 
 def admin(): return _permission_check(False)
 def staff(): return _permission_check(True)
+
+@bot.tree.command(name="kick", description="Kick a member from this Discord server")
+@staff()
+async def moderation_kick(i: discord.Interaction, member: discord.Member, reason: str = "No reason provided"):
+    if member.id == i.user.id or member.id == i.guild.owner_id: return await i.response.send_message("❌ You cannot kick yourself or the server owner.", ephemeral=True)
+    if member.top_role >= i.user.top_role and i.user.id != i.guild.owner_id: return await i.response.send_message("❌ That member has an equal or higher role than you.", ephemeral=True)
+    if not i.guild.me or member.top_role >= i.guild.me.top_role: return await i.response.send_message("❌ My bot role must be above that member.", ephemeral=True)
+    try: await member.kick(reason=f"{reason} • Moderator: {i.user}")
+    except discord.Forbidden: return await i.response.send_message("❌ Discord denied the kick. Check Kick Members permission and role hierarchy.", ephemeral=True)
+    bot.database.audit(i.guild.id, None, i.user.id, "kick", discord.utils.escape_markdown(reason)[:500])
+    await i.response.send_message(f"✅ Kicked {member.mention}.", ephemeral=True)
+
+@bot.tree.command(name="ban", description="Ban a member from this Discord server")
+@staff()
+async def moderation_ban(i: discord.Interaction, member: discord.Member, reason: str = "No reason provided"):
+    if member.id == i.user.id or member.id == i.guild.owner_id: return await i.response.send_message("❌ You cannot ban yourself or the server owner.", ephemeral=True)
+    if member.top_role >= i.user.top_role and i.user.id != i.guild.owner_id: return await i.response.send_message("❌ That member has an equal or higher role than you.", ephemeral=True)
+    if not i.guild.me or member.top_role >= i.guild.me.top_role: return await i.response.send_message("❌ My bot role must be above that member.", ephemeral=True)
+    try: await member.ban(reason=f"{reason} • Moderator: {i.user}", delete_message_days=0)
+    except discord.Forbidden: return await i.response.send_message("❌ Discord denied the ban. Check Ban Members permission and role hierarchy.", ephemeral=True)
+    bot.database.audit(i.guild.id, None, i.user.id, "ban", discord.utils.escape_markdown(reason)[:500])
+    await i.response.send_message(f"✅ Banned {member.mention}.", ephemeral=True)
+
+@bot.tree.command(name="warn", description="Record a warning for a member")
+@staff()
+async def moderation_warn(i: discord.Interaction, member: discord.Member, reason: str):
+    if member.id == i.user.id or member.id == i.guild.owner_id: return await i.response.send_message("❌ You cannot warn yourself or the server owner.", ephemeral=True)
+    bot.database.audit(i.guild.id, None, i.user.id, "warn", f"member={member.id}; {discord.utils.escape_markdown(reason)[:450]}")
+    await i.response.send_message(f"⚠️ Warning recorded for {member.mention}. Reason: {discord.utils.escape_markdown(reason)[:500]}", ephemeral=True)
+
+@bot.tree.command(name="timeout", description="Timeout a member")
+@staff()
+async def moderation_timeout(i: discord.Interaction, member: discord.Member, minutes: app_commands.Range[int, 1, 40320], reason: str = "No reason provided"):
+    if member.id == i.user.id or member.id == i.guild.owner_id: return await i.response.send_message("❌ You cannot timeout yourself or the server owner.", ephemeral=True)
+    if member.top_role >= i.user.top_role and i.user.id != i.guild.owner_id: return await i.response.send_message("❌ That member has an equal or higher role than you.", ephemeral=True)
+    if not i.guild.me or member.top_role >= i.guild.me.top_role: return await i.response.send_message("❌ My bot role must be above that member.", ephemeral=True)
+    try: await member.timeout(discord.utils.utcnow() + __import__("datetime").timedelta(minutes=minutes), reason=f"{reason} • Moderator: {i.user}")
+    except discord.Forbidden: return await i.response.send_message("❌ Discord denied the timeout. Check Moderate Members permission and role hierarchy.", ephemeral=True)
+    bot.database.audit(i.guild.id, None, i.user.id, "timeout", f"member={member.id}; minutes={minutes}; {discord.utils.escape_markdown(reason)[:400]}")
+    await i.response.send_message(f"⏳ Timed out {member.mention} for {minutes} minute(s).", ephemeral=True)
+
+@bot.command(name="lock")
+async def prefix_lock(ctx):
+    if not ctx.guild or not _prefix_privileged(ctx, True): return await ctx.send("❌ Only staff, the server owner, or the bot owner can lock channels.")
+    try: await ctx.channel.set_permissions(ctx.guild.default_role, send_messages=False, reason=f"Channel locked by {ctx.author}")
+    except discord.Forbidden: return await ctx.send("❌ I cannot lock this channel. Check Manage Channels and Manage Permissions.")
+    await ctx.send("🔒 This channel is now locked for members.")
+
+@bot.command(name="unlock")
+async def prefix_unlock(ctx):
+    if not ctx.guild or not _prefix_privileged(ctx, True): return await ctx.send("❌ Only staff, the server owner, or the bot owner can unlock channels.")
+    try: await ctx.channel.set_permissions(ctx.guild.default_role, send_messages=None, reason=f"Channel unlocked by {ctx.author}")
+    except discord.Forbidden: return await ctx.send("❌ I cannot unlock this channel. Check Manage Channels and Manage Permissions.")
+    await ctx.send("🔓 This channel is now unlocked for members.")
 
 @bot.tree.command(name="verifypanel", description="Create a verification panel")
 @app_commands.checks.has_permissions(manage_guild=True)
