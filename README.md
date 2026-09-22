@@ -1,73 +1,16 @@
 # 🟦 Grid A1 Manager Bot
 
-A standalone Python `discord.py` bot for Grid A1 community support on Discord.
+Standalone Python `discord.py` bot for Grid A1 community support on Discord.
 
-> **Current support region:** 🇪🇺 EU is available. 🇺🇸 **NA Coming Soon** is intentional and means NA ticket handling has not been enabled yet—it is not simulated as live.
+See **[SETUP_GUIDE.md](SETUP_GUIDE.md)** for installation and command-sync workflow.
 
-## 🧭 Start here
+## Command sync safety
 
-New operator? Follow the full, copy/paste setup path:
+- On startup, **no global application-command sync is performed**.
+- If `TEST_GUILD_ID` is set, startup syncs only that guild and logs the synced command count for fast testing.
+- Global sync is explicit through owner-only `/sync`, gated by `OWNER_ID` and protected by an in-memory cooldown/duplicate-request guard. Restarting the process resets that guard.
+- If Discord returns HTTP 429, wait for the cooldown and retry; this is a Discord API rate limit, not a missing command. Commands are not removed by this change.
 
-➡️ **[Read SETUP_GUIDE.md](SETUP_GUIDE.md)**
+Optional PyNaCl/davey voice-library warnings are harmless for this bot's text, tickets, moderation, and setup features. Install voice dependencies only if voice functionality is added or required.
 
-It covers Discord Developer Portal settings, OAuth scopes and permissions, Windows/Linux installation, `.env`, guild setup, commands, ticket and transcript workflows, troubleshooting, backups/migrations, security, and a deployment checklist.
-
-## 📚 Contents
-
-- 🛠️ [Full setup guide](SETUP_GUIDE.md)
-- 🗺️ [Project map](PROJECT_MAP.md)
-- 🔐 [.env template](.env.example)
-- 📦 [Python dependencies](requirements.txt)
-- ▶️ [Local entrypoint](bot.py)
-
-## ⚡ Quickstart
-
-### Windows PowerShell
-
-```powershell
-cd manager-bot
-py -3 -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install -r requirements.txt
-Copy-Item .env.example .env
-# Edit .env and set DISCORD_TOKEN (and optionally TEST_GUILD_ID)
-python bot.py
-```
-
-### Linux / macOS
-
-```bash
-cd manager-bot
-python3 -m venv .venv
-source .venv/bin/activate
-python -m pip install -r requirements.txt
-cp .env.example .env
-# Edit .env and set DISCORD_TOKEN (and optionally TEST_GUILD_ID)
-python bot.py
-```
-
-Startup flow: `.env` → Discord login → SQLite migration → slash-command sync → Grid A1 bot ready ✅
-
-## 🎫 First Discord setup
-
-After inviting the bot with `bot` + `applications.commands` scopes, an administrator runs:
-
-```text
-/setup tickets panel_channel logs_channel category inactivity_hours
-/setup welcomer welcome_channel link_channel bot_commands_channel shop_channel verify_channel
-```
-
-Then test:
-
-```text
-/welcomer preview
-/welcomer test
-```
-
-For exact Portal toggles, permissions, channel requirements, ticket lifecycle, transcript archiving, and safety rules, use the guide rather than guessing. No hosting provider is assumed here.
-
-## 🏷️ Naming and scope
-
-Technical module filenames under `grid_a1/` are intentionally readable and stable; do not rename them casually because package imports depend on them. User-facing branding is Grid A1 throughout the bot. Workspace documentation only was updated; GitHub has not been changed.
-
-> ℹ️ This documentation update does not claim a live Discord or runtime test. Run the setup checklist in a non-production guild before rollout.
+No live Discord runtime test is claimed by this documentation.
