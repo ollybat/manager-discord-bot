@@ -103,8 +103,10 @@ def staff(): return app_commands.checks.has_permissions(manage_channels=True)
 async def verifypanel(i: discord.Interaction, channel: discord.TextChannel, role: discord.Role):
     if role.is_default(): return await i.response.send_message("❌ You cannot use @everyone as the verification role.", ephemeral=True)
     if not i.guild.me or role >= i.guild.me.top_role: return await i.response.send_message("❌ Move Grid A1's bot role above the verification role first.", ephemeral=True)
-    panel = embed("Grid A1 verification", "Click the button below to receive the server verification role. If you already have it, nothing will change.")
-    panel.set_footer(text="Grid A1 • Manager")
+    panel = embed("💜 Grid A1 • Secure Verification", "✨ Complete the short verification check to unlock the server.\n\n🛡️ Account-age check\n📜 Rules confirmation\n✅ Verified role for eligible members\n\nDiscord-wide moderation history is private and unavailable to bots.", discord.Colour.from_rgb(177, 77, 255))
+    panel.add_field(name="🔐 Verification steps", value="1️⃣ Start verification\n2️⃣ Review your result\n3️⃣ Confirm the rules\n4️⃣ Receive access", inline=False)
+    panel.add_field(name="ℹ️ Need help?", value="Accounts under 7 days old can be reviewed by staff through a ticket.", inline=False)
+    panel.set_footer(text="Grid A1 • Secure, fair, Discord-only verification")
     message = await channel.send(embed=panel, view=VerifyPanel(bot.database))
     bot.database.upsert_config(i.guild.id, verify_panel_channel=channel.id, verify_panel_message=message.id, verify_role=role.id)
     await i.response.send_message(f"✅ Verification panel created in {channel.mention} for {role.mention}.", ephemeral=True)
@@ -178,20 +180,5 @@ async def on_member_join(member): await send_welcome(bot,bot.database,member)
 async def on_member_remove(member):
     ticket_ids = bot.database.mark_owner_left(member.guild.id, member.id)
     for ticket_id in ticket_ids: bot.database.audit(member.guild.id, ticket_id, 0, 'owner_left')
-@bot.event
-async def on_ready(): log.info("Grid A1 bot logged in as %s",bot.user)
-@bot.tree.error
-async def on_app_command_error(i,error):
-    log.exception("Application command failed",exc_info=error)
-    original=getattr(error,"original",error)
-    if isinstance(original,discord.HTTPException) and original.status==429: msg="Discord rate-limited this sync. Please wait before trying /sync again; startup does not perform a global sync."
-    elif isinstance(error,app_commands.MissingPermissions): msg="You do not have permission to use that command."
-    elif isinstance(error,(OwnerConfigurationError,OwnerOnlyError)): msg=str(error)
-    elif isinstance(error,RuntimeError): msg=str(error)
-    else: msg="That command could not be completed. Check setup and bot permissions."
-    if i.response.is_done(): await i.followup.send(msg,ephemeral=True)
-    else: await i.response.send_message(msg,ephemeral=True)
-def run():
-    if not settings.token: raise RuntimeError("DISCORD_TOKEN is missing. Copy .env.example to .env and set it outside Discord.")
-    bot.run(settings.token, log_handler=None)
-if __name__ == "__main__": run()
+
+[18 more lines in file. Use offset=181 to continue.]
