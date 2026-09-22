@@ -60,7 +60,7 @@ class VerifyPanel(discord.ui.View):
         if not interaction.guild or not isinstance(interaction.user, discord.Member): return await interaction.response.send_message("❌ Verification is only available inside the server.", ephemeral=True)
         config = self.database.config(interaction.guild.id); role = interaction.guild.get_role(config["verify_role"]) if config and config["verify_role"] else None; me = interaction.guild.me
         if not isinstance(role, discord.Role): return await interaction.response.send_message("⚠️ Verification is not configured yet.", ephemeral=True)
-        if not me or role.is_default() or role.is_managed() or role >= me.top_role: return await interaction.response.send_message("⚠️ Grid A1 cannot manage this role. Move the bot role above it.", ephemeral=True)
+        if not me or role.is_default() or role.managed or role >= me.top_role: return await interaction.response.send_message("⚠️ Grid A1 cannot manage this role. Move the bot role above it.", ephemeral=True)
         if role in interaction.user.roles: return await interaction.response.send_message("✅ You are already verified.", ephemeral=True)
         age_days = max(0, (discord.utils.utcnow() - interaction.user.created_at).days)
         if age_days < 7: return await interaction.response.send_message(f"🛡️ Your Discord account is **{age_days} days old**. Accounts under 7 days require staff review. Please open a ticket.", ephemeral=True)
