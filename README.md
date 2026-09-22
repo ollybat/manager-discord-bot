@@ -1,65 +1,73 @@
-# Grid A1 — Manager Discord Bot
+# 🟦 Grid A1 Manager Bot
 
-Standalone Python `discord.py` bot for Rust Console community support.
+A standalone Python `discord.py` bot for Grid A1 community support on Discord.
 
-## Readable ticket transcripts
+> **Current support region:** 🇪🇺 EU is available. 🇺🇸 **NA Coming Soon** is intentional and means NA ticket handling has not been enabled yet—it is not simulated as live.
 
-Ticket transcripts are generated as polished, accessible HTML instead of raw chat text. They include:
+## 🧭 Start here
 
-- Clear Grid A1 header and plain-language instructions
-- Ticket summary with ID, issue, region, owner, opened time, closed time, and closer
-- Large high-contrast typography
-- One readable message card per Discord message
-- Author name, initials avatar, and UTC timestamp
-- Escaped text and safe links
-- Attachment cards with filenames and byte sizes
-- Inline image previews with descriptive alt text
-- Message count and empty-transcript handling
-- Responsive layout for phones and desktop
-- Print-friendly CSS for archiving or sharing
+New operator? Follow the full, copy/paste setup path:
 
-Each transcript is attached to the archive log embed when a ticket is closed.
+➡️ **[Read SETUP_GUIDE.md](SETUP_GUIDE.md)**
 
-## Improved support panel
+It covers Discord Developer Portal settings, OAuth scopes and permissions, Windows/Linux installation, `.env`, guild setup, commands, ticket and transcript workflows, troubleshooting, backups/migrations, security, and a deployment checklist.
 
-The panel is organized for non-technical users:
+## 📚 Contents
 
-- **Support Tickets** title
-- Short instructions: choose a support option, then choose EU
-- Clear Support Status section
-- Open total, EU, and NA counters
-- Closed total and EU counters
-- Fast response indicator
-- 12-minute estimate
-- NA Coming Soon notice
-- Category guide for General, Base, Clan, Shop, Raid, and Bug
-- Step-by-step ticket instructions
-- Grid A1 branding and live-refresh footer
+- 🛠️ [Full setup guide](SETUP_GUIDE.md)
+- 🗺️ [Project map](PROJECT_MAP.md)
+- 🔐 [.env template](.env.example)
+- 📦 [Python dependencies](requirements.txt)
+- ▶️ [Local entrypoint](bot.py)
 
-The panel remains persistent and refreshes every 60 seconds without deleting tickets.
+## ⚡ Quickstart
 
-## Setup and commands
+### Windows PowerShell
+
+```powershell
+cd manager-bot
+py -3 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
+Copy-Item .env.example .env
+# Edit .env and set DISCORD_TOKEN (and optionally TEST_GUILD_ID)
+python bot.py
+```
+
+### Linux / macOS
+
+```bash
+cd manager-bot
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+cp .env.example .env
+# Edit .env and set DISCORD_TOKEN (and optionally TEST_GUILD_ID)
+python bot.py
+```
+
+Startup flow: `.env` → Discord login → SQLite migration → slash-command sync → Grid A1 bot ready ✅
+
+## 🎫 First Discord setup
+
+After inviting the bot with `bot` + `applications.commands` scopes, an administrator runs:
 
 ```text
 /setup tickets panel_channel logs_channel category inactivity_hours
 /setup welcomer welcome_channel link_channel bot_commands_channel shop_channel verify_channel
+```
+
+Then test:
+
+```text
 /welcomer preview
 /welcomer test
-/ticket claim
-/ticket transfer staff_member
-/ticket requestclose reason
-/ticket close reason
 ```
 
-## Run
+For exact Portal toggles, permissions, channel requirements, ticket lifecycle, transcript archiving, and safety rules, use the guide rather than guessing. No hosting provider is assumed here.
 
-```bash
-python -m venv .venv
-pip install -r requirements.txt
-cp .env.example .env
-python bot.py
-```
+## 🏷️ Naming and scope
 
-Invite with `bot` and `applications.commands` scopes. Enable Server Members Intent for welcomes. Required permissions include Manage Channels, View Channel, Send Messages, Embed Links, Attach Files, and Read Message History.
+Technical module filenames under `grid_a1/` are intentionally readable and stable; do not rename them casually because package imports depend on them. User-facing branding is Grid A1 throughout the bot. Workspace documentation only was updated; GitHub has not been changed.
 
-No runtime or live Discord validation is claimed by this change. Test with a non-production ticket before rollout.
+> ℹ️ This documentation update does not claim a live Discord or runtime test. Run the setup checklist in a non-production guild before rollout.
