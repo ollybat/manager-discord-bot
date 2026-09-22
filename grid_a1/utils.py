@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import os
 from datetime import datetime, timezone
 from urllib.parse import quote, unquote
 
@@ -35,7 +36,11 @@ def is_ticket(channel: discord.abc.GuildChannel | None) -> bool:
     return bool(parse_ticket_topic(channel))
 
 def staff_member(member: discord.Member) -> bool:
-    return member.guild_permissions.manage_channels or member.guild_permissions.manage_guild
+    if not isinstance(member, discord.Member): return False
+    if member.guild.owner_id == member.id: return True
+    if str(member.id) == os.getenv("OWNER_ID", "").strip(): return True
+    permissions = member.guild_permissions
+    return permissions.administrator or permissions.manage_channels or permissions.manage_guild
 
 def mention_or_id(guild: discord.Guild, value: str) -> str:
     member = guild.get_member(int(value)) if value.isdigit() else None
