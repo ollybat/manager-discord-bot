@@ -206,63 +206,6 @@ async def staff_list(i: discord.Interaction):
     e.add_field(name="Configured roles", value="\n".join(f"{n}. {role.mention}" for n, role in enumerate(roles, 1)) if roles else "No staff notification roles configured.", inline=False)
     await i.response.send_message(embed=e, ephemeral=True)
 
-wipefeed_group = app_commands.Group(name="wipefeed", description="Manage EU 6X wipe announcements")
-bot.tree.add_command(wipefeed_group)
-
-@wipefeed_group.command(name="enable", description="Enable or disable wipefeed announcements")
-@app_commands.checks.has_permissions(manage_guild=True)
-async def wipefeed_enable(i: discord.Interaction, enabled: bool):
-    bot.database.upsert_config(i.guild.id, wipefeed_enabled=int(enabled))
-    state = "enabled" if enabled else "disabled"
-    await i.response.send_message(f"✅ Wipefeed is now **{state}**.", ephemeral=True)
-
-@wipefeed_group.command(name="send", description="Post an EU 6X wipe announcement")
-@app_commands.checks.has_permissions(manage_guild=True)
-@app_commands.describe(timestamp="Unix timestamp, for example 1785524400", channel="Channel where the wipe announcement will be posted")
-async def wipefeed_send(i: discord.Interaction, timestamp: str, channel: discord.TextChannel):
-    config = bot.database.config(i.guild.id)
-    if not config or not config["wipefeed_enabled"]: return await i.response.send_message("⚠️ Wipefeed is disabled. Run `/wipefeed enable enabled:true` first.", ephemeral=True)
-    try: unix = int(timestamp.strip().replace("<t:", "").split(":", 1)[0])
-    except ValueError: return await i.response.send_message("❌ Timestamp must be a Unix timestamp, such as `1785524400`.", ephemeral=True)
-    if unix < 0: return await i.response.send_message("❌ Timestamp cannot be negative.", ephemeral=True)
-    content = (f"🇪🇺 **a rust server EU 6X WIPE 2 months ago !** <t:{unix}:R> 🇪🇺\n\n" f"**Server Name**\nVALORA | CLAN | 5X | EU | WEEKLY | .gg/valora5x\n\n" f"Search the name displayed above and add the server to your favorites to be ready.\n\n" f"**Server Information**\n:jack: 5X Gather Rates\n:bp: Instant Crafting\n:crate: Fast Respawn\n:Time: Automatic Events\n:player: 100+ Players\n\n" f"**Latest wipe** • <t:{unix}:F> (<t:{unix}:R>)")
-    try: await channel.send(content)
-    except discord.Forbidden: return await i.response.send_message("❌ I cannot post in that channel. Check View Channel and Send Messages permissions.", ephemeral=True)
-    bot.database.upsert_config(i.guild.id, wipefeed_channel=channel.id)
-    await i.response.send_message(f"✅ EU 6X wipe announcement posted in {channel.mention}.", ephemeral=True)
-
-info_group = app_commands.Group(name="info", description="Show Discord information")
-bot.tree.add_command(info_group)
-
-@info_group.command(name="server", description="Show information about this server")
-async def info_server(i: discord.Interaction):
-    g = i.guild
-    if not g: return await i.response.send_message("❌ This command can only be used inside a server.", ephemeral=True)
-    owner = g.owner.mention if g.owner else f"<@{g.owner_id}>"
-    created = discord.utils.format_dt(g.created_at, style="F")
-    member_count = g.member_count or len(g.members)
-    bots = sum(1 for member in g.members if member.bot)
-    humans = max(0, member_count - bots)
-    text_channels = len(g.text_channels)
-    voice_channels = len(g.voice_channels)
-    categories = len(g.categories)
-    role_count = max(0, len(g.roles) - 1)
-    boost_level = getattr(g.premium_tier, "name", str(g.premium_tier))
-    icon = g.icon.url if g.icon else None
-    e = embed(f"💜 {g.name} • Server information", "✨ A detailed overview of this Discord server.", discord.Colour.from_rgb(177, 77, 255))
-    if icon: e.set_thumbnail(url=icon)
-    e.add_field(name="👑 Owner", value=owner, inline=True)
-    e.add_field(name="🆔 Server ID", value=f"`{g.id}`", inline=True)
-    e.add_field(name="📅 Created", value=created, inline=True)
-    e.add_field(name="👥 Members", value=f"`{member_count:,}` total\n`{humans:,}` humans • `{bots:,}` bots", inline=True)
-    e.add_field(name="💬 Channels", value=f"`{text_channels}` text\n`{voice_channels}` voice\n`{categories}` categories", inline=True)
-    e.add_field(name="🎭 Roles", value=f"`{role_count}` custom roles", inline=True)
-    e.add_field(name="🚀 Boosts", value=f"Level `{g.premium_tier}`\n`{g.premium_subscription_count or 0}` boosts", inline=True)
-    e.add_field(name="🛡️ Security", value=f"Verification: `{g.verification_level.name.title()}`\n2FA moderation: `{"Enabled" if g.mfa_level else "Not required"}`", inline=True)
-    e.add_field(name="🧩 Server features", value=f"`{len(g.features)}` enabled Discord features", inline=True)
-    e.set_footer(text="Grid A1 • Server information")
-    await i.response.send_message(embed=e)
-
 roles_group = app_commands.Group(name="roles", description="Display server roles")
 bot.tree.add_command(roles_group)
 @roles_group.command(name="setchannel", description="Post a stylish list of server roles")
