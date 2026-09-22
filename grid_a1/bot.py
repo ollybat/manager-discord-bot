@@ -20,6 +20,8 @@ class GridA1Bot(commands.Bot):
         super().__init__(command_prefix=settings.prefix, intents=intents, help_command=None)
         self.database = Database(settings.database_path); self.tickets = TicketService(self.database)
         self._global_sync_last_at = 0.0
+        self.settings_owner_id = settings.owner_id
+        self.started_at = time.time()
         self._global_sync_in_progress = False
         register_commands(self)
     async def setup_hook(self):
