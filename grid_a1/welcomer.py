@@ -16,13 +16,13 @@ def missing(guild: discord.Guild, config: discord.Row | None) -> list[str]:
 
 def welcome_embed(bot: discord.Client, guild: discord.Guild, member: discord.Member, config: discord.Row) -> discord.Embed:
     count = guild.member_count or len(guild.members)
-    result = embed("🌙 Welcome to Avoid EU 5X", f"Welcome {member.mention} — you are our **{ordinal(count)} member**!\n\nWelcome to the community. Start with verification, choose your server access, and explore the useful channels below.")
+    result = embed("🌙 Welcome to the community", f"Welcome {member.mention} — you are our **{ordinal(count)} member**!\n\nWelcome to the community. Start with verification, connect your account, and explore the useful channels below.")
     if bot.user:
         result.set_author(name="Grid A1 • Manager", icon_url=bot.user.display_avatar.url)
     else:
         result.set_author(name="Grid A1 • Manager")
     result.add_field(name="🧭 Server navigation", value=f"✅ **Verify / Server Selector**\nHead to <#{config['verify_channel']}>.\n\n🔗 **Link Your Account**\nLink your account in <#{config['link_channel']}>.\n\n🤖 **Bot Commands**\nUse <#{config['bot_commands_channel']}>.\n\n🛒 **Visit Our Store**\nCheck <#{config['shop_channel']}>.", inline=False)
-    result.add_field(name="🎫 Support", value="Open a ticket from the **Grid A1 Support Tickets** panel. EU only; NA is Coming Soon.", inline=False)
+    result.add_field(name="🎫 Support", value="Open a ticket from the **Grid A1 Support Center** panel. EU support is available.", inline=False)
     result.set_footer(text="Grid A1 • Manager • Community welcome")
     return result
 
