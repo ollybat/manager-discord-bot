@@ -17,7 +17,7 @@ class TicketService:
 
     async def create(self, interaction: discord.Interaction, issue: str, label: str, region: str, details: str) -> None:
         guild = interaction.guild
-        if not guild or region != "EU": return await interaction.response.send_message("Only EU support is currently available. NA is Coming Soon.", ephemeral=True)
+        if not guild or region != "EU": return await interaction.response.send_message("Only EU support is currently available. Please select EU to continue.", ephemeral=True)
         config = self.db.config(guild.id)
         if not config or not config['ticket_category'] or not config['logs_channel']:
             return await interaction.response.send_message("Tickets are not configured. Ask an administrator to run `/setup tickets`.", ephemeral=True)
@@ -38,7 +38,15 @@ class TicketService:
         except Exception:
             await channel.delete(reason="Grid A1 ticket record could not be created"); raise
         from .views import TicketControls
-        await channel.send(content=interaction.user.mention, embed=ticket_embed(label, region, details), view=TicketControls(self))
+        welcome = ticket_embed(label, region, details)
+        welcome.title = f"💜 {label.title()} Support Ticket"
+        welcome.description = f"Welcome {interaction.user.mention}! Your private support channel is ready.\n\n📌 Keep relevant information in this channel so staff can help quickly."
+        welcome.add_field(name="👤 Ticket owner", value=interaction.user.mention, inline=True)
+        welcome.add_field(name="📍 Region", value="🇪🇺 EU Support", inline=True)
+        welcome.add_field(name="🟢 Status", value="Open • Waiting for staff", inline=True)
+        welcome.add_field(name="🧭 Next steps", value="1️⃣ Staff will review your request\n2️⃣ Reply to staff questions here\n3️⃣ Add screenshots or evidence if useful\n4️⃣ Keep this channel open until resolved", inline=False)
+        welcome.set_footer(text="Grid A1 • Private support • Please be patient while staff review")
+        await channel.send(content=interaction.user.mention, embed=welcome, view=TicketControls(self))
         await self.notify_staff(guild, channel, ticket_id, label, region, interaction.user.id)
         await interaction.response.send_message(f"✅ Ticket **{ticket_id}** created: {channel.mention}", ephemeral=True)
 
@@ -128,8 +136,5 @@ async def claim(interaction: discord.Interaction, service: TicketService, member
     if not isinstance(interaction.channel, discord.TextChannel) or not is_ticket(interaction.channel): return await interaction.response.send_message("This only works inside a ticket.", ephemeral=True)
     data = parse_ticket_topic(interaction.channel); ticket_id = data.get('id')
     if ticket_id: service.db.update_ticket(ticket_id, claimed_by=(member or interaction.user).id)
-    service.db.audit(interaction.guild.id, ticket_id, interaction.user.id, 'claimed')
-    target = interaction.user if member is None else member
-    if member is not None and not staff_member(member): return await interaction.response.send_message("Only staff members can receive a ticket transfer.", ephemeral=True)
-    await interaction.channel.set_permissions(target, view_channel=True, send_messages=True, read_message_history=True, attach_files=True)
-    await interaction.response.send_message(embed=embed("🙋 Ticket claimed", f"Assigned to {(member or interaction.user).mention}."))
+
+[6 more lines in file. Use offset=131 to continue.]
