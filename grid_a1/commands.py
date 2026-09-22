@@ -1,6 +1,7 @@
 """Standalone Grid A1 application commands."""
 from __future__ import annotations
 import os
+import time
 from typing import Optional
 import discord
 from discord import app_commands
@@ -22,9 +23,12 @@ def register_commands(bot)->None:
         e=embed("Grid A1 command guide","Available slash commands for this bot.");e.add_field(name="General",value="`/help` — Guide\n`/rules` — Editable defaults\n`/ping` — Latency",inline=False);e.add_field(name="Embeds",value="`/embed` — Post custom embed\n`/embed-edit` — Edit bot embed",inline=False);e.add_field(name="Owner",value="`/sync` — Sync commands (OWNER_ID)",inline=False);await i.response.send_message(embed=e,ephemeral=True)
     @bot.tree.command(name="rules",description="Show editable default community rules")
     async def rules_command(i):
-        rs=["Be respectful and avoid harassment.","Keep content appropriate for the channel and audience.","Follow Discord's Terms of Service and Community Guidelines.","Use the correct channel and provide useful context when asking for help."];e=embed("Grid A1 rules","Placeholder/default rules; edit this list in `grid_a1/commands.py`.");e.add_field(name="Default rules (editable)",value="\n".join(f"**{n}.** {r}" for n,r in enumerate(rs,1)),inline=False);e.set_footer(text="No server-specific facts are implied.");await i.response.send_message(embed=e)
+        rs=["Treat members and staff with respect. Harassment, threats, and hate speech are not allowed.","Do not spam, flood channels, mass-mention people, or abuse support tickets.","Use the correct channel and keep ticket reports clear and useful.","Do not post unauthorised adverts, invite links, scams, or suspicious files.","For reports, include Discord usernames, message links, times, and screenshots when available.","If you disagree with staff, use a private ticket or appeal instead of arguing publicly.","Follow Discord's Terms of Service and Community Guidelines."];e=embed("Grid A1 rules","These rules apply to this Rust Console Manager Discord only.");e.add_field(name="Default rules (editable)",value="\n".join(f"**{n}.** {r}" for n,r in enumerate(rs,1)),inline=False);e.add_field(name="Scope",value="These rules cover Discord messages, channels, members, tickets, and staff actions. Grid A1 does not make or enforce rules for conduct inside the game.",inline=False);e.set_footer(text="Grid A1 • Manager • Discord moderation only");await i.response.send_message(embed=e)
     @bot.tree.command(name="ping",description="Show the bot gateway latency")
-    async def ping_command(i):await i.response.send_message(embed=embed("🏓 Pong",f"Gateway latency: **{'unavailable' if bot.latency<0 else round(bot.latency*1000)}{' ' if bot.latency<0 else ' ms'}**"))
+    async def ping_command(i):
+        gateway=round(bot.latency*1000) if bot.latency>=0 else None
+        received=max(0,round((time.time()-i.created_at.timestamp())*1000))
+        e=embed("Grid A1 status","Connected to Discord.",discord.Colour.green());e.add_field(name="Gateway latency",value=f"`{gateway} ms`" if gateway is not None else "`Unavailable`",inline=True);e.add_field(name="Interaction",value=f"`{received} ms`",inline=True);e.add_field(name="Status",value="🟢 Ready",inline=True);e.set_footer(text="Grid A1 • Manager");await i.response.send_message(embed=e)
     @bot.tree.command(name="embed",description="Post a custom embed with an optional image")
     @app_commands.describe(title="Embed title",description="Embed description",image="Optional image attachment")
     async def embed_command(i,title:str,description:str,image:Optional[discord.Attachment]=None):
