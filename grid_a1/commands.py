@@ -2,6 +2,7 @@
 from __future__ import annotations
 import os
 import time
+import platform
 from typing import Optional
 import discord
 from discord import app_commands
@@ -26,11 +27,30 @@ def register_commands(bot)->None:
     @bot.tree.command(name="rules",description="Show editable default community rules")
     async def rules_command(i):
         rs=["Treat members and staff with respect. Harassment, threats, and hate speech are not allowed.","Do not spam, flood channels, mass-mention people, or abuse support tickets.","Use the correct channel and keep ticket reports clear and useful.","Do not post unauthorised adverts, invite links, scams, or suspicious files.","For reports, include Discord usernames, message links, times, and screenshots when available.","If you disagree with staff, use a private ticket or appeal instead of arguing publicly.","Follow Discord's Terms of Service and Community Guidelines."];e=embed("Grid A1 rules","These rules apply to this Rust Console Manager Discord only.");e.add_field(name="Default rules (editable)",value="\n".join(f"**{n}.** {r}" for n,r in enumerate(rs,1)),inline=False);e.add_field(name="Scope",value="These rules cover Discord messages, channels, members, tickets, and staff actions. Grid A1 does not make or enforce rules for conduct inside the game.",inline=False);e.set_footer(text="Grid A1 • Manager • Discord moderation only");await i.response.send_message(embed=e)
-    @bot.tree.command(name="ping",description="Show the bot gateway latency")
+    @bot.tree.command(name="ping",description="Show detailed bot diagnostics (owner only)")
     async def ping_command(i):
-        gateway=round(bot.latency*1000) if bot.latency>=0 else None
-        received=max(0,round((time.time()-i.created_at.timestamp())*1000))
-        e=embed("Grid A1 status","Connected to Discord.",discord.Colour.green());e.add_field(name="Gateway latency",value=f"`{gateway} ms`" if gateway is not None else "`Unavailable`",inline=True);e.add_field(name="Interaction",value=f"`{received} ms`",inline=True);e.add_field(name="Status",value="🟢 Ready",inline=True);e.set_footer(text="Grid A1 • Manager");await i.response.send_message(embed=e)
+        if bot.settings_owner_id is None or i.user.id != bot.settings_owner_id:
+            return await i.response.send_message("🔒 This diagnostic command is owner-only.", ephemeral=True)
+        now = time.time()
+        gateway = round(bot.latency * 1000) if bot.latency >= 0 else None
+        received = max(0, round((now - i.created_at.timestamp()) * 1000))
+        uptime = max(0, int(now - getattr(bot, "started_at", now)))
+        days, remainder = divmod(uptime, 86400); hours, remainder = divmod(remainder, 3600); minutes, seconds = divmod(remainder, 60)
+        uptime_text = f"{days}d {hours}h {minutes}m {seconds}s" if days else f"{hours}h {minutes}m {seconds}s"
+        db_path = getattr(bot.database, "path", None); db_size = db_path.stat().st_size if db_path and db_path.exists() else 0
+        e = embed("💜 Grid A1 • Owner Diagnostics", "🔍 Private health report for Grid A1 Manager.", discord.Colour.from_rgb(177, 77, 255))
+        e.add_field(name="🟢 Status", value="`Online and responding`", inline=True)
+        e.add_field(name="🏓 Gateway", value=f"`{gateway} ms`" if gateway is not None else "`Unavailable`", inline=True)
+        e.add_field(name="⚡ Interaction", value=f"`{received} ms`", inline=True)
+        e.add_field(name="⏱️ Uptime", value=f"`{uptime_text}`", inline=True)
+        e.add_field(name="🌐 Servers", value=f"`{len(bot.guilds)}`", inline=True)
+        e.add_field(name="👥 Cached members", value=f"`{sum(g.member_count or 0 for g in bot.guilds):,}`", inline=True)
+        e.add_field(name="📚 Cached channels", value=f"`{sum(len(g.channels) for g in bot.guilds):,}`", inline=True)
+        e.add_field(name="🗃️ SQLite database", value=f"`{db_size / 1024:.1f} KB`", inline=True)
+        e.add_field(name="🧩 Runtime", value=f"Python `{platform.python_version()}`\ndiscord.py `{discord.__version__}`", inline=False)
+        e.add_field(name="🔐 Safety", value="No tokens, credentials, or secret environment values are displayed.", inline=False)
+        e.set_footer(text="Grid A1 • Private owner diagnostics")
+        await i.response.send_message(embed=e, ephemeral=True)
     @bot.tree.command(name="embed",description="Post a custom embed with an optional image")
     @app_commands.describe(title="Embed title",description="Embed description",image="Optional image attachment")
     async def embed_command(i,title:str,description:str,image:Optional[discord.Attachment]=None):
