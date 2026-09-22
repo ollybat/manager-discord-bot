@@ -15,7 +15,7 @@ OWNER_ID=123456789012345678
 # LOG_LEVEL=INFO
 ```
 
-`OWNER_ID` is required for `/sync` and must be the Discord user ID of the bot owner. If it is blank or invalid, `/sync` returns a configuration error; it does not fall back to server permissions. `TEST_GUILD_ID` is optional and controls the fast test-guild sync.
+`OWNER_ID` is required for `/sync`; it is checked against the invoking Discord user and does not fall back to server permissions. `TEST_GUILD_ID` is optional and controls the fast test-guild sync.
 
 ## Install and run
 
@@ -27,19 +27,32 @@ cp .env.example .env
 python bot.py
 ```
 
-Use `py -3` and the PowerShell activation command on Windows. Invite with both `bot` and `applications.commands` scopes. Grant the bot View Channel, Send Messages, Embed Links, Attach Files, Read Message History, and the ticket permissions required by your existing setup.
+Use `py -3` and the PowerShell activation command on Windows. Invite with both `bot` and `applications.commands` scopes.
+
+## Safe command-sync workflow
+
+Startup deliberately does **not** global-sync commands. This avoids Discord global-command PUT rate limits during restarts.
+
+1. Set `TEST_GUILD_ID` while developing. On boot, only that guild is synced and the log reports the command count.
+2. For a production/global update, invoke `/sync` as the configured `OWNER_ID` user. The response reports test-guild and global counts when applicable.
+3. `/sync` has an in-memory minimum cooldown and in-progress guard. A cooldown response is expected if it is invoked repeatedly; wait and retry.
+4. If Discord reports HTTP 429, wait for the cooldown and retry. Do not restart repeatedly to force a global sync.
+
+Commands are retained; this change only changes when synchronization is requested.
+
+## Optional voice warnings
+
+PyNaCl/davey warnings can be ignored for the bot's current text, ticket, moderation, and setup features. Voice dependencies are only needed if voice support is added or required.
 
 ## Commands
 
 | Command | Access | Purpose |
 |---|---|---|
-| `/help` | Everyone | Clean Grid A1 command guide |
-| `/rules` | Everyone | Generic placeholder/default rules; edit the list in `grid_a1/commands.py` |
+| `/help` | Everyone | Grid A1 command guide |
+| `/rules` | Everyone | Generic editable rules |
 | `/ping` | Everyone | Gateway latency |
-| `/embed title description image` | Everyone | Post an embed; optional image must have image content type and `.jpg`, `.jpeg`, `.png`, `.gif`, or `.webp` extension |
-| `/embed-edit message_id title description image` | Manage Messages | Edit an existing bot-authored embed in the current channel |
-| `/sync` | `OWNER_ID` only | Sync test guild when `TEST_GUILD_ID` exists and global commands |
+| `/embed` | Everyone | Post an embed |
+| `/embed-edit` | Manage Messages | Edit a bot-authored embed |
+| `/sync` | `OWNER_ID` only | Explicitly sync test guild (if configured) and global commands |
 
-`/embed-edit` reports clear errors for invalid IDs, missing messages, non-embed messages, messages not authored by this bot, missing access, invalid images, or insufficient permissions. Existing ticket/setup/welcomer commands remain in the bot architecture.
-
-No live Discord runtime test is claimed by this documentation.
+Existing setup, ticket, and welcomer commands remain in the bot architecture. No live Discord runtime test is claimed by this documentation.
