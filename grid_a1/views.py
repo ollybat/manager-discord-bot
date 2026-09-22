@@ -6,11 +6,26 @@ from .embeds import embed
 from .tickets import TicketService, claim
 from .utils import is_ticket, parse_ticket_topic, staff_member
 
+QUESTION_SETS = {
+    "general": ("What do you need help with?", "Which server or area is involved?"),
+    "base": ("Where is your base or area?", "What happened or what result do you need?"),
+    "clan": ("What is your clan name?", "How many members or what clan action is involved?"),
+    "shop": ("Which shop item or purchase is this about?", "What order, payment, or issue details can you provide?"),
+    "raid": ("Which raid or time was involved?", "What happened and what evidence do you have?"),
+    "bug": ("What steps reproduce the bug?", "What device, platform, or error message do you see?"),
+}
+
 class DetailsModal(discord.ui.Modal, title="Open a support ticket"):
-    details = discord.ui.TextInput(label="Tell us what happened", style=discord.TextStyle.paragraph, min_length=5, max_length=1500)
+    in_game_name = discord.ui.TextInput(label="🎮 In-game name", min_length=2, max_length=80, placeholder="Your Rust Console name")
+    question_one = discord.ui.TextInput(label="Question 1", max_length=500)
+    question_two = discord.ui.TextInput(label="Question 2", max_length=500)
+    details = discord.ui.TextInput(label="📝 Tell us what happened", style=discord.TextStyle.paragraph, min_length=5, max_length=1500)
     def __init__(self, service: TicketService, issue: str, label: str, region: str):
         super().__init__(); self.service, self.issue, self.label, self.region = service, issue, label, region
-    async def on_submit(self, interaction: discord.Interaction): await self.service.create(interaction, self.issue, self.label, self.region, str(self.details.value))
+        q1, q2 = QUESTION_SETS.get(issue, QUESTION_SETS["general"]); self.question_one.label = q1[:45]; self.question_two.label = q2[:45]
+    async def on_submit(self, interaction: discord.Interaction):
+        details = f"🎮 In-game name: {self.in_game_name.value}\n❓ {self.question_one.label}: {self.question_one.value}\n❓ {self.question_two.label}: {self.question_two.value}\n📝 Details: {self.details.value}"
+        await self.service.create(interaction, self.issue, self.label, self.region, details)
 
 class RegionSelect(discord.ui.Select):
     def __init__(self, service: TicketService, issue: str, label: str):
@@ -56,16 +71,24 @@ class OwnerInactivityView(discord.ui.View):
     """Buttons sent privately to a ticket owner after a red inactivity warning."""
     def __init__(self, service: TicketService, ticket_id: str):
         super().__init__(timeout=86400); self.service = service; self.ticket_id = ticket_id
+    async def _owner_check(self, interaction):
+        row = self.service.db.ticket(self.ticket_id)
+        if not row or row["status"] not in ("open", "close_requested") or row["owner_id"] != interaction.user.id:
+            await interaction.response.send_message("This inactivity action is no longer available.", ephemeral=True); return False
+        return True
     @discord.ui.button(label="Keep ticket open", style=discord.ButtonStyle.success, emoji="🟢", custom_id="grid-a1:inactive:keep")
     async def keep(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await self._owner_check(interaction): return
         self.service.db.mark_activity(self.ticket_id)
         await interaction.response.send_message("✅ The ticket will stay open. Staff have been notified.", ephemeral=True)
     @discord.ui.button(label="Request another staff member", style=discord.ButtonStyle.secondary, emoji="🙋", custom_id="grid-a1:inactive:staff")
     async def staff(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await self._owner_check(interaction): return
         self.service.db.set_claim(self.ticket_id, None); self.service.db.mark_activity(self.ticket_id); self.service.db.audit(interaction.guild.id if interaction.guild else 0, self.ticket_id, interaction.user.id, "staff_requested")
         await interaction.response.send_message("✅ Your request was sent to staff.", ephemeral=True)
     @discord.ui.button(label="Close ticket", style=discord.ButtonStyle.danger, emoji="🔒", custom_id="grid-a1:inactive:close")
     async def close(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not await self._owner_check(interaction): return
         channel = interaction.guild.get_channel(self.service.db.ticket(self.ticket_id)["channel_id"]) if interaction.guild and self.service.db.ticket(self.ticket_id) else None
         if not isinstance(channel, discord.TextChannel): return await interaction.response.send_message("This ticket is already closed.", ephemeral=True)
         await self.service.close_owner_from_dm(interaction, self.ticket_id, "Closed by ticket owner from inactivity notice")
