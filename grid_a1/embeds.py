@@ -5,7 +5,8 @@ import discord
 from .database import Database
 from .utils import utcnow
 
-COLOURS = {"general": discord.Colour.blurple(), "base": discord.Colour.green(), "clan": discord.Colour.purple(), "shop": discord.Colour.gold(), "raid": discord.Colour.red(), "bug": discord.Colour.orange()}
+NEON_PURPLE = discord.Colour.from_rgb(177, 77, 255)
+COLOURS = {"general": NEON_PURPLE, "base": discord.Colour.green(), "clan": discord.Colour.purple(), "shop": discord.Colour.gold(), "raid": discord.Colour.red(), "bug": discord.Colour.orange()}
 
 
 def embed(title: str, description: str, colour: discord.Colour = discord.Colour.blurple()) -> discord.Embed:
