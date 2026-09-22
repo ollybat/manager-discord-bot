@@ -51,7 +51,7 @@ class TicketService:
         if roles:
             mentions = " ".join(role.mention for role in roles)
             try:
-                await channel.send(f"📣 {mentions} — a new ticket **{ticket_id}** was created. Please review it.", allowed_mentions=discord.AllowedMentions(roles=True))
+                await channel.send(f"📣 {mentions} — a new **{issue.title()} ticket** was created. Please review it.", allowed_mentions=discord.AllowedMentions(roles=True))
             except discord.DiscordException:
                 log.exception("Could not post staff ticket notification for %s", ticket_id)
         members = {member.id: member for role in roles for member in role.members}
