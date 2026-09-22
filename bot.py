@@ -1,4 +1,4 @@
-"""Luna Manager Discord bot.
+"""Grid A1 Discord bot.
 
 All application commands are registered on the global command tree and synced once
 from ``setup_hook``.  The bot intentionally keeps its small SQLite database local
@@ -18,7 +18,7 @@ from typing import Any
 
 import discord
 from discord import app_commands
-from discord.ext import commands
+from discord.ext import commands, tasks
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -31,7 +31,7 @@ DB_PATH = Path(os.getenv("DATABASE_PATH", "manager.sqlite3"))
 TEST_GUILD_ID = int(os.getenv("TEST_GUILD_ID", "0") or 0)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
-log = logging.getLogger("luna-manager")
+log = logging.getLogger("grid-a1-manager")
 
 intents = discord.Intents.default()
 intents.members = True
@@ -67,6 +67,8 @@ def setup_db() -> None:
                 ticket_category INTEGER,
                 logs_channel INTEGER,
                 ticket_archive INTEGER,
+                panel_channel INTEGER,
+                panel_message INTEGER,
                 inactivity_hours INTEGER DEFAULT 24
             )"""
         )
@@ -80,11 +82,24 @@ def setup_db() -> None:
             "ticket_category": "INTEGER",
             "logs_channel": "INTEGER",
             "ticket_archive": "INTEGER",
+            "panel_channel": "INTEGER",
+            "panel_message": "INTEGER",
             "inactivity_hours": "INTEGER DEFAULT 24",
         }
         for name, definition in additions.items():
             if name not in existing:
                 connection.execute(f"ALTER TABLE config ADD COLUMN {name} {definition}")
+        connection.execute(
+            """CREATE TABLE IF NOT EXISTS closed_tickets (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                guild INTEGER NOT NULL,
+                region TEXT NOT NULL,
+                issue TEXT NOT NULL,
+                closed_by INTEGER NOT NULL,
+                reason TEXT NOT NULL,
+                closed_at TEXT NOT NULL
+            )"""
+        )
         # Older releases called the transcript destination ticket_archive.
         connection.execute(
             "UPDATE config SET logs_channel=ticket_archive "
@@ -153,9 +168,9 @@ def welcome_embed(guild: discord.Guild, member: discord.Member, config: sqlite3.
         "Welcome to the community. Start with verification, choose your server access, and explore the useful channels below.",
     )
     if bot.user:
-        embed.set_author(name="Luna • Manager", icon_url=bot.user.display_avatar.url)
+        embed.set_author(name="Grid A1 • Manager", icon_url=bot.user.display_avatar.url)
     else:
-        embed.set_author(name="Luna • Manager")
+        embed.set_author(name="Grid A1 • Manager")
     embed.add_field(
         name="🧭 Server navigation",
         value=(
@@ -168,13 +183,13 @@ def welcome_embed(guild: discord.Guild, member: discord.Member, config: sqlite3.
     )
     embed.add_field(
         name="🎫 Support & commands",
-        value=("Open a ticket from the **Support Tickets** panel. Select an issue, choose 🇪🇺 EU or 🇺🇸 NA, then submit details.\n\n"
+        value=("Open a ticket from the **Support Tickets** panel. Select an issue, choose 🇪🇺 EU, then submit details. NA is coming soon.\n\n"
                "`/setup tickets` · `/setup welcomer`\n`/welcomer preview` · `/welcomer test`\n"
                "`/ticket claim` · `/ticket transfer` · `/ticket requestclose` · `/ticket close`"),
         inline=False,
     )
-    embed.add_field(name="👥 Community status", value=f"You are member **#{count:,}** of Avoid EU 5X.\nLuna keeps support fast, organized, and friendly.", inline=False)
-    embed.set_footer(text="Luna • Manager  •  Community welcome")
+    embed.add_field(name="👥 Community status", value=f"You are member **#{count:,}** of Avoid EU 5X.\nGrid A1 keeps support fast, organized, and friendly.", inline=False)
+    embed.set_footer(text="Grid A1 • Manager  •  Community welcome")
     return embed
 
 
@@ -211,7 +226,7 @@ class TicketDetailsModal(discord.ui.Modal, title="Open a support ticket"):
 class RegionSelect(discord.ui.Select):
     def __init__(self, issue_key: str, issue_label: str):
         self.issue_key, self.issue_label = issue_key, issue_label
-        super().__init__(placeholder="Choose your region…", options=[discord.SelectOption(label="EU", value="EU", emoji="🇪🇺", description="European support region"), discord.SelectOption(label="NA", value="NA", emoji="🇺🇸", description="North American support region")], custom_id="luna:ticket:region")
+        super().__init__(placeholder="Choose your region…", options=[discord.SelectOption(label="EU", value="EU", emoji="🇪🇺", description="European support region")], custom_id="grid-a1:ticket:region")
 
     async def callback(self, interaction: discord.Interaction) -> None:
         await interaction.response.send_modal(TicketDetailsModal(self.issue_key, self.issue_label, self.values[0]))
@@ -226,12 +241,12 @@ class RegionView(discord.ui.View):
 class TicketTypeSelect(discord.ui.Select):
     def __init__(self):
         options = [discord.SelectOption(label=f"Ticket {key.title()}", value=key, emoji=emoji, description=desc) for key, emoji, desc in [("general", "📄", "General requests and questions"), ("base", "🏠", "Questions about your base or area"), ("clan", "👥", "Clan requests or specific problems"), ("shop", "💎", "Store and product information"), ("raid", "⚠️", "Raid-related problems"), ("bug", "🐛", "Report an in-game or bot bug")]]
-        super().__init__(placeholder="Choose what you need help with…", options=options, custom_id="luna:ticket:type")
+        super().__init__(placeholder="Choose what you need help with…", options=options, custom_id="grid-a1:ticket:type")
 
     async def callback(self, interaction: discord.Interaction) -> None:
         selected = self.values[0]
         label = next(option.label for option in self.options if option.value == selected)
-        await interaction.response.send_message("Choose EU or NA before filling in your questions.", view=RegionView(selected, label), ephemeral=True)
+        await interaction.response.send_message("Choose EU before filling in your questions. NA is Coming Soon.", view=RegionView(selected, label), ephemeral=True)
 
 
 class TicketPanel(discord.ui.View):
@@ -239,16 +254,16 @@ class TicketPanel(discord.ui.View):
         super().__init__(timeout=None)
         self.add_item(TicketTypeSelect())
 
-    @discord.ui.button(label="How it works", style=discord.ButtonStyle.secondary, emoji="❔", custom_id="luna:ticket:help")
+    @discord.ui.button(label="How it works", style=discord.ButtonStyle.secondary, emoji="❔", custom_id="grid-a1:ticket:help")
     async def how_it_works(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
-        await interaction.response.send_message(embed=make_embed("🎫 How support works", "1. Pick an issue.\n2. Choose EU or NA.\n3. Explain the issue.\n4. Attach proof.\n5. Staff will help and archive the ticket."), ephemeral=True)
+        await interaction.response.send_message(embed=make_embed("🎫 How support works", "1. Pick an issue.\n2. Choose EU.\n3. Explain the issue.\n4. Attach proof.\n5. Staff will help and archive the ticket."), ephemeral=True)
 
 
 class TicketControls(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
 
-    @discord.ui.button(label="Claim", style=discord.ButtonStyle.primary, emoji="🙋", custom_id="luna:ticket:claim")
+    @discord.ui.button(label="Claim", style=discord.ButtonStyle.primary, emoji="🙋", custom_id="grid-a1:ticket:claim")
     async def claim(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await staff_permissions(interaction.user):
             return await interaction.response.send_message("Only staff can claim tickets.", ephemeral=True)
@@ -258,7 +273,7 @@ class TicketControls(discord.ui.View):
         await interaction.channel.set_permissions(interaction.user, view_channel=True, send_messages=True, read_message_history=True, manage_channels=True)  # type: ignore[union-attr]
         await interaction.response.send_message(embed=make_embed("🙋 Ticket claimed", f"Assigned to {interaction.user.mention}.", discord.Colour.orange()))
 
-    @discord.ui.button(label="Close ticket", style=discord.ButtonStyle.danger, emoji="🔒", custom_id="luna:ticket:close")
+    @discord.ui.button(label="Close ticket", style=discord.ButtonStyle.danger, emoji="🔒", custom_id="grid-a1:ticket:close")
     async def close(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         if not await staff_permissions(interaction.user):
             return await interaction.response.send_message("Only staff can close tickets.", ephemeral=True)
@@ -287,12 +302,12 @@ async def create_ticket(interaction: discord.Interaction, issue_key: str, issue_
     if interaction.guild.me:  # type: ignore[union-attr]
         overwrites[interaction.guild.me] = discord.PermissionOverwrite(view_channel=True, send_messages=True, manage_channels=True, attach_files=True)  # type: ignore[union-attr]
     channel = await interaction.guild.create_text_channel(f"🎫・{region.lower()}-{issue_key}-{interaction.user.name[:12]}".lower(), category=category, overwrites=overwrites, topic=f"manager-ticket:owner={interaction.user.id};issue={issue_key};region={region};claimed=none", reason=f"Ticket opened by {interaction.user}")  # type: ignore[union-attr]
-    await channel.send(content=interaction.user.mention, embed=make_embed("🎫 Luna Manager support ticket", f"**Region:** {region}\n**Issue:** {issue_label}\n\n**Initial report:**\n{discord.utils.escape_markdown(details)}\n\nA moderator will be with you shortly.", COLOURS[issue_key]), view=TicketControls())
+    await channel.send(content=interaction.user.mention, embed=make_embed("🎫 Grid A1 support ticket", f"**Region:** {region}\n**Issue:** {issue_label}\n\n**Initial report:**\n{discord.utils.escape_markdown(details)}\n\nA moderator will be with you shortly.", COLOURS[issue_key]), view=TicketControls())
     await interaction.response.send_message(f"✅ Your private {region} ticket is ready: {channel.mention}", ephemeral=True)
 
 
 async def build_transcript(channel: discord.TextChannel) -> str:
-    parts = ["<!doctype html><meta charset='utf-8'><title>Luna Manager transcript</title><main><h1>🎫 Luna Manager ticket transcript</h1>"]
+    parts = ["<!doctype html><meta charset='utf-8'><title>Grid A1 transcript</title><main><h1>🎫 Grid A1 ticket transcript</h1>"]
     async for message in channel.history(limit=None, oldest_first=True):
         content = html.escape(message.content or "(no text)").replace("\n", "<br>")
         attachments = " ".join(f"<a href='{html.escape(a.url, quote=True)}'>{html.escape(a.filename)}</a>" for a in message.attachments)
@@ -309,7 +324,11 @@ async def close_ticket(interaction: discord.Interaction, reason: str) -> None:
     if not isinstance(archive, discord.TextChannel):
         return await interaction.response.send_message("The logs channel is missing. Run `/setup tickets` again.", ephemeral=True)
     transcript = await build_transcript(interaction.channel)  # type: ignore[arg-type]
-    await archive.send(embed=make_embed("📁 Ticket archived", f"**Closed by:** {interaction.user.mention}\n**Reason:** {reason}\n**Region:** {ticket_value(interaction.channel, 'region') or 'unknown'}"), file=discord.File(io.BytesIO(transcript.encode()), filename=f"{interaction.channel.name}-transcript.html"))  # type: ignore[union-attr]
+    region = ticket_value(interaction.channel, "region") or "unknown"
+    issue = ticket_value(interaction.channel, "issue") or "unknown"
+    with db() as connection:
+        connection.execute("INSERT INTO closed_tickets(guild,region,issue,closed_by,reason,closed_at) VALUES(?,?,?,?,?,?)", (interaction.guild.id, region, issue, interaction.user.id, reason, datetime.now(timezone.utc).isoformat()))  # type: ignore[union-attr]
+    await archive.send(embed=make_embed("📁 Ticket archived", f"**Closed by:** {interaction.user.mention}\n**Reason:** {reason}\n**Region:** {region}"), file=discord.File(io.BytesIO(transcript.encode()), filename=f"{interaction.channel.name}-transcript.html"))  # type: ignore[union-attr]
     await interaction.response.send_message("✅ Transcript archived. This ticket will now be deleted.", ephemeral=True)
     await interaction.channel.delete(reason=f"Closed by {interaction.user}: {reason}")  # type: ignore[union-attr]
 
@@ -318,15 +337,39 @@ def support_panel_embed(guild: discord.Guild) -> discord.Embed:
     tickets = [channel for channel in guild.text_channels if is_ticket(channel)]
     eu = sum(ticket_value(channel, "region") == "EU" for channel in tickets)
     na = sum(ticket_value(channel, "region") == "NA" for channel in tickets)
-    embed = make_embed("Support Tickets", "Select a support option, then choose EU or NA before filling in your questions.")
-    for name, value in (("Open Tickets (Total)", len(tickets)), ("Open EU Tickets", eu), ("Open NA Tickets", na), ("Response Speed", "Staff monitored"), ("Estimated Help Time", "12 mins")):
+    with db() as connection:
+        closed = connection.execute("SELECT COUNT(*) FROM closed_tickets WHERE guild=?", (guild.id,)).fetchone()[0]
+    embed = make_embed("Support Tickets", "Select a support option, then choose EU before filling your questions.\n\nNA: Coming Soon.")
+    for name, value in (("Open Tickets (Total)", len(tickets)), ("Open EU Tickets", eu), ("Open NA Tickets", 0), ("Response Speed", "Fast"), ("Estimated Help Time", "12 mins"), ("Closed Tickets", closed)):
         embed.add_field(name=name, value=str(value), inline=True)
-    embed.set_footer(text="Luna • Manager bot")
+    embed.set_footer(text="Grid A1 • Manager")
     return embed
 
 
-class LunaBot(commands.Bot):
+class GridA1Bot(commands.Bot):
     _views_registered = False
+
+    @tasks.loop(seconds=60)
+    async def refresh_panels(self) -> None:
+        for guild in self.guilds:
+            try:
+                config = configured_channels(guild.id)
+                if not config or not config["panel_channel"] or not config["panel_message"]:
+                    continue
+                channel = guild.get_channel(config["panel_channel"])
+                if not isinstance(channel, discord.TextChannel):
+                    log.error("Grid A1 panel channel missing in guild %s", guild.id)
+                    continue
+                message = await channel.fetch_message(config["panel_message"])
+                await message.edit(embed=support_panel_embed(guild), view=TicketPanel())
+            except (discord.Forbidden, discord.NotFound, discord.HTTPException) as error:
+                log.error("Grid A1 panel refresh failed in guild %s: %s", guild.id, error)
+            except Exception:
+                log.exception("Unexpected Grid A1 panel refresh error in guild %s", guild.id)
+
+    @refresh_panels.before_loop
+    async def before_refresh_panels(self) -> None:
+        await self.wait_until_ready()
 
     async def setup_hook(self) -> None:
         setup_db()
@@ -334,6 +377,7 @@ class LunaBot(commands.Bot):
             self.add_view(TicketPanel())
             self.add_view(TicketControls())
             self._views_registered = True
+        self.refresh_panels.start()
         try:
             if TEST_GUILD_ID:
                 guild = discord.Object(id=TEST_GUILD_ID)
@@ -347,9 +391,9 @@ class LunaBot(commands.Bot):
             raise
 
 
-bot = LunaBot(command_prefix=PREFIX, intents=intents, help_command=None)
+bot = GridA1Bot(command_prefix=PREFIX, intents=intents, help_command=None)
 
-setup_group = app_commands.Group(name="setup", description="Configure Luna Manager bot")
+setup_group = app_commands.Group(name="setup", description="Configure Grid A1 bot")
 welcomer_group = app_commands.Group(name="welcomer", description="Preview and test welcome messages")
 ticket_group = app_commands.Group(name="ticket", description="Manage support tickets")
 bot.tree.add_command(setup_group)
@@ -362,7 +406,9 @@ bot.tree.add_command(ticket_group)
 async def setup_tickets(interaction: discord.Interaction, panel_channel: discord.TextChannel, logs_channel: discord.TextChannel, category: discord.CategoryChannel, inactivity_hours: app_commands.Range[int, 1, 720]) -> None:
     with db() as connection:
         connection.execute("INSERT INTO config(guild_id,ticket_category,logs_channel,ticket_archive,inactivity_hours) VALUES(?,?,?,?,?) ON CONFLICT(guild_id) DO UPDATE SET ticket_category=excluded.ticket_category,logs_channel=excluded.logs_channel,ticket_archive=excluded.ticket_archive,inactivity_hours=excluded.inactivity_hours", (interaction.guild.id, category.id, logs_channel.id, logs_channel.id, inactivity_hours))  # type: ignore[union-attr]
-    await panel_channel.send(embed=support_panel_embed(interaction.guild), view=TicketPanel())  # type: ignore[arg-type]
+    panel_message = await panel_channel.send(embed=support_panel_embed(interaction.guild), view=TicketPanel())  # type: ignore[arg-type]
+    with db() as connection:
+        connection.execute("UPDATE config SET panel_channel=?, panel_message=? WHERE guild_id=?", (panel_channel.id, panel_message.id, interaction.guild.id))  # type: ignore[union-attr]
     await interaction.response.send_message(f"✅ Ticket panel deployed in {panel_channel.mention}; logs go to {logs_channel.mention}.", ephemeral=True)
 
 
@@ -443,7 +489,7 @@ async def on_member_join(member: discord.Member) -> None:
 
 @bot.event
 async def on_ready() -> None:
-    log.info("Luna Manager bot logged in as %s", bot.user)
+    log.info("Grid A1 bot logged in as %s", bot.user)
 
 
 @bot.event
