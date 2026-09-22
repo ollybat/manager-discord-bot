@@ -15,7 +15,7 @@ Standalone Python `discord.py` bot for Rust Console community support. This is a
 
 ## Welcomer setup
 
-`/setup welcomer welcome_channel link_channel bot_commands_channel shop_channel` stores the channels used by the Luna Manager community setup.
+`/setup welcomer welcome_channel link_channel bot_commands_channel shop_channel verify_channel` stores the channels used by the Luna Manager community setup. New members receive the branded **🔷 Welcome to Avoid EU 5X** embed with configured channel mentions, and `/welcomer preview` provides an ephemeral test preview. Existing databases migrate automatically with the new `verify_channel` column.
 
 ## Run
 
