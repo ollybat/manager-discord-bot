@@ -97,8 +97,20 @@ welcomer_group = app_commands.Group(name="welcomer", description="Preview and te
 ticket_group = app_commands.Group(name="ticket", description="Manage support tickets")
 bot.tree.add_command(setup_group); bot.tree.add_command(welcomer_group); bot.tree.add_command(ticket_group)
 def guild(i): return i.guild
-def admin(): return app_commands.checks.has_permissions(manage_guild=True)
-def staff(): return app_commands.checks.has_permissions(manage_channels=True)
+def _privileged(interaction: discord.Interaction, require_staff: bool = False) -> bool:
+    if not interaction.guild or not isinstance(interaction.user, discord.Member): return False
+    if interaction.user.id == interaction.guild.owner_id or interaction.user.id == settings.owner_id: return True
+    permissions = interaction.user.guild_permissions
+    if permissions.administrator or permissions.manage_guild: return True
+    return require_staff and (permissions.manage_channels or bool(set(role.id for role in interaction.user.roles) & set(bot.database.staff_role_ids(interaction.guild.id))))
+
+def _permission_check(require_staff: bool = False):
+    async def predicate(interaction: discord.Interaction) -> bool:
+        return _privileged(interaction, require_staff)
+    return app_commands.check(predicate)
+
+def admin(): return _permission_check(False)
+def staff(): return _permission_check(True)
 
 @bot.tree.command(name="verifypanel", description="Create a verification panel")
 @app_commands.checks.has_permissions(manage_guild=True)
