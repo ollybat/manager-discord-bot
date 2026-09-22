@@ -1,46 +1,39 @@
 # Grid A1 Manager Discord Bot
 
-## Verification panel
+## Optional staff ticket notifications
 
-Create a persistent verification panel with:
+Grid A1 can DM staff when a new ticket is opened. This is optional and supports up to 10 Discord roles.
 
-```text
-/verifypanel channel role
-```
-
-Example:
+Configure a role:
 
 ```text
-/verifypanel #verify @Verified
+/setup staff add @Moderators
 ```
 
-Grid A1 posts a simple panel with a ✅ Verify button. Clicking it gives the configured Discord role. It does not verify anything inside the game server.
+Remove a role:
 
-Requirements:
+```text
+/setup staff remove @Moderators
+```
 
-- The command user needs Manage Server.
-- Grid A1 needs Manage Roles.
-- The Grid A1 bot role must be above the verification role.
-- `@everyone` cannot be used as the verification role.
-- The panel and role are stored in SQLite and the button survives restarts.
+When a ticket is created, Grid A1 finds members with any configured role and sends each person one DM. Members who match multiple configured roles are still notified only once. The ticket owner and bot accounts are skipped. If a member has DMs disabled, ticket creation still succeeds and Grid A1 logs the failed notification.
 
-If the user already has the role, Grid A1 responds without changing anything. Permission and role-hierarchy errors are shown clearly.
-
-## Ticket inactivity policy
-
-Grid A1 checks tickets every five minutes.
-
-- 🟢 Active — recent activity.
-- 🟡 Inactive — no messages for the configured inactivity period.
-- 🔴 Closing soon — no messages for twice that period.
-
-Red tickets receive one DM with buttons for Keep ticket open, Request another staff member, or Close ticket. The owner has 24 hours to respond. A missing member cannot be DM'd; after the grace period, the ticket is archived and closed. Messages reset the activity timer.
+No roles configured means no staff DMs are sent.
 
 ## Main setup
 
 ```text
 /setup tickets panel_channel logs_channel category inactivity_hours
 /setup welcomer welcome_channel link_channel bot_commands_channel shop_channel verify_channel
+/verifypanel channel role
 ```
 
-Keep `.env`, the bot token, SQLite files, logs, and transcripts private.
+## Ticket behavior
+
+New tickets use a private channel, EU-only region selection, staff controls, readable HTML transcripts, and inactivity indicators:
+
+- 🟢 active
+- 🟡 inactive
+- 🔴 closing soon with owner buttons and a 24-hour grace period
+
+Keep `.env`, the Discord token, SQLite files, logs, and transcripts private.
