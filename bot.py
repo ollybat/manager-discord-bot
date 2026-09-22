@@ -41,6 +41,7 @@ def setup_db():
             """CREATE TABLE IF NOT EXISTS config (
                 guild_id INTEGER PRIMARY KEY,
                 welcome_channel INTEGER,
+                verify_channel INTEGER,
                 link_channel INTEGER,
                 bot_commands_channel INTEGER,
                 shop_channel INTEGER,
@@ -53,6 +54,7 @@ def setup_db():
         columns = {row[1] for row in con.execute("PRAGMA table_info(config)")}
         additions = {
             "welcome_channel": "INTEGER",
+            "verify_channel": "INTEGER",
             "link_channel": "INTEGER",
             "bot_commands_channel": "INTEGER",
             "shop_channel": "INTEGER",
@@ -94,6 +96,42 @@ def configured_channels(guild_id):
 
 async def staff_permissions(guild, member):
     return member.guild_permissions.manage_channels or member.guild_permissions.manage_guild
+
+
+def ordinal(number):
+    number = int(number)
+    if 10 <= number % 100 <= 20:
+        suffix = "th"
+    else:
+        suffix = {1: "st", 2: "nd", 3: "rd"}.get(number % 10, "th")
+    return f"{number}{suffix}"
+
+
+def welcome_embed(guild, member, config):
+    count = guild.member_count or len(guild.members)
+    embed = discord.Embed(title="🔷 Welcome to Avoid EU 5X", description=f"Hey {member.mention} You are our {ordinal(count)} member!", colour=discord.Colour.blurple())
+    embed.add_field(name="✅ Verify / Server Selector", value=f"Start here: <#{config['verify_channel']}>", inline=False)
+    embed.add_field(name="🔗 Links", value=f"Useful links: <#{config['link_channel']}>", inline=False)
+    embed.add_field(name="🤖 Bot Commands", value=f"Bot commands: <#{config['bot_commands_channel']}>", inline=False)
+    embed.add_field(name="🛒 Shop", value=f"Visit the shop: <#{config['shop_channel']}>", inline=False)
+    embed.set_footer(text="Luna • Manager")
+    return embed
+
+
+async def send_welcome(guild, member):
+    try:
+        config = configured_channels(guild.id)
+        if not config or not config["welcome_channel"]:
+            return
+        channel = guild.get_channel(config["welcome_channel"])
+        if not isinstance(channel, discord.TextChannel):
+            print(f"Welcomer: configured welcome channel is missing in guild {guild.id}")
+            return
+        await channel.send(embed=welcome_embed(guild, member, config))
+    except (discord.Forbidden, discord.NotFound, discord.HTTPException) as error:
+        print(f"Welcomer: could not welcome member in guild {guild.id}: {error}")
+    except Exception as error:
+        print(f"Welcomer: unexpected error in guild {guild.id}: {error}")
 
 
 class TicketDetailsModal(discord.ui.Modal, title="Open a support ticket"):
@@ -289,12 +327,23 @@ async def setup_tickets(interaction: discord.Interaction, panel_channel: discord
 
 @setup_group.command(name="welcomer", description="Configure welcome and community channels")
 @app_commands.checks.has_permissions(manage_guild=True)
-async def setup_welcomer(interaction: discord.Interaction, welcome_channel: discord.TextChannel, link_channel: discord.TextChannel, bot_commands_channel: discord.TextChannel, shop_channel: discord.TextChannel):
+async def setup_welcomer(interaction: discord.Interaction, welcome_channel: discord.TextChannel, link_channel: discord.TextChannel, bot_commands_channel: discord.TextChannel, shop_channel: discord.TextChannel, verify_channel: discord.TextChannel):
     with db() as con:
-        con.execute("""INSERT INTO config(guild_id,welcome_channel,link_channel,bot_commands_channel,shop_channel) VALUES(?,?,?,?,?)
-            ON CONFLICT(guild_id) DO UPDATE SET welcome_channel=excluded.welcome_channel,link_channel=excluded.link_channel,bot_commands_channel=excluded.bot_commands_channel,shop_channel=excluded.shop_channel""", (interaction.guild.id, welcome_channel.id, link_channel.id, bot_commands_channel.id, shop_channel.id))
-    await interaction.response.send_message(f"✅ Welcomer configured: welcome {welcome_channel.mention}, links {link_channel.mention}, bot commands {bot_commands_channel.mention}, shop {shop_channel.mention}.", ephemeral=True)
+        con.execute("""INSERT INTO config(guild_id,welcome_channel,verify_channel,link_channel,bot_commands_channel,shop_channel) VALUES(?,?,?,?,?,?) ON CONFLICT(guild_id) DO UPDATE SET welcome_channel=excluded.welcome_channel,verify_channel=excluded.verify_channel,link_channel=excluded.link_channel,bot_commands_channel=excluded.bot_commands_channel,shop_channel=excluded.shop_channel""", (interaction.guild.id, welcome_channel.id, verify_channel.id, link_channel.id, bot_commands_channel.id, shop_channel.id))
+    await interaction.response.send_message(f"✅ Welcomer configured: welcome {welcome_channel.mention}, verify {verify_channel.mention}, links {link_channel.mention}, bot commands {bot_commands_channel.mention}, shop {shop_channel.mention}.", ephemeral=True)
 
+
+welcomer_group = app_commands.Group(name="welcomer", description="Preview and manage welcome messages")
+bot.tree.add_command(welcomer_group)
+
+@welcomer_group.command(name="preview", description="Preview the configured welcome message")
+@app_commands.checks.has_permissions(manage_guild=True)
+async def welcomer_preview(interaction: discord.Interaction):
+    config = configured_channels(interaction.guild.id)
+    required = ("welcome_channel", "verify_channel", "link_channel", "bot_commands_channel", "shop_channel")
+    if not config or any(not config[name] for name in required):
+        return await interaction.response.send_message("Welcomer is not fully configured. Run `/setup welcomer` first.", ephemeral=True)
+    await interaction.response.send_message(embed=welcome_embed(interaction.guild, interaction.user, config), ephemeral=True)
 
 ticket_group = app_commands.Group(name="ticket", description="Manage support tickets")
 bot.tree.add_command(ticket_group)
@@ -333,6 +382,11 @@ async def ticket_requestclose(interaction: discord.Interaction, reason: str):
 @app_commands.checks.has_permissions(manage_channels=True)
 async def ticket_close(interaction: discord.Interaction, reason: str = "No reason provided"):
     await close_ticket(interaction, reason)
+
+
+@bot.event
+async def on_member_join(member: discord.Member):
+    await send_welcome(member.guild, member)
 
 
 @bot.event
