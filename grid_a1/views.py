@@ -27,12 +27,12 @@ class TicketTypeSelect(discord.ui.Select):
         super().__init__(placeholder="Choose what you need help with…", options=options, custom_id="grid-a1:ticket:type")
     async def callback(self, interaction: discord.Interaction):
         option = next(x for x in self.options if x.value == self.values[0])
-        await interaction.response.send_message("Choose EU before filling in your questions. NA is Coming Soon.", view=RegionView(self.service, option.value, option.label), ephemeral=True)
+        await interaction.response.send_message("Choose EU, then describe the issue. NA support is coming soon.", view=RegionView(self.service, option.value, option.label), ephemeral=True)
 
 class TicketPanel(discord.ui.View):
     def __init__(self, service: TicketService): super().__init__(timeout=None); self.add_item(TicketTypeSelect(service))
     @discord.ui.button(label="How it works", style=discord.ButtonStyle.secondary, emoji="❔", custom_id="grid-a1:ticket:help")
-    async def how_it_works(self, interaction: discord.Interaction, button: discord.ui.Button): await interaction.response.send_message(embed=embed("🎫 How support works", "1. Pick an issue.\n2. Choose EU.\n3. Explain the issue.\n4. Attach proof.\n5. Staff will help and archive the ticket."), ephemeral=True)
+    async def how_it_works(self, interaction: discord.Interaction, button: discord.ui.Button): await interaction.response.send_message(embed=embed("How support works", "1. Pick a category.\n2. Choose EU.\n3. Describe the issue.\n4. Add screenshots if useful.\n5. Staff will handle the ticket."), ephemeral=True)
 
 class TicketControls(discord.ui.View):
     def __init__(self, service: TicketService): super().__init__(timeout=None); self.service = service
