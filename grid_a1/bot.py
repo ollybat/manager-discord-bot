@@ -9,7 +9,7 @@ from .database import Database
 from .embeds import embed, support_panel, inactivity_indicator
 from .tickets import TicketService, claim
 from .utils import is_ticket, parse_ticket_topic, staff_member
-from .views import OwnerInactivityView, TicketControls, TicketPanel
+from .views import OwnerInactivityView, TicketControls, TicketPanel, VerifyPanel
 from .welcomer import missing, send_welcome, welcome_embed
 from .commands import OwnerConfigurationError, OwnerOnlyError, register_commands
 settings = Settings.from_env(); configure_logging(settings.log_level)
@@ -23,7 +23,7 @@ class GridA1Bot(commands.Bot):
         self._global_sync_in_progress = False
         register_commands(self)
     async def setup_hook(self):
-        self.database.migrate(); self.add_view(TicketPanel(self.tickets)); self.add_view(TicketControls(self.tickets)); self.refresh_panels.start(); self.inactivity_loop.start()
+        self.database.migrate(); self.add_view(TicketPanel(self.tickets)); self.add_view(TicketControls(self.tickets)); self.add_view(VerifyPanel(self.database)); self.refresh_panels.start(); self.inactivity_loop.start()
         # Never PUT global commands during startup; global sync is owner-only via /sync.
         if settings.test_guild_id:
             guild = discord.Object(id=settings.test_guild_id); self.tree.copy_global_to(guild=guild)
@@ -97,6 +97,18 @@ bot.tree.add_command(setup_group); bot.tree.add_command(welcomer_group); bot.tre
 def guild(i): return i.guild
 def admin(): return app_commands.checks.has_permissions(manage_guild=True)
 def staff(): return app_commands.checks.has_permissions(manage_channels=True)
+
+@bot.tree.command(name="verifypanel", description="Create a verification panel")
+@app_commands.checks.has_permissions(manage_guild=True)
+async def verifypanel(i: discord.Interaction, channel: discord.TextChannel, role: discord.Role):
+    if role.is_default(): return await i.response.send_message("❌ You cannot use @everyone as the verification role.", ephemeral=True)
+    if not i.guild.me or role >= i.guild.me.top_role: return await i.response.send_message("❌ Move Grid A1's bot role above the verification role first.", ephemeral=True)
+    panel = embed("Grid A1 verification", "Click the button below to receive the server verification role. If you already have it, nothing will change.")
+    panel.set_footer(text="Grid A1 • Manager")
+    message = await channel.send(embed=panel, view=VerifyPanel(bot.database))
+    bot.database.upsert_config(i.guild.id, verify_panel_channel=channel.id, verify_panel_message=message.id, verify_role=role.id)
+    await i.response.send_message(f"✅ Verification panel created in {channel.mention} for {role.mention}.", ephemeral=True)
+
 @setup_group.command(name="tickets", description="Configure ticket channels and deploy the support panel")
 @admin()
 async def setup_tickets(i, panel_channel: discord.TextChannel, logs_channel: discord.TextChannel, category: discord.CategoryChannel, inactivity_hours: app_commands.Range[int,1,720]):
