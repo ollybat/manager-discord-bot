@@ -30,6 +30,9 @@ class TicketService:
         ticket_id = uuid.uuid4().hex[:8].upper()
         overwrites = {guild.default_role: discord.PermissionOverwrite(view_channel=False), interaction.user: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True, attach_files=True)}
         if guild.me: overwrites[guild.me] = discord.PermissionOverwrite(view_channel=True, send_messages=True, manage_channels=True, attach_files=True)
+        staff_roles = [guild.get_role(role_id) for role_id in self.db.staff_role_ids(guild.id)]
+        for role in staff_roles:
+            if role: overwrites[role] = discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True, attach_files=True)
         channel = await guild.create_text_channel(sanitize_channel_name(region, issue, interaction.user.name, ticket_id), category=category, overwrites=overwrites, topic=ticket_topic(ticket_id, interaction.user.id, issue, region), reason=f"Grid A1 ticket {ticket_id} opened")
         try: self.db.create_ticket(ticket_id=ticket_id, guild_id=guild.id, channel_id=channel.id, owner_id=interaction.user.id, issue=issue, region=region, opened_at=utcnow().isoformat(), last_activity_at=utcnow().isoformat())
         except Exception:
@@ -43,7 +46,15 @@ class TicketService:
     async def notify_staff(self, guild, channel, ticket_id, issue, region, owner_id):
         role_ids = self.db.staff_role_ids(guild.id)
         if not role_ids: return
-        members = {member.id: member for role_id in role_ids for role in [guild.get_role(role_id)] if role for member in role.members}
+        roles = [guild.get_role(role_id) for role_id in role_ids]
+        roles = [role for role in roles if role]
+        if roles:
+            mentions = " ".join(role.mention for role in roles)
+            try:
+                await channel.send(f"📣 {mentions} — a new ticket **{ticket_id}** was created. Please review it.", allowed_mentions=discord.AllowedMentions(roles=True))
+            except discord.DiscordException:
+                log.exception("Could not post staff ticket notification for %s", ticket_id)
+        members = {member.id: member for role in roles for member in role.members}
         for member in members.values():
             if member.id == owner_id or member.bot: continue
             try:
