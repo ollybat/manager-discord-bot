@@ -174,7 +174,7 @@ async def prefix_unlock(ctx):
     await ctx.send("🔓 This channel is now unlocked for members.")
 
 @bot.tree.command(name="verifypanel", description="Create a verification panel")
-@app_commands.checks.has_permissions(manage_guild=True)
+@admin()
 async def verifypanel(i: discord.Interaction, channel: discord.TextChannel, role: discord.Role):
     if role.is_default(): return await i.response.send_message("❌ You cannot use @everyone as the verification role.", ephemeral=True)
     if not i.guild.me or role >= i.guild.me.top_role: return await i.response.send_message("❌ Move Grid A1's bot role above the verification role first.", ephemeral=True)
@@ -198,7 +198,7 @@ async def ticket_remove(i: discord.Interaction, user: discord.Member):
     await i.response.send_message(f"✅ Removed {user.mention} from this ticket.", ephemeral=True)
 
 @bot.tree.command(name="staff", description="List configured ticket staff roles")
-@app_commands.checks.has_permissions(manage_guild=True)
+@admin()
 async def staff_list(i: discord.Interaction):
     roles = [i.guild.get_role(role_id) for role_id in bot.database.staff_role_ids(i.guild.id)]
     roles = [role for role in roles if role]
@@ -209,7 +209,7 @@ async def staff_list(i: discord.Interaction):
 roles_group = app_commands.Group(name="roles", description="Display server roles")
 bot.tree.add_command(roles_group)
 @roles_group.command(name="setchannel", description="Post a stylish list of server roles")
-@app_commands.checks.has_permissions(manage_guild=True)
+@admin()
 async def roles_setchannel(i: discord.Interaction, channel: discord.TextChannel):
     roles = [role for role in i.guild.roles if not role.is_default()]
     roles.sort(key=lambda role: role.position, reverse=True)
@@ -222,7 +222,7 @@ async def roles_setchannel(i: discord.Interaction, channel: discord.TextChannel)
     await i.response.send_message(f"✅ Role directory posted in {channel.mention}.", ephemeral=True)
 
 @setup_group.command(name="staff", description="Manage optional ticket staff notification roles")
-@app_commands.checks.has_permissions(manage_guild=True)
+@admin()
 @app_commands.describe(action="Choose whether to add or remove this staff role", role="Staff role to notify")
 @app_commands.choices(action=[app_commands.Choice(name="Add staff notifications", value="add"), app_commands.Choice(name="Remove staff notifications", value="remove")])
 async def setup_staff(i: discord.Interaction, action: app_commands.Choice[str], role: discord.Role):
