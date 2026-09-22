@@ -19,11 +19,15 @@ def _validate_image(a:Optional[discord.Attachment])->Optional[str]:
 def register_commands(bot)->None:
     if getattr(bot,"_grid_a1_commands_registered",False):return
     bot._grid_a1_commands_registered=True
-    @bot.tree.command(name="help",description="Show the Grid A1 command guide")
+    @bot.tree.command(name="help", description="Show the Grid A1 command center")
     async def help_command(i):
-        e=embed("💜 Grid A1 command guide","✨ Available commands for this Discord server.");e.add_field(name="🌐 General",value="`/help` — Show this guide\n`/ping` — Bot status\n`/verifypanel` — Create verification panel",inline=False);e.add_field(name="🎨 Embeds",value="`/embed` — Post a custom embed\n`/embed-edit` — Edit a bot embed",inline=False);
-        if isinstance(i.user, discord.Member) and (i.user.guild_permissions.manage_channels or i.user.guild_permissions.manage_guild): e.add_field(name="🛡️ Staff",value="`/setup tickets` — Configure tickets\n`/setup staff` — Configure staff alerts\n`/setup welcomer` — Configure welcomes\n`/ticket claim` — Claim a ticket\n`/ticket transfer` — Transfer a ticket\n`/ticket requestclose` — Request closure\n`/ticket close` — Archive and close",inline=False)
-        e.add_field(name="👑 Owner",value="`/sync` — Sync commands",inline=False);await i.response.send_message(embed=e,ephemeral=True)
+        e = embed("💜 Grid A1 • Command Center", "✨ Here are the commands available to you.", discord.Colour.from_rgb(177, 77, 255))
+        e.add_field(name="🌐 Public", value="`/help` — Show this command center\n`/info server` — View server information\n`/embed` — Post a custom embed\n`/embed-edit` — Edit a bot embed", inline=False)
+        if isinstance(i.user, discord.Member) and (i.user.guild_permissions.administrator or i.user.guild_permissions.manage_guild or i.user.guild_permissions.manage_channels or i.user.id == i.guild.owner_id or i.user.id == bot.settings_owner_id):
+            e.add_field(name="🛡️ Staff", value="`/setup tickets` — Configure tickets\n`/setup staff` — Configure staff alert roles\n`/setup welcomer` — Configure welcomes\n`/staff` — List staff alert roles\n`/roles setchannel` — Post role directory\n`/verifypanel` — Create verification panel\n`/ticket claim` — Claim a ticket\n`/ticket transfer` — Transfer a ticket\n`/ticket remove` — Remove a user from a ticket\n`/ticket requestclose` — Request closure\n`/ticket close` — Archive and close\n`/kick` — Kick a member\n`/ban` — Ban a member\n`/warn` — Record a warning\n`/timeout` — Timeout a member\n`!lock` / `!unlock` — Lock or unlock a channel", inline=False)
+        if i.user.id == bot.settings_owner_id: e.add_field(name="👑 Bot owner", value="`/ping` — Private detailed diagnostics\n`/sync` — Synchronize application commands", inline=False)
+        e.set_footer(text="Grid A1 • Manager • Commands are permission-protected")
+        await i.response.send_message(embed=e, ephemeral=True)
     @bot.tree.command(name="ping",description="Show detailed bot diagnostics (owner only)")
     async def ping_command(i):
         if bot.settings_owner_id is None or i.user.id != bot.settings_owner_id:
