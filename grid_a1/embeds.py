@@ -9,7 +9,7 @@ COLOURS = {"general": discord.Colour.blurple(), "base": discord.Colour.green(), 
 
 
 def embed(title: str, description: str, colour: discord.Colour = discord.Colour.blurple()) -> discord.Embed:
-    return discord.Embed(title=title, description=description, colour=colour, timestamp=utcnow())
+    return discord.Embed(title=title, description=description, colour=colour)
 
 
 def support_panel(guild: discord.Guild, database: Database) -> discord.Embed:
@@ -33,7 +33,6 @@ def support_panel(guild: discord.Guild, database: Database) -> discord.Embed:
     )
     result.add_field(name="How to open a ticket", value="Pick a category → choose **EU** → describe what happened. Add screenshots or other useful details when you can. Staff will take it from there.", inline=False)
     result.set_footer(text="Grid A1 • Manager")
-    result.timestamp = utcnow()
     return result
 
 
