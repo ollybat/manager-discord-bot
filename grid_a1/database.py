@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Any
 from .utils import utcnow
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 class Database:
     def __init__(self, path: Path): self.path = path
@@ -17,7 +17,7 @@ class Database:
                 guild_id INTEGER PRIMARY KEY, panel_channel INTEGER, panel_message INTEGER,
                 logs_channel INTEGER, ticket_category INTEGER, inactivity_hours INTEGER NOT NULL DEFAULT 24,
                 welcome_channel INTEGER, verify_channel INTEGER, link_channel INTEGER,
-                bot_commands_channel INTEGER, shop_channel INTEGER)''')
+                bot_commands_channel INTEGER, shop_channel INTEGER, verify_panel_channel INTEGER, verify_panel_message INTEGER, verify_role INTEGER)''')
             db.execute('''CREATE TABLE IF NOT EXISTS tickets (
                 ticket_id TEXT PRIMARY KEY, guild_id INTEGER NOT NULL, channel_id INTEGER UNIQUE NOT NULL,
                 owner_id INTEGER NOT NULL, issue TEXT NOT NULL, region TEXT NOT NULL,
@@ -35,7 +35,7 @@ class Database:
     def config(self, guild_id):
         with self.connect() as db: return db.execute('SELECT * FROM guild_config WHERE guild_id=?',(guild_id,)).fetchone()
     def upsert_config(self, guild_id, **values: Any):
-        allowed={'panel_channel','panel_message','logs_channel','ticket_category','inactivity_hours','welcome_channel','verify_channel','link_channel','bot_commands_channel','shop_channel'}
+        allowed={'panel_channel','panel_message','logs_channel','ticket_category','inactivity_hours','welcome_channel','verify_channel','link_channel','bot_commands_channel','shop_channel','verify_panel_channel','verify_panel_message','verify_role'}
         if not set(values)<=allowed: raise ValueError(f'unknown config field: {set(values)-allowed}')
         with self.connect() as db:
             db.execute('INSERT INTO guild_config(guild_id) VALUES(?) ON CONFLICT DO NOTHING',(guild_id,))
