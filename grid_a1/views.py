@@ -30,7 +30,7 @@ class DetailsModal(discord.ui.Modal, title="Open a support ticket"):
 class RegionSelect(discord.ui.Select):
     def __init__(self, service: TicketService, issue: str, label: str):
         self.service, self.issue, self.label = service, issue, label
-        super().__init__(placeholder="Choose your region…", options=[discord.SelectOption(label="EU", value="EU", emoji="🇪🇺", description="European support region")], custom_id="grid-a1:ticket:region")
+        super().__init__(placeholder="🇪🇺 Choose your region…", options=[discord.SelectOption(label="EU", value="EU", emoji="🇪🇺", description="European support region")], custom_id="grid-a1:ticket:region")
     async def callback(self, interaction: discord.Interaction): await interaction.response.send_modal(DetailsModal(self.service, self.issue, self.label, self.values[0]))
 
 class RegionView(discord.ui.View):
@@ -40,7 +40,7 @@ class TicketTypeSelect(discord.ui.Select):
     def __init__(self, service: TicketService):
         self.service = service
         options = [discord.SelectOption(label=f"Ticket {k.title()}", value=k, emoji=e, description=d) for k,e,d in [("general","📄","General requests and questions"),("base","🏠","Base or area questions"),("clan","👥","Clan requests"),("shop","💎","Store information"),("raid","⚠️","Raid-related problems"),("bug","🐛","In-game or bot bug")]]
-        super().__init__(placeholder="Choose what you need help with…", options=options, custom_id="grid-a1:ticket:type")
+        super().__init__(placeholder="💜 Choose your support category…", options=options, custom_id="grid-a1:ticket:type")
     async def callback(self, interaction: discord.Interaction):
         option = next(x for x in self.options if x.value == self.values[0])
         await interaction.response.send_message("Select EU, then complete the short ticket form.", view=RegionView(self.service, option.value, option.label), ephemeral=True)
