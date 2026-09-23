@@ -133,7 +133,7 @@ async def moderation_kick(i: discord.Interaction, member: discord.Member, reason
     try: await member.kick(reason=f"{reason} • Moderator: {i.user}")
     except discord.Forbidden: return await i.response.send_message("❌ Discord denied the kick. Check Kick Members permission and role hierarchy.", ephemeral=True)
     bot.database.audit(i.guild.id, None, i.user.id, "kick", discord.utils.escape_markdown(reason)[:500])
-    await i.response.send_message(f"✅ Kicked {member.mention}.", ephemeral=True)
+    await i.response.send_message(embed=embed("💜 Member kicked", f"✅ {member.mention} was removed from the server.\n\n**Reason:** {discord.utils.escape_markdown(reason)[:500]}"), ephemeral=True)
 
 @bot.tree.command(name="ban", description="Ban a member from this Discord server")
 @staff()
@@ -144,14 +144,14 @@ async def moderation_ban(i: discord.Interaction, member: discord.Member, reason:
     try: await member.ban(reason=f"{reason} • Moderator: {i.user}", delete_message_days=0)
     except discord.Forbidden: return await i.response.send_message("❌ Discord denied the ban. Check Ban Members permission and role hierarchy.", ephemeral=True)
     bot.database.audit(i.guild.id, None, i.user.id, "ban", discord.utils.escape_markdown(reason)[:500])
-    await i.response.send_message(f"✅ Banned {member.mention}.", ephemeral=True)
+    await i.response.send_message(embed=embed("💜 Member banned", f"🔨 {member.mention} was banned from the server.\n\n**Reason:** {discord.utils.escape_markdown(reason)[:500]}"), ephemeral=True)
 
 @bot.tree.command(name="warn", description="Record a warning for a member")
 @staff()
 async def moderation_warn(i: discord.Interaction, member: discord.Member, reason: str):
     if member.id == i.user.id or member.id == i.guild.owner_id: return await i.response.send_message("❌ You cannot warn yourself or the server owner.", ephemeral=True)
     bot.database.audit(i.guild.id, None, i.user.id, "warn", f"member={member.id}; {discord.utils.escape_markdown(reason)[:450]}")
-    await i.response.send_message(f"⚠️ Warning recorded for {member.mention}. Reason: {discord.utils.escape_markdown(reason)[:500]}", ephemeral=True)
+    await i.response.send_message(embed=embed("💜 Warning recorded", f"⚠️ A warning was recorded for {member.mention}.\n\n**Reason:** {discord.utils.escape_markdown(reason)[:500]}"), ephemeral=True)
 
 @bot.tree.command(name="timeout", description="Timeout a member")
 @staff()
@@ -162,7 +162,7 @@ async def moderation_timeout(i: discord.Interaction, member: discord.Member, min
     try: await member.timeout(discord.utils.utcnow() + __import__("datetime").timedelta(minutes=minutes), reason=f"{reason} • Moderator: {i.user}")
     except discord.Forbidden: return await i.response.send_message("❌ Discord denied the timeout. Check Moderate Members permission and role hierarchy.", ephemeral=True)
     bot.database.audit(i.guild.id, None, i.user.id, "timeout", f"member={member.id}; minutes={minutes}; {discord.utils.escape_markdown(reason)[:400]}")
-    await i.response.send_message(f"⏳ Timed out {member.mention} for {minutes} minute(s).", ephemeral=True)
+    await i.response.send_message(embed=embed("💜 Member timed out", f"⏳ {member.mention} was timed out for **{minutes} minute(s)**.\n\n**Reason:** {discord.utils.escape_markdown(reason)[:500]}"), ephemeral=True)
 
 @bot.command(name="lock")
 async def prefix_lock(ctx):
@@ -189,7 +189,7 @@ async def verifypanel(i: discord.Interaction, channel: discord.TextChannel, role
     panel.set_footer(text="Grid A1 • Secure, fair, Discord-only verification")
     message = await channel.send(embed=panel, view=VerifyPanel(bot.database))
     bot.database.upsert_config(i.guild.id, verify_panel_channel=channel.id, verify_panel_message=message.id, verify_role=role.id)
-    await i.response.send_message(f"✅ Verification panel created in {channel.mention} for {role.mention}.", ephemeral=True)
+    await i.response.send_message(embed=embed("💜 Verification panel created", f"✅ Panel posted in {channel.mention}.\n🎭 Role: {role.mention}"), ephemeral=True)
 
 
 @ticket_group.command(name="remove", description="Remove a user from the current ticket")
