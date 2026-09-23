@@ -107,14 +107,14 @@ def _privileged(interaction: discord.Interaction, require_staff: bool = False) -
     if interaction.user.id == interaction.guild.owner_id or interaction.user.id == settings.owner_id: return True
     permissions = interaction.user.guild_permissions
     if permissions.administrator or permissions.manage_guild: return True
-    return require_staff and (permissions.manage_channels or bool(set(role.id for role in interaction.user.roles) & set(bot.database.staff_role_ids(interaction.guild.id))))
+    return require_staff and (permissions.manage_channels or bool(set(role.id for role in interaction.user.roles) & set(bot.database.staff_role_ids(interaction.guild.id) + bot.database.configured_permission_role_ids(interaction.guild.id))))
 
 def _prefix_privileged(ctx, require_staff: bool = False) -> bool:
     if not ctx.guild or not isinstance(ctx.author, discord.Member): return False
     if ctx.author.id == ctx.guild.owner_id or ctx.author.id == settings.owner_id: return True
     permissions = ctx.author.guild_permissions
     if permissions.administrator or permissions.manage_guild: return True
-    return require_staff and (permissions.manage_channels or bool(set(role.id for role in ctx.author.roles) & set(bot.database.staff_role_ids(ctx.guild.id))))
+    return require_staff and (permissions.manage_channels or bool(set(role.id for role in ctx.author.roles) & set(bot.database.staff_role_ids(ctx.guild.id) + bot.database.configured_permission_role_ids(ctx.guild.id))))
 
 def _permission_check(require_staff: bool = False):
     async def predicate(interaction: discord.Interaction) -> bool:
@@ -177,6 +177,24 @@ async def prefix_unlock(ctx):
     try: await ctx.channel.set_permissions(ctx.guild.default_role, send_messages=None, reason=f"Channel unlocked by {ctx.author}")
     except discord.Forbidden: return await ctx.send("❌ I cannot unlock this channel. Check Manage Channels and Manage Permissions.")
     await ctx.send("🔓 This channel is now unlocked for members.")
+
+@bot.tree.command(name="setuproles", description="Configure Grid A1 staff permission roles")
+@admin()
+@app_commands.describe(owner_role="Server owner role", moderator_role="Moderator role", admin_role="Administrator role", co_owner_role="Co-owner role", head_admin_role="Head administrator role")
+async def setup_roles(i: discord.Interaction, owner_role: discord.Role, moderator_role: discord.Role, admin_role: discord.Role, co_owner_role: discord.Role, head_admin_role: discord.Role):
+    roles = {"owner_role": owner_role, "moderator_role": moderator_role, "admin_role": admin_role, "co_owner_role": co_owner_role, "head_admin_role": head_admin_role}
+    invalid = [role.mention for role in roles.values() if role.is_default() or role.managed]
+    if invalid: return await i.response.send_message(embed=embed("💜 Role setup not saved", "❌ These roles cannot be used: " + ", ".join(invalid)), ephemeral=True)
+    if len({role.id for role in roles.values()}) != len(roles): return await i.response.send_message(embed=embed("💜 Role setup not saved", "❌ Each permission level must use a different role."), ephemeral=True)
+    bot.database.upsert_config(i.guild.id, **{name: role.id for name, role in roles.items()})
+    e = embed("💜 Grid A1 • Permission roles saved", "✅ Staff access roles are now configured for this server.", discord.Colour.from_rgb(177, 77, 255))
+    e.add_field(name="👑 Owner", value=owner_role.mention, inline=True)
+    e.add_field(name="🤝 Co-owner", value=co_owner_role.mention, inline=True)
+    e.add_field(name="🛡️ Head admin", value=head_admin_role.mention, inline=True)
+    e.add_field(name="⚙️ Admin", value=admin_role.mention, inline=True)
+    e.add_field(name="🔨 Moderator", value=moderator_role.mention, inline=True)
+    e.set_footer(text="Grid A1 • Permission configuration • Changes saved to SQLite")
+    await i.response.send_message(embed=e, ephemeral=True)
 
 @bot.tree.command(name="verifypanel", description="Create a verification panel")
 @app_commands.checks.has_permissions(manage_guild=True)
