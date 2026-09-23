@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Any
 from .utils import utcnow
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 class Database:
     def __init__(self, path: Path): self.path = path
@@ -17,7 +17,7 @@ class Database:
                 guild_id INTEGER PRIMARY KEY, panel_channel INTEGER, panel_message INTEGER,
                 logs_channel INTEGER, ticket_category INTEGER, inactivity_hours INTEGER NOT NULL DEFAULT 24,
                 welcome_channel INTEGER, verify_channel INTEGER, link_channel INTEGER,
-                bot_commands_channel INTEGER, shop_channel INTEGER, verify_panel_channel INTEGER, verify_panel_message INTEGER, verify_role INTEGER, staff_role_1 INTEGER, staff_role_2 INTEGER, staff_role_3 INTEGER, staff_role_4 INTEGER, staff_role_5 INTEGER, staff_role_6 INTEGER, staff_role_7 INTEGER, staff_role_8 INTEGER, staff_role_9 INTEGER, staff_role_10 INTEGER, wipefeed_enabled INTEGER NOT NULL DEFAULT 0, wipefeed_channel INTEGER)''')
+                bot_commands_channel INTEGER, shop_channel INTEGER, verify_panel_channel INTEGER, verify_panel_message INTEGER, verify_role INTEGER, staff_role_1 INTEGER, staff_role_2 INTEGER, staff_role_3 INTEGER, staff_role_4 INTEGER, staff_role_5 INTEGER, staff_role_6 INTEGER, staff_role_7 INTEGER, staff_role_8 INTEGER, staff_role_9 INTEGER, staff_role_10 INTEGER, wipefeed_enabled INTEGER NOT NULL DEFAULT 0, wipefeed_channel INTEGER, urgent_at TEXT, urgent_by INTEGER)''')
             db.execute('''CREATE TABLE IF NOT EXISTS tickets (
                 ticket_id TEXT PRIMARY KEY, guild_id INTEGER NOT NULL, channel_id INTEGER UNIQUE NOT NULL,
                 owner_id INTEGER NOT NULL, issue TEXT NOT NULL, region TEXT NOT NULL,
@@ -26,7 +26,7 @@ class Database:
                 owner_left INTEGER NOT NULL DEFAULT 0, auto_close_at TEXT, auto_close_reason TEXT,
                 closed_at TEXT, closed_by INTEGER, close_reason TEXT, transcript_filename TEXT)''')
             config_existing = {r[1] for r in db.execute('PRAGMA table_info(guild_config)')}
-            for name in ['verify_panel_channel','verify_panel_message','verify_role', *[f'staff_role_{n}' for n in range(1, 11)], 'wipefeed_enabled','wipefeed_channel']:
+            for name in ['verify_panel_channel','verify_panel_message','verify_role', *[f'staff_role_{n}' for n in range(1, 11)], 'wipefeed_enabled','wipefeed_channel','urgent_at','urgent_by']:
                 if name not in config_existing: db.execute(f'ALTER TABLE guild_config ADD COLUMN {name} INTEGER')
             existing = {r[1] for r in db.execute('PRAGMA table_info(tickets)')}
             for name, definition in {'inactivity_notice_at':'TEXT','owner_left':'INTEGER NOT NULL DEFAULT 0','auto_close_at':'TEXT','auto_close_reason':'TEXT'}.items():
@@ -54,7 +54,7 @@ class Database:
             db.execute('INSERT INTO tickets(ticket_id,guild_id,channel_id,owner_id,issue,region,opened_at,last_activity_at) VALUES(:ticket_id,:guild_id,:channel_id,:owner_id,:issue,:region,:opened_at,:last_activity_at)',values)
             db.execute('INSERT INTO audit_log(guild_id,ticket_id,actor_id,action,created_at) VALUES(?,?,?,?,?)',(values['guild_id'],values['ticket_id'],values['owner_id'],'opened',utcnow().isoformat()))
     def update_ticket(self,ticket_id,**values):
-        allowed={'status','claimed_by','close_requested_by','last_activity_at','inactivity_notice_at','owner_left','auto_close_at','auto_close_reason','closed_at','closed_by','close_reason','transcript_filename'}
+        allowed={'status','claimed_by','close_requested_by','last_activity_at','inactivity_notice_at','owner_left','auto_close_at','auto_close_reason','closed_at','closed_by','close_reason','transcript_filename','urgent_at','urgent_by'}
         if not set(values)<=allowed: raise ValueError(f'unknown ticket fields: {set(values)-allowed}')
         with self.connect() as db: db.execute(f"UPDATE tickets SET {', '.join(k+'=?' for k in values)} WHERE ticket_id=?",(*values.values(),ticket_id))
     def audit(self,guild_id,ticket_id,actor_id,action,metadata='{}'):
