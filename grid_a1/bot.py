@@ -305,7 +305,23 @@ async def setup_staff(i: discord.Interaction, action: app_commands.Choice[str], 
 @setup_group.command(name="tickets", description="Configure ticket channels and deploy the support panel")
 @admin()
 async def setup_tickets(i, panel_channel: discord.TextChannel, logs_channel: discord.TextChannel, category: discord.CategoryChannel, inactivity_hours: app_commands.Range[int,1,720]):
-    g=guild(i); bot.database.upsert_config(g.id,panel_channel=panel_channel.id,logs_channel=logs_channel.id,ticket_category=category.id,inactivity_hours=inactivity_hours); m=await panel_channel.send(embed=support_panel(g,bot.database),view=TicketPanel(bot.tickets)); bot.database.upsert_config(g.id,panel_message=m.id); await i.response.send_message(f"✅ Grid A1 support panel deployed in {panel_channel.mention}; logs go to {logs_channel.mention}.",ephemeral=True)
+    g = guild(i)
+    previous = bot.database.config(g.id)
+    bot.database.upsert_config(g.id, panel_channel=panel_channel.id, logs_channel=logs_channel.id, ticket_category=category.id, inactivity_hours=inactivity_hours)
+    message = None
+    if previous and previous["panel_channel"] == panel_channel.id and previous["panel_message"]:
+        try:
+            message = await panel_channel.fetch_message(previous["panel_message"])
+            await message.edit(embed=support_panel(g, bot.database), view=TicketPanel(bot.tickets))
+        except discord.NotFound:
+            message = None
+        except discord.DiscordException:
+            return await i.response.send_message("❌ I could not update the existing panel. Check Manage Messages and Embed Links permissions.", ephemeral=True)
+    if message is None:
+        message = await panel_channel.send(embed=support_panel(g, bot.database), view=TicketPanel(bot.tickets))
+    bot.database.upsert_config(g.id, panel_message=message.id)
+    await i.response.send_message(f"✅ Grid A1 support panel updated in {panel_channel.mention}; logs go to {logs_channel.mention}.", ephemeral=True)
+
 @setup_group.command(name="welcomer", description="Configure welcome and community channels")
 @admin()
 async def setup_welcomer(i,welcome_channel:discord.TextChannel,link_channel:discord.TextChannel,bot_commands_channel:discord.TextChannel,shop_channel:discord.TextChannel,verify_channel:discord.TextChannel): bot.database.upsert_config(guild(i).id,welcome_channel=welcome_channel.id,link_channel=link_channel.id,bot_commands_channel=bot_commands_channel.id,shop_channel=shop_channel.id,verify_channel=verify_channel.id); await i.response.send_message(f"✅ Welcomer configured for {welcome_channel.mention}.",ephemeral=True)
