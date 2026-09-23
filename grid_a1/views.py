@@ -22,9 +22,9 @@ class DetailsModal(discord.ui.Modal, title="Open a support ticket"):
     details = discord.ui.TextInput(label="📝 Tell us what happened", style=discord.TextStyle.paragraph, min_length=5, max_length=1500)
     def __init__(self, service: TicketService, issue: str, label: str, region: str):
         super().__init__(); self.service, self.issue, self.label, self.region = service, issue, label, region
-        q1, q2 = QUESTION_SETS.get(issue, QUESTION_SETS["general"]); self.question_one.label = q1[:45]; self.question_two.label = q2[:45]
+        q1, q2 = QUESTION_SETS.get(issue, QUESTION_SETS["general"]); self.question_one.placeholder = q1[:100]; self.question_two.placeholder = q2[:100]
     async def on_submit(self, interaction: discord.Interaction):
-        details = f"🎮 In-game name: {self.in_game_name.value}\n❓ {self.question_one.label}: {self.question_one.value}\n❓ {self.question_two.label}: {self.question_two.value}\n📝 Details: {self.details.value}"
+        details = f"🎮 In-game name: {self.in_game_name.value}\n❓ {Question 1: {self.question_one.value}\n❓ Question 2: {self.question_two.value}\n📝 Details: {self.details.value}"
         await self.service.create(interaction, self.issue, self.label, self.region, details)
 
 class RegionSelect(discord.ui.Select):
