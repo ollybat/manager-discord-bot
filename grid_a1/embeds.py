@@ -9,7 +9,7 @@ NEON_PURPLE = discord.Colour.from_rgb(177, 77, 255)
 COLOURS = {"general": NEON_PURPLE, "base": discord.Colour.green(), "clan": discord.Colour.purple(), "shop": discord.Colour.gold(), "raid": discord.Colour.red(), "bug": discord.Colour.orange()}
 
 
-def embed(title: str, description: str, colour: discord.Colour = discord.Colour.blurple()) -> discord.Embed:
+def embed(title: str, description: str, colour: discord.Colour = NEON_PURPLE) -> discord.Embed:
     return discord.Embed(title=title, description=description, colour=colour)
 
 
