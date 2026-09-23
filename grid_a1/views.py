@@ -32,8 +32,8 @@ class DetailsModal(discord.ui.Modal, title="Open a support ticket"):
     async def on_submit(self, interaction: discord.Interaction):
         details = (
             f"🎮 In-game name: {self.in_game_name.value}\n"
-            f"❓ Question 1: {self.question_one.value}\n"
-            f"❓ Question 2: {self.question_two.value}\n"
+            f"❓ Question 1: {self.question_one.placeholder}: {self.question_one.value}\n"
+            f"❓ Question 2: {self.question_two.placeholder}: {self.question_two.value}\n"
             f"📝 Details: {self.details.value}"
         )
         await self.service.create(interaction, self.issue, self.label, self.region, details)
