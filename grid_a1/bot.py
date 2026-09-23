@@ -390,6 +390,12 @@ async def ticket_requestclose(i,reason:str):
 @staff()
 async def ticket_close(i,reason:str="No reason provided"): await bot.tickets.close(i,reason)
 @bot.event
+async def on_command_error(ctx, error):
+    if isinstance(error, commands.CommandNotFound):
+        return
+    log.exception("Prefix command failed", exc_info=error)
+
+@bot.event
 async def on_message(message: discord.Message):
     if not message.author.bot and isinstance(message.channel, discord.TextChannel):
         row = bot.database.ticket_by_channel(message.channel.id)
