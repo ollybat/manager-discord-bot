@@ -9,7 +9,7 @@ from .database import Database
 from .embeds import embed, support_panel, inactivity_indicator
 from .tickets import TicketService, claim
 from .utils import is_ticket, parse_ticket_topic, staff_member
-from .views import OwnerInactivityView, TicketControls, TicketPanel, VerifyPanel
+from .views import DashboardView, OwnerInactivityView, TicketControls, TicketPanel, VerifyPanel
 from .welcomer import missing, send_welcome, welcome_embed
 from .commands import OwnerConfigurationError, OwnerOnlyError, register_commands
 settings = Settings.from_env(); configure_logging(settings.log_level)
@@ -123,6 +123,24 @@ def _permission_check(require_staff: bool = False):
 
 def admin(): return _permission_check(False)
 def staff(): return _permission_check(True)
+
+def _dashboard_access(interaction: discord.Interaction) -> bool:
+    if not interaction.guild or not isinstance(interaction.user, discord.Member): return False
+    if interaction.user.id == interaction.guild.owner_id or interaction.user.id == settings.owner_id: return True
+    config = bot.database.config(interaction.guild.id)
+    if not config or not config["owner_role"] or not config["co_owner_role"]: return False
+    return bool({role.id for role in interaction.user.roles} & {int(config["owner_role"]), int(config["co_owner_role"])})
+
+def dashboard_access():
+    async def predicate(interaction: discord.Interaction) -> bool: return _dashboard_access(interaction)
+    return app_commands.check(predicate)
+
+@bot.tree.command(name="dashboard", description="Open the private owner master dashboard")
+@dashboard_access()
+async def dashboard(i: discord.Interaction):
+    if not i.guild: return await i.response.send_message("❌ The dashboard can only be opened inside a server.", ephemeral=True)
+    view = DashboardView(bot.database, settings.owner_id)
+    await i.response.send_message(embed=view.dashboard_embed(i.guild), view=view, ephemeral=True)
 
 @bot.tree.command(name="kick", description="Kick a member from this Discord server")
 @staff()
