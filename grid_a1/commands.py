@@ -19,14 +19,29 @@ def _validate_image(a:Optional[discord.Attachment])->Optional[str]:
 def register_commands(bot)->None:
     if getattr(bot,"_grid_a1_commands_registered",False):return
     bot._grid_a1_commands_registered=True
-    @bot.tree.command(name="help", description="Show the Grid A1 command center")
+    @bot.tree.command(name="help", description="Open the Grid A1 command center")
     async def help_command(i):
-        e = embed("💜 Grid A1 • Command Center", "✨ Here are the commands available to you.", discord.Colour.from_rgb(177, 77, 255))
-        e.add_field(name="🌐 Public", value="`/help` — Show this command center\n`/info server` — View server information\n`/embed` — Post a custom embed\n`/embed-edit` — Edit a bot embed", inline=False)
-        if isinstance(i.user, discord.Member) and (i.user.guild_permissions.administrator or i.user.guild_permissions.manage_guild or i.user.guild_permissions.manage_channels or i.user.id == i.guild.owner_id or i.user.id == bot.settings_owner_id):
-            e.add_field(name="🛡️ Staff", value="`/setup tickets` — Configure tickets\n`/setup staff` — Configure staff alert roles\n`/setup welcomer` — Configure welcomes\n`/staff` — List staff alert roles\n`/roles setchannel` — Post role directory\n`/verifypanel` — Create verification panel\n`/ticket claim` — Claim a ticket\n`/ticket transfer` — Transfer a ticket\n`/ticket remove` — Remove a user from a ticket\n`/ticket requestclose` — Request closure\n`/ticket close` — Archive and close\n`/kick` — Kick a member\n`/ban` — Ban a member\n`/warn` — Record a warning\n`/timeout` — Timeout a member\n`!lock` / `!unlock` — Lock or unlock a channel", inline=False)
-        if i.user.id == bot.settings_owner_id: e.add_field(name="👑 Bot owner", value="`/ping` — Private detailed diagnostics\n`/sync` — Synchronize application commands", inline=False)
-        e.set_footer(text="Grid A1 • Manager • Commands are permission-protected")
+        e = embed("💜 Grid A1 • Command Center", "✨ Your complete command guide, organized by access level.", discord.Colour.from_rgb(177, 77, 255))
+        e.add_field(name="🌐 Everyone", value="`/help` — Open this guide\n`/info server` — View server information\n`/embed` — Post a custom embed", inline=False)
+        if not i.guild or not isinstance(i.user, discord.Member):
+            e.set_footer(text="Grid A1 • Use commands inside your Discord server")
+            return await i.response.send_message(embed=e, ephemeral=True)
+        member = i.user
+        is_owner = member.id == i.guild.owner_id or member.id == bot.settings_owner_id
+        config = bot.database.config(i.guild.id)
+        owner_roles = {int(config[k]) for k in ("owner_role", "co_owner_role") if config and config[k]}
+        is_dashboard_owner = is_owner or bool({role.id for role in member.roles} & owner_roles)
+        is_admin = is_owner or member.guild_permissions.administrator or member.guild_permissions.manage_guild
+        is_staff = is_admin or member.guild_permissions.manage_channels or bool({role.id for role in member.roles} & set(bot.database.staff_role_ids(i.guild.id) + bot.database.configured_permission_role_ids(i.guild.id)))
+        if is_dashboard_owner:
+            e.add_field(name="🎛️ Owner dashboard", value="`/dashboard` — Open the private master dashboard\n`/setuproles` — Configure permission roles\n\nOnly the server owner, bot owner, owner role, and co-owner role can use `/dashboard`.", inline=False)
+        if is_admin:
+            e.add_field(name="⚙️ Server setup", value="`/setup tickets` — Configure and publish the ticket panel\n`/setup staff` — Manage ticket notification roles\n`/setup welcomer` — Configure welcome channels\n`/verifypanel` — Publish the verification panel\n`/staff` — View notification roles\n`/roles setchannel` — Publish the role directory", inline=False)
+        if is_staff:
+            e.add_field(name="🛡️ Staff tools", value="`/ticket claim` — Claim a ticket\n`/ticket transfer` — Transfer a ticket\n`/ticket remove` — Remove a user from a ticket\n`/ticket requestclose` — Request ticket closure\n`/ticket close` — Archive and close a ticket\n`/kick` `/ban` `/warn` `/timeout` — Moderation tools\n`!lock` / `!unlock` — Lock or unlock a channel", inline=False)
+        if is_owner:
+            e.add_field(name="👑 Bot owner", value="`/ping` — Private diagnostics\n`/sync` — Synchronize application commands", inline=False)
+        e.set_footer(text="Grid A1 • Protected commands appear only when you have access")
         await i.response.send_message(embed=e, ephemeral=True)
     @bot.tree.command(name="ping",description="Show detailed bot diagnostics (owner only)")
     async def ping_command(i):
