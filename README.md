@@ -1,24 +1,12 @@
 # Grid A1 Manager Discord Bot
 
-## Optional staff ticket notifications
+## Private master dashboard
 
-Grid A1 can DM staff when a new ticket is opened. This is optional and supports up to 10 Discord roles.
+Use `/dashboard` to open an ephemeral, owner-level control center. Access is rechecked on every select, button, and modal submission and is limited to the server owner, configured `OWNER_ID`, or members holding both configured owner/co-owner access roles as applicable. Moderators, admins, and head admins do not receive dashboard access automatically.
 
-Configure a role:
+The polished dashboard is titled `🎛️ Master Dashboard — {server name}` and shows live `🟢 Active`, `🟡 Partial`, or `🔴 Disabled / Not Setup` statuses for Ticket setup, Staff roles, Permission roles, Verification panel, Welcome system, Moderation settings, Server information, Announcement channels, and Bot status. Use the app drawer to inspect modules, Refresh configuration to reload SQLite values, or the private configuration buttons for Permission roles, Staff roles, Ticket setup, Welcome system, and Verification panel.
 
-```text
-/setup staff add @Moderators
-```
-
-Remove a role:
-
-```text
-/setup staff remove @Moderators
-```
-
-When a ticket is created, Grid A1 finds members with any configured role and sends each person one DM. Members who match multiple configured roles are still notified only once. The ticket owner and bot accounts are skipped. If a member has DMs disabled, ticket creation still succeeds and Grid A1 logs the failed notification.
-
-No roles configured means no staff DMs are sent.
+Dashboard forms validate role/channel/category IDs and mentions against the current guild and persist valid settings through SQLite. Ticket setup and verification configuration intentionally save settings only: they never post a public panel unexpectedly. Use `/setup tickets` or `/verifypanel` explicitly when a public panel should be deployed.
 
 ## Main setup
 
@@ -30,10 +18,13 @@ No roles configured means no staff DMs are sent.
 
 ## Ticket behavior
 
-New tickets use a private channel, EU-only region selection, staff controls, readable HTML transcripts, and inactivity indicators:
+New tickets use a private channel, EU-only region selection, staff controls, readable HTML transcripts, and inactivity indicators. Keep `.env`, the Discord token, SQLite files, logs, and transcripts private.
 
-- 🟢 active
-- 🟡 inactive
-- 🔴 closing soon with owner buttons and a 24-hour grace period
+## Optional staff ticket notifications
 
-Keep `.env`, the Discord token, SQLite files, logs, and transcripts private.
+```text
+/setup staff add @Moderators
+/setup staff remove @Moderators
+```
+
+Up to 10 roles may receive one DM per new ticket; duplicate role matches are deduplicated.
