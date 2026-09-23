@@ -23,7 +23,7 @@ def welcome_embed(bot: discord.Client, guild: discord.Guild, member: discord.Mem
         result.set_author(name="Grid A1 • Manager")
     result.add_field(name="🧭 Server navigation", value=f"✅ **Verify / Server Selector**\nHead to <#{config['verify_channel']}>.\n\n🔗 **Link Your Account**\nLink your account in <#{config['link_channel']}>.\n\n🤖 **Bot Commands**\nUse <#{config['bot_commands_channel']}>.\n\n🛒 **Visit Our Store**\nCheck <#{config['shop_channel']}>.", inline=False)
     result.add_field(name="🎫 Support", value="Open a ticket from the **Grid A1 Support Center** panel. EU support is available.", inline=False)
-    result.set_footer(text="Grid A1 • Manager • Community welcome")
+    result.set_footer(text="💜 Grid A1 • Manager • Welcome to the community")
     return result
 
 async def send_welcome(bot: discord.Client, database: Database, member: discord.Member) -> None:
