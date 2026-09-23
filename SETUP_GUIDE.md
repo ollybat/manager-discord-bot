@@ -1,19 +1,20 @@
 # Grid A1 setup guide
 
+## Private master dashboard
+
+Run `/setuproles` first if role-based owner/co-owner access is desired, then use `/dashboard`. The response is ephemeral. Every select, button, and modal submission rechecks access; only the server owner, configured bot owner (`OWNER_ID`), or configured owner/co-owner roles can use it.
+
+The dashboard includes live status lines for Ticket setup, Staff roles, Permission roles, Verification panel, Welcome system, Moderation settings, Server information, Announcement channels, and Bot status. Use the app drawer for details, Refresh configuration for current SQLite values, and the private buttons for configuration.
+
+Forms accept Discord role/channel/category mentions or IDs and strictly validate that each object belongs to this guild and has the required type. Valid values are persisted to SQLite. Ticket setup and verification configuration do **not** post public messages or deploy panels. To publish a panel intentionally, use `/setup tickets` or `/verifypanel`.
+
 ## Optional staff notifications
 
-Grid A1 can notify staff when a ticket opens. This is disabled until an administrator adds roles.
-
 ```text
-/setup staff add @Role
-/setup staff remove @Role
+/setup staff action role
 ```
 
-- Maximum: 10 roles per server.
-- Members matching more than one role receive one DM only.
-- The ticket owner and bot accounts are skipped.
-- A closed DM does not stop the ticket from being created.
-- No roles configured means no staff notifications.
+Choose `add` or `remove`. Maximum 10 roles; duplicate notifications are deduplicated.
 
 ## Core commands
 
@@ -23,4 +24,6 @@ Grid A1 can notify staff when a ticket opens. This is disabled until an administ
 /verifypanel channel role
 ```
 
-Keep the bot token, `.env`, SQLite database, transcripts, and logs private. Test role hierarchy and DMs in a test server before production.
+If commands are missing, the owner can run `/sync`; global command propagation can take time.
+
+Keep the bot token, `.env`, database, transcripts, and logs private. Test role hierarchy and DMs in a test server before production.
