@@ -80,7 +80,7 @@ def register_commands(bot)->None:
             if f: await m.edit(embed=e, attachments=[f])
             else: await m.edit(embed=e)
         except discord.Forbidden:return await i.response.send_message("❌ I cannot edit that message.",ephemeral=True)
-        await i.response.send_message("✅ Embed updated.",ephemeral=True)
+        await i.response.send_message(embed=embed("💜 Embed updated", "✅ The bot-authored embed was updated successfully."),ephemeral=True)
     @bot.tree.command(name="sync",description="Sync application commands (owner only)")
     async def sync_command(i):
         raw=os.getenv("OWNER_ID","").strip()
@@ -92,4 +92,4 @@ def register_commands(bot)->None:
         except discord.HTTPException as error:
             if error.status==429: raise RuntimeError("Discord rate-limited the sync. Wait before trying /sync again; the cooldown is active.") from error
             raise RuntimeError(f"Discord rejected the sync (HTTP {error.status}).") from error
-        await i.response.send_message("✅ Explicitly synced commands — "+"; ".join(out)+". Global sync is never automatic.",ephemeral=True)
+        await i.response.send_message(embed=embed("💜 Commands synchronized", "✅ " + "\n".join(out) + "\n\nGlobal sync is never automatic."),ephemeral=True)
