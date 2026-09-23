@@ -112,6 +112,20 @@ class TicketControls(discord.ui.View):
         return True
     @discord.ui.button(label="Claim", style=discord.ButtonStyle.primary, emoji="🙋", custom_id="grid-a1:ticket:claim")
     async def claim_button(self, interaction: discord.Interaction, button: discord.ui.Button): await claim(interaction, self.service)
+    @discord.ui.button(label="Mark urgent", style=discord.ButtonStyle.danger, emoji="🚨", custom_id="grid-a1:ticket:urgent")
+    async def urgent_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        data = parse_ticket_topic(interaction.channel); row = self.service.db.ticket(data.get("id", ""))
+        if not row or row["status"] not in ("open", "close_requested"): return await interaction.response.send_message("This ticket is no longer active.", ephemeral=True)
+        if row["owner_id"] != interaction.user.id: return await interaction.response.send_message("Only the ticket owner can mark a ticket urgent.", ephemeral=True)
+        from datetime import datetime, timezone, timedelta
+        now = datetime.now(timezone.utc)
+        if row["urgent_at"] and now - datetime.fromisoformat(row["urgent_at"]) < timedelta(hours=1): return await interaction.response.send_message("🚨 This ticket was already marked urgent recently. Staff have been notified.", ephemeral=True)
+        self.service.db.update_ticket(row["ticket_id"], urgent_at=now.isoformat(), urgent_by=interaction.user.id)
+        roles = [interaction.guild.get_role(role_id) for role_id in self.service.db.staff_role_ids(interaction.guild.id)]
+        roles = [role for role in roles if role]
+        mentions = " ".join(role.mention for role in roles) or "staff"
+        await interaction.channel.send(f"🚨 {mentions} **URGENT SUPPORT REQUEST** — the ticket owner needs immediate staff attention.", allowed_mentions=discord.AllowedMentions(roles=True) if roles else discord.AllowedMentions.none())
+        await interaction.response.send_message("🚨 Staff have been urgently notified. Please stay available in this ticket.", ephemeral=True)
     @discord.ui.button(label="Keep ticket open", style=discord.ButtonStyle.success, emoji="🟢", custom_id="grid-a1:ticket:keep-open")
     async def keep_open(self, interaction: discord.Interaction, button: discord.ui.Button):
         data=parse_ticket_topic(interaction.channel); self.service.db.mark_activity(data.get('id','')); await interaction.response.send_message('✅ Your ticket will remain open. Thanks for checking in!', ephemeral=True)
