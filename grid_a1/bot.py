@@ -337,6 +337,15 @@ async def roles_setchannel(i: discord.Interaction, channel: discord.TextChannel)
     except discord.Forbidden: return await i.response.send_message("❌ I cannot post in that channel.", ephemeral=True)
     await i.response.send_message(f"✅ Role directory posted in {channel.mention}.", ephemeral=True)
 
+@setup_group.command(name="roles", description="Add or remove roles allowed to send external links")
+@app_commands.checks.has_permissions(manage_guild=True)
+@app_commands.choices(action=[app_commands.Choice(name="Add", value="add"), app_commands.Choice(name="Remove", value="remove")])
+async def setup_roles_allow_links(i: discord.Interaction, action: app_commands.Choice[str], role: discord.Role):
+    if role.is_default() or role.managed: return await i.response.send_message("❌ Choose a normal server role.", ephemeral=True)
+    present = bot.database.upsert_anti_links_allowed_role(i.guild.id, role.id, action.value == "add")
+    state = "allowed to send external links" if present else "removed from the external-link allowlist"
+    await i.response.send_message(f"✅ {role.mention} is now {state}.", ephemeral=True)
+
 @setup_group.command(name="staff", description="Manage optional ticket staff notification roles")
 @app_commands.checks.has_permissions(manage_guild=True)
 @app_commands.describe(action="Choose whether to add or remove this staff role", role="Staff role to notify")
@@ -418,8 +427,9 @@ async def _scan_link_message(message):
     if message.author.bot or not message.guild or not isinstance(message.channel, discord.TextChannel) or not isinstance(message.author, discord.Member): return
     config=bot.database.config(message.guild.id)
     if not config or not config["anti_links_enabled"]: return
-    member=message.author; perms=member.guild_permissions; bypass=set(safe_json_list(config["anti_links_bypass_roles"], int))
+    member=message.author; perms=member.guild_permissions; bypass=set(safe_json_list(config["anti_links_bypass_roles"], int)); allowed=set(safe_json_list(config["anti_links_allowed_roles"], int))
     if member.id in {message.guild.owner_id, settings.owner_id} or perms.administrator or perms.manage_messages or any(r.id in bypass for r in member.roles): return
+    if allowed and not any(r.id in allowed for r in member.roles): return
     links=detected_external_links(message.content or "", tuple(safe_json_list(config["anti_links_whitelist_domains"], str)))
     if not links: return
     try: await message.delete(reason="Anti-links protection")
