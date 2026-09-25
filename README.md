@@ -28,3 +28,7 @@ New tickets use a private channel, EU-only region selection, staff controls, rea
 ```
 
 Up to 10 roles may receive one DM per new ticket; duplicate role matches are deduplicated.
+
+## Anti-links protection
+
+Admins can run `/anti-links enabled:true` to persistently block websites, bare domains, Discord invites, and common Unicode/spacing obfuscations. Choose `delete`, `delete_warn`, or `delete_log`; the last option records the deleted message metadata in the configured TextChannel without copying message content or secrets. Whitelist domains and bypass roles accept comma-separated domains and role IDs/mentions. The bot needs **Manage Messages**. Bot messages, DMs, owners, administrators, and Manage Messages members are ignored. Edited messages are scanned too.
