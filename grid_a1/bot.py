@@ -1,4 +1,4 @@
-from __future__ import annotations
+successfully downloaded text file (SHA: 57881b4692f9b2d017f3dfaabf6a17628ab317f7)from __future__ import annotations
 import logging
 import time
 import discord
@@ -28,14 +28,7 @@ class GridA1Bot(commands.Bot):
     async def setup_hook(self):
         self.database.migrate(); self.add_view(TicketPanel(self.tickets)); self.add_view(TicketControls(self.tickets)); self.add_view(VerifyPanel(self.database)); self.refresh_panels.start(); self.inactivity_loop.start()
         # Never PUT global commands during startup; global sync is owner-only via /sync.
-        if settings.test_guild_id:
-            guild = discord.Object(id=settings.test_guild_id); self.tree.copy_global_to(guild=guild)
-            try:
-                synced = await self.tree.sync(guild=guild)
-                log.info("Synced %d application commands to test guild %s on startup", len(synced), settings.test_guild_id)
-            except discord.HTTPException as error:
-                if error.status == 429: log.warning("Test-guild sync was rate limited on startup; no global sync was attempted")
-                else: log.exception("Test-guild command sync failed on startup")
+        # Startup does not sync commands; this prevents global and guild-scoped duplicates.
     async def sync_commands_on_request(self):
         """Run an explicit owner-requested sync with an in-memory cooldown/guard."""
         now = time.monotonic(); cooldown = 60.0
@@ -46,7 +39,7 @@ class GridA1Bot(commands.Bot):
         try:
             out=[]
             if settings.test_guild_id:
-                guild=discord.Object(id=settings.test_guild_id); self.tree.copy_global_to(guild=guild); synced_guild=await self.tree.sync(guild=guild); out.append(f"test guild `{settings.test_guild_id}`: {len(synced_guild)}")
+                guild=discord.Object(id=settings.test_guild_id); self.tree.clear_commands(guild=guild); await self.tree.sync(guild=guild); out.append(f"removed guild-scoped duplicates from `{settings.test_guild_id}`")
             synced_global=await self.tree.sync(); out.append(f"global: {len(synced_global)}"); return out
         finally: self._global_sync_in_progress = False
     @tasks.loop(seconds=60)
