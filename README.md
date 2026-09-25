@@ -4,7 +4,7 @@
 
 The server owner must run exactly:
 
-`/setuproles owner_role: co_owner_role: head_admin_role: admin_role: moderator_role:`
+`/setup roles owner_role: ... co_owner_role: ... head_admin_role: ... admin_role: ... moderator_role: ...`
 
 This command configures the five persistent staff roles in the exact order shown. It is restricted to the Discord server owner only—not the bot owner, administrators, Manage Server users, or other staff. Each role must be a distinct normal role from the current server; @everyone and managed/integration roles are rejected.
 
