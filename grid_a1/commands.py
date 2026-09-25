@@ -27,8 +27,8 @@ def register_commands(bot)->None:
         access={int(c[k]) for k in ("owner_role","co_owner_role") if c and c[k]}; dashboard=owner or bool({r.id for r in m.roles}&access)
         admin=owner or m.guild_permissions.administrator or m.guild_permissions.manage_guild
         staff=admin or m.guild_permissions.manage_channels or bool({r.id for r in m.roles}&set(bot.database.staff_role_ids(i.guild.id)+bot.database.configured_permission_role_ids(i.guild.id)))
-        if dashboard:e.add_field(name="🎛️ Owner dashboard",value="`/dashboard` — Private master overview, module drawer, refresh, and safe configuration\n`/setuproles` — Configure permission roles\nAccess: server owner, configured bot owner, owner role, or co-owner role.",inline=False)
-        if admin:e.add_field(name="🛡️ Safety & moderation",value="`/anti-links` — Block websites and Discord invites\nConfigure enabled, action, log channel, whitelist domains, and bypass roles. The bot needs Message Content Intent and Manage Messages.",inline=False)
+        if dashboard:e.add_field(name="🎛️ Owner dashboard",value="`/dashboard` — Private master overview, module drawer, refresh, and safe configuration\n`/setuproles` — Configure permission roles\n`/setup roles` — Add/remove roles allowed to send external links\nAccess: server owner, configured bot owner, owner role, or co-owner role.",inline=False)
+        if admin:e.add_field(name="🛡️ Safety & moderation",value="`/anti-links` — Block websites and Discord invites\nConfigure enabled, action, log channel, whitelist domains, bypass roles, and allowed link roles. The bot needs Message Content Intent and Manage Messages.",inline=False)
         if admin:e.add_field(name="⚙️ Setup & community",value="`/setup tickets` — Configure and publish support panel\n`/setup staff` — Add/remove ticket notification roles\n`/setup welcomer` — Configure welcome channels\n`/verifypanel` — Publish verification panel\n`/staff` — View notification roles\n`/roles setchannel` — Post role directory\n`/wipefeed enable` / `/wipefeed send` — Manage announcements\n`/welcomer preview` / `/welcomer test` — Preview or test welcome",inline=False)
         if staff:e.add_field(name="🛡️ Staff tools",value="`/ticket claim` / `/ticket transfer` — Assign tickets\n`/ticket remove` / `/ticket requestclose` / `/ticket close` — Manage tickets\n`/kick` `/ban` `/warn` `/timeout` — Moderation\n`!lock` / `!unlock` — Lock or unlock a channel",inline=False)
         if owner:e.add_field(name="👑 Bot owner",value="`/ping` — Private diagnostics\n`/sync` — Explicit command synchronization",inline=False)
@@ -61,10 +61,9 @@ def register_commands(bot)->None:
         except (ValueError,discord.NotFound,discord.Forbidden):return await i.response.send_message("❌ Message ID is invalid, missing, or inaccessible.",ephemeral=True)
         if not bot.user or m.author.id!=bot.user.id or not m.embeds:return await i.response.send_message("❌ I can only edit bot-authored messages that contain an embed.",ephemeral=True)
         if (err:=_validate_image(image)):return await i.response.send_message(f"❌ {err}",ephemeral=True)
-        e=discord.Embed.from_dict(m.embeds[0].to_dict());
+        e=discord.Embed.from_dict(m.embeds[0].to_dict())
         if title is not None:e.title=title[:256]
         if description is not None:e.description=description[:4096]
         f=await image.to_file() if image else None
         if f:e.set_image(url=f"attachment://{f.filename}")
         await m.edit(embed=e,attachments=[f] if f else discord.utils.MISSING); await i.response.send_message("✅ Embed updated.",ephemeral=True)
-
