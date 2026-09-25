@@ -2,13 +2,14 @@ from __future__ import annotations
 import logging
 import time
 import discord
+import json
 from discord import app_commands
 from discord.ext import commands, tasks
 from .config import Settings, configure_logging
 from .database import Database
 from .embeds import embed, support_panel, inactivity_indicator
 from .tickets import TicketService, claim
-from .utils import is_ticket, parse_ticket_topic, staff_member
+from .utils import is_ticket, parse_ticket_topic, staff_member, detected_external_links, normalize_domain, safe_json_list
 from .views import DashboardView, OwnerInactivityView, TicketControls, TicketPanel, VerifyPanel
 from .welcomer import missing, send_welcome, welcome_embed
 from .commands import OwnerConfigurationError, OwnerOnlyError, register_commands
@@ -134,6 +135,22 @@ def _dashboard_access(interaction: discord.Interaction) -> bool:
 def dashboard_access():
     async def predicate(interaction: discord.Interaction) -> bool: return _dashboard_access(interaction)
     return app_commands.check(predicate)
+
+@bot.tree.command(name="anti-links", description="Configure external link protection")
+@app_commands.checks.has_permissions(manage_guild=True)
+@app_commands.describe(enabled="Enable protection", action="delete, delete_warn, or delete_log", log_channel="Optional moderation log channel", whitelist_domains="Comma-separated domains to allow", bypass_roles="Optional comma-separated role IDs")
+@app_commands.choices(action=[app_commands.Choice(name="Delete", value="delete"), app_commands.Choice(name="Delete and warn", value="delete_warn"), app_commands.Choice(name="Delete and log", value="delete_log")])
+async def anti_links(i: discord.Interaction, enabled: bool, action: app_commands.Choice[str] = None, log_channel: discord.TextChannel = None, whitelist_domains: str = "", bypass_roles: str = ""):
+    domains=[normalize_domain(x) for x in whitelist_domains.split(',') if x.strip()]
+    if any(not x for x in domains) or len(domains)>25 or sum(len(x) for x in domains if x)>1500: return await i.response.send_message("Invalid whitelist domains.", ephemeral=True)
+    roles=[]
+    for raw in bypass_roles.split(',') if bypass_roles.strip() else []:
+        try: role=i.guild.get_role(int(raw.strip().strip('<@&>')))
+        except ValueError: role=None
+        if not role or role.is_default() or role.managed: return await i.response.send_message("Bypass roles must be normal roles from this server.", ephemeral=True)
+        roles.append(role.id)
+    mode=action.value if action else 'delete_warn'; bot.database.upsert_config(i.guild.id, anti_links_enabled=int(enabled), anti_links_action=mode, anti_links_log_channel=log_channel.id if log_channel else None, anti_links_whitelist_domains=json.dumps(domains), anti_links_bypass_roles=json.dumps(roles))
+    await i.response.send_message(embed=embed("Anti-links settings saved", f"Protection: {'enabled' if enabled else 'disabled'}\nAction: {mode}\nWhitelist domains: {len(domains)}\nBypass roles: {len(roles)}"), ephemeral=True)
 
 @bot.tree.command(name="dashboard", description="Open the private owner master dashboard")
 @dashboard_access()
@@ -299,7 +316,8 @@ async def info_server(i: discord.Interaction):
     e.add_field(name="💬 Channels", value=f"`{text_channels}` text\n`{voice_channels}` voice\n`{categories}` categories", inline=True)
     e.add_field(name="🎭 Roles", value=f"`{role_count}` custom roles", inline=True)
     e.add_field(name="🚀 Boosts", value=f"Level `{g.premium_tier}`\n`{g.premium_subscription_count or 0}` boosts", inline=True)
-    e.add_field(name="🛡️ Security", value=f"Verification: `{g.verification_level.name.title()}`\n2FA moderation: `{"Enabled" if g.mfa_level else "Not required"}`", inline=True)
+    mfa_status = "Enabled" if g.mfa_level else "Not required"
+    e.add_field(name="🛡️ Security", value=f"Verification: `{g.verification_level.name.title()}`\n2FA moderation: `{mfa_status}`", inline=True)
     e.add_field(name="🧩 Server features", value=f"`{len(g.features)}` enabled Discord features", inline=True)
     e.set_footer(text="Grid A1 • Server information")
     await i.response.send_message(embed=e)
@@ -395,13 +413,39 @@ async def on_command_error(ctx, error):
         return
     log.exception("Prefix command failed", exc_info=error)
 
+_anti_link_warning_cooldown = {}
+async def _scan_link_message(message):
+    if message.author.bot or not message.guild or not isinstance(message.channel, discord.TextChannel) or not isinstance(message.author, discord.Member): return
+    config=bot.database.config(message.guild.id)
+    if not config or not config["anti_links_enabled"]: return
+    member=message.author; perms=member.guild_permissions; bypass=set(safe_json_list(config["anti_links_bypass_roles"], int))
+    if member.id in {message.guild.owner_id, settings.owner_id} or perms.administrator or perms.manage_messages or any(r.id in bypass for r in member.roles): return
+    links=detected_external_links(message.content or "", tuple(safe_json_list(config["anti_links_whitelist_domains"], str)))
+    if not links: return
+    try: await message.delete(reason="Anti-links protection")
+    except (discord.Forbidden, discord.NotFound, discord.HTTPException): log.warning("Could not delete anti-link message %s", message.id)
+    mode=config["anti_links_action"] if config["anti_links_action"] in {"delete", "delete_warn", "delete_log"} else "delete_warn"; key=(message.guild.id,message.channel.id,member.id); now=time.monotonic()
+    if mode == "delete_log" and config["anti_links_log_channel"]:
+        log_channel=message.guild.get_channel(config["anti_links_log_channel"])
+        if isinstance(log_channel, discord.TextChannel):
+            try:
+                safe_domains = discord.utils.escape_markdown(", ".join(links))[:900]
+                await log_channel.send(f"🛡️ Deleted external link from {member.mention} in {message.channel.mention}. Domains: `{safe_domains}`", allowed_mentions=discord.AllowedMentions.none())
+            except discord.DiscordException: log.warning("Could not write anti-link log for %s", message.id)
+    if mode == "delete_warn" and now-_anti_link_warning_cooldown.get(key,0)>30:
+        _anti_link_warning_cooldown[key]=now
+        try: await message.channel.send(f"{member.mention}, external links are not allowed here.", delete_after=8, allowed_mentions=discord.AllowedMentions(users=[member]))
+        except discord.DiscordException: pass
 @bot.event
 async def on_message(message: discord.Message):
     if not message.author.bot and isinstance(message.channel, discord.TextChannel):
-        row = bot.database.ticket_by_channel(message.channel.id)
-        if row:
-            bot.database.mark_activity(row["ticket_id"])
+        await _scan_link_message(message)
+        row=bot.database.ticket_by_channel(message.channel.id)
+        if row: bot.database.mark_activity(row["ticket_id"])
     await bot.process_commands(message)
+@bot.event
+async def on_message_edit(before, after):
+    if after.content != before.content: await _scan_link_message(after)
 
 @bot.event
 async def on_member_join(member): await send_welcome(bot,bot.database,member)
