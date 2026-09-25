@@ -80,8 +80,6 @@ class DashboardView(discord.ui.View):
         member = interaction.user
         if not guild or not isinstance(member, discord.Member):
             return False
-        if member.id == guild.owner_id or (self.bot_owner_id is not None and member.id == self.bot_owner_id):
-            return True
         config = self.database.config(guild.id)
         if not config or not config["owner_role"] or not config["co_owner_role"]:
             return False
@@ -90,7 +88,7 @@ class DashboardView(discord.ui.View):
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if not self.authorized(interaction):
-            await interaction.response.send_message("🔒 This dashboard is restricted to the server owner, configured bot owner, or configured owner/co-owner roles.", ephemeral=True)
+            await interaction.response.send_message("🔒 This dashboard is restricted to members holding the configured owner or co-owner role.", ephemeral=True)
             return False
         return True
 
