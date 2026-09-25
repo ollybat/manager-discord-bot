@@ -27,8 +27,28 @@ class GridA1Bot(commands.Bot):
         register_commands(self)
     async def setup_hook(self):
         self.database.migrate(); self.add_view(TicketPanel(self.tickets)); self.add_view(TicketControls(self.tickets)); self.add_view(VerifyPanel(self.database)); self.refresh_panels.start(); self.inactivity_loop.start()
-        # Never PUT global commands during startup; global sync is owner-only via /sync.
-        # Startup does not sync commands; this prevents global and guild-scoped duplicates.
+        # Clear stale guild registrations, then publish exactly one global tree.
+        # Do not copy global commands into guild trees.
+        cleared = 0
+        for existing_guild in self.guilds:
+            guild = discord.Object(id=existing_guild.id)
+            self.tree.clear_commands(guild=guild)
+            try:
+                await self.tree.sync(guild=guild)
+                cleared += 1
+            except discord.HTTPException as error:
+                if error.status == 429:
+                    log.warning("Command cleanup rate-limited for guild %s; continuing startup", existing_guild.id)
+                else:
+                    raise
+        try:
+            synced = await self.tree.sync()
+            log.info("Command startup sync complete: cleared %s guild(s), published %s global command(s)", cleared, len(synced))
+        except discord.HTTPException as error:
+            if error.status == 429:
+                log.warning("Global command startup sync rate-limited; continuing startup")
+            else:
+                raise
     async def sync_commands_on_request(self):
         """Run an explicit owner-requested sync with an in-memory cooldown/guard."""
         now = time.monotonic(); cooldown = 60.0
@@ -458,10 +478,13 @@ async def on_member_remove(member):
 
 @bot.tree.error
 async def on_app_command_error(i,error):
-    log.exception("Application command failed", exc_info=error)
     original = getattr(error, "original", error)
+    if isinstance(original, discord.NotFound) and getattr(original, "code", None) == 10062:
+        log.warning("Application interaction expired or is unknown; response could not be delivered")
+        return
+    log.exception("Application command failed", exc_info=error)
     if isinstance(original, discord.HTTPException) and original.status == 429:
-        msg = "Discord rate-limited this sync. Please wait before trying /sync again."
+        msg = "Discord rate-limited this request. Please wait and try again."
     elif isinstance(error, app_commands.MissingPermissions):
         msg = "You do not have permission to use that command."
     elif isinstance(error, (OwnerConfigurationError, OwnerOnlyError)):
