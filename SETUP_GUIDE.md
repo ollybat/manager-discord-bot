@@ -4,13 +4,13 @@
 
 The Discord server owner must run:
 
-`/setuproles owner_role: co_owner_role: head_admin_role: admin_role: moderator_role:`
+`/setup roles owner_role: ... co_owner_role: ... head_admin_role: ... admin_role: ... moderator_role: ...`
 
 The parameter names and order are exactly `owner_role`, `co_owner_role`, `head_admin_role`, `admin_role`, `moderator_role`. The command accepts only five distinct normal roles from the current guild. It rejects @everyone, managed/integration roles, duplicate roles, and roles from another guild. The values are persisted in SQLite.
 
 Only the configured owner and co-owner roles can run `/dashboard`. The server owner, bot owner, head admin, admin, moderator, and other staff do not receive dashboard access unless they also hold one of those two configured roles. All five configured roles are nevertheless included in staff permission checks.
 
-The old `/setup roles action role` command is disabled and must not be used. Use `/setuproles` for the five staff roles. Use `/setup staff` only for optional ticket notification roles.
+Use `/setup roles owner_role: ... co_owner_role: ... head_admin_role: ... admin_role: ... moderator_role: ...` for the five staff roles. Use `/setup staff` only for optional ticket notification roles.
 
 ## Other commands
 
