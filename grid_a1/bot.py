@@ -120,13 +120,17 @@ def staff(): return _permission_check(True)
 
 def _dashboard_access(interaction: discord.Interaction) -> bool:
     if not interaction.guild or not isinstance(interaction.user, discord.Member): return False
-    if interaction.user.id == interaction.guild.owner_id or interaction.user.id == settings.owner_id: return True
     config = bot.database.config(interaction.guild.id)
     if not config or not config["owner_role"] or not config["co_owner_role"]: return False
     return bool({role.id for role in interaction.user.roles} & {int(config["owner_role"]), int(config["co_owner_role"])})
 
 def dashboard_access():
     async def predicate(interaction: discord.Interaction) -> bool: return _dashboard_access(interaction)
+    return app_commands.check(predicate)
+
+def server_owner_only():
+    async def predicate(interaction: discord.Interaction) -> bool:
+        return bool(interaction.guild and interaction.user and interaction.user.id == interaction.guild.owner_id)
     return app_commands.check(predicate)
 
 @bot.tree.command(name="anti-links", description="Configure external link protection")
@@ -207,11 +211,11 @@ async def prefix_unlock(ctx):
     await ctx.send("🔓 This channel is now unlocked for members.")
 
 @bot.tree.command(name="setuproles", description="Configure Grid A1 staff permission roles")
-@admin()
-@app_commands.describe(owner_role="Server owner role", moderator_role="Moderator role", admin_role="Administrator role", co_owner_role="Co-owner role", head_admin_role="Head administrator role")
-async def setup_roles(i: discord.Interaction, owner_role: discord.Role, moderator_role: discord.Role, admin_role: discord.Role, co_owner_role: discord.Role, head_admin_role: discord.Role):
-    roles = {"owner_role": owner_role, "moderator_role": moderator_role, "admin_role": admin_role, "co_owner_role": co_owner_role, "head_admin_role": head_admin_role}
-    invalid = [role.mention for role in roles.values() if role.is_default() or role.managed]
+@server_owner_only()
+@app_commands.describe(owner_role="Owner staff role", co_owner_role="Co-owner staff role", head_admin_role="Head administrator staff role", admin_role="Administrator staff role", moderator_role="Moderator staff role")
+async def setup_roles(i: discord.Interaction, owner_role: discord.Role, co_owner_role: discord.Role, head_admin_role: discord.Role, admin_role: discord.Role, moderator_role: discord.Role):
+    roles = {"owner_role": owner_role, "co_owner_role": co_owner_role, "head_admin_role": head_admin_role, "admin_role": admin_role, "moderator_role": moderator_role}
+    invalid = [role.mention for role in roles.values() if role.guild.id != i.guild.id or role.is_default() or role.managed]
     if invalid: return await i.response.send_message(embed=embed("💜 Role setup not saved", "❌ These roles cannot be used: " + ", ".join(invalid)), ephemeral=True)
     if len({role.id for role in roles.values()}) != len(roles): return await i.response.send_message(embed=embed("💜 Role setup not saved", "❌ Each permission level must use a different role."), ephemeral=True)
     bot.database.upsert_config(i.guild.id, **{name: role.id for name, role in roles.items()})
@@ -329,15 +333,6 @@ async def roles_setchannel(i: discord.Interaction, channel: discord.TextChannel)
     try: await channel.send(embed=e)
     except discord.Forbidden: return await i.response.send_message("❌ I cannot post in that channel.", ephemeral=True)
     await i.response.send_message(f"✅ Role directory posted in {channel.mention}.", ephemeral=True)
-
-@setup_group.command(name="roles", description="Add or remove roles allowed to send external links")
-@app_commands.checks.has_permissions(manage_guild=True)
-@app_commands.choices(action=[app_commands.Choice(name="Add", value="add"), app_commands.Choice(name="Remove", value="remove")])
-async def setup_roles_allow_links(i: discord.Interaction, action: app_commands.Choice[str], role: discord.Role):
-    if role.is_default() or role.managed: return await i.response.send_message("❌ Choose a normal server role.", ephemeral=True)
-    present = bot.database.upsert_anti_links_allowed_role(i.guild.id, role.id, action.value == "add")
-    state = "allowed to send external links" if present else "removed from the external-link allowlist"
-    await i.response.send_message(f"✅ {role.mention} is now {state}.", ephemeral=True)
 
 @setup_group.command(name="staff", description="Manage optional ticket staff notification roles")
 @app_commands.checks.has_permissions(manage_guild=True)
