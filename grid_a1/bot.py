@@ -1,4 +1,4 @@
-successfully downloaded text file (SHA: 57881b4692f9b2d017f3dfaabf6a17628ab317f7)from __future__ import annotations
+from __future__ import annotations
 import logging
 import time
 import discord
