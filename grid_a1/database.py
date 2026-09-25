@@ -2,9 +2,9 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 from typing import Any
-from .utils import utcnow
+from .utils import utcnow, safe_json_list
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 
 class Database:
     def __init__(self, path: Path): self.path = path
@@ -29,7 +29,7 @@ class Database:
             config_columns = {
                 **{name: 'INTEGER' for name in ('verify_panel_channel','verify_panel_message','verify_role', *[f'staff_role_{n}' for n in range(1, 11)], 'wipefeed_enabled','wipefeed_channel','urgent_by','owner_role','moderator_role','admin_role','co_owner_role','head_admin_role','anti_links_enabled','anti_links_log_channel')},
                 'urgent_at': 'TEXT', 'anti_links_action': "TEXT NOT NULL DEFAULT 'delete_warn'",
-                'anti_links_whitelist_domains': "TEXT NOT NULL DEFAULT '[]'", 'anti_links_bypass_roles': "TEXT NOT NULL DEFAULT '[]'",
+                'anti_links_whitelist_domains': "TEXT NOT NULL DEFAULT '[]'", 'anti_links_bypass_roles': "TEXT NOT NULL DEFAULT '[]'", 'anti_links_allowed_roles': "TEXT NOT NULL DEFAULT '[]'",
             }
             for name, definition in config_columns.items():
                 if name not in config_existing: db.execute(f'ALTER TABLE guild_config ADD COLUMN {name} {definition}')
@@ -39,12 +39,12 @@ class Database:
             db.execute("CREATE UNIQUE INDEX IF NOT EXISTS only_one_open_ticket ON tickets(guild_id, owner_id) WHERE status IN ('open','close_requested')")
             db.execute('''CREATE TABLE IF NOT EXISTS audit_log (id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id INTEGER NOT NULL, ticket_id TEXT, actor_id INTEGER NOT NULL, action TEXT NOT NULL, metadata TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL)''')
             db.execute('''CREATE TABLE IF NOT EXISTS closed_tickets (id INTEGER PRIMARY KEY AUTOINCREMENT, guild INTEGER NOT NULL, region TEXT NOT NULL, issue TEXT NOT NULL, closed_by INTEGER NOT NULL, reason TEXT NOT NULL, closed_at TEXT NOT NULL)''')
-            db.execute("UPDATE guild_config SET anti_links_enabled=COALESCE(anti_links_enabled, 0), anti_links_action=COALESCE(NULLIF(anti_links_action, ''), 'delete_warn'), anti_links_whitelist_domains=COALESCE(NULLIF(anti_links_whitelist_domains, ''), '[]'), anti_links_bypass_roles=COALESCE(NULLIF(anti_links_bypass_roles, ''), '[]')")
+            db.execute("UPDATE guild_config SET anti_links_enabled=COALESCE(anti_links_enabled, 0), anti_links_action=COALESCE(NULLIF(anti_links_action, ''), 'delete_warn'), anti_links_whitelist_domains=COALESCE(NULLIF(anti_links_whitelist_domains, ''), '[]'), anti_links_bypass_roles=COALESCE(NULLIF(anti_links_bypass_roles, ''), '[]'), anti_links_allowed_roles=COALESCE(NULLIF(anti_links_allowed_roles, ''), '[]')")
             db.execute('INSERT OR IGNORE INTO schema_migrations VALUES (?,?)', (SCHEMA_VERSION, utcnow().isoformat()))
     def config(self, guild_id):
         with self.connect() as db: return db.execute('SELECT * FROM guild_config WHERE guild_id=?',(guild_id,)).fetchone()
     def upsert_config(self, guild_id, **values: Any):
-        allowed={'panel_channel','panel_message','logs_channel','ticket_category','inactivity_hours','welcome_channel','verify_channel','link_channel','bot_commands_channel','shop_channel','verify_panel_channel','verify_panel_message','verify_role','staff_role_1','staff_role_2','staff_role_3','staff_role_4','staff_role_5','staff_role_6','staff_role_7','staff_role_8','staff_role_9','staff_role_10','wipefeed_enabled','wipefeed_channel','owner_role','moderator_role','admin_role','co_owner_role','head_admin_role','anti_links_enabled','anti_links_log_channel','anti_links_action','anti_links_whitelist_domains','anti_links_bypass_roles'}
+        allowed={'panel_channel','panel_message','logs_channel','ticket_category','inactivity_hours','welcome_channel','verify_channel','link_channel','bot_commands_channel','shop_channel','verify_panel_channel','verify_panel_message','verify_role','staff_role_1','staff_role_2','staff_role_3','staff_role_4','staff_role_5','staff_role_6','staff_role_7','staff_role_8','staff_role_9','staff_role_10','wipefeed_enabled','wipefeed_channel','owner_role','moderator_role','admin_role','co_owner_role','head_admin_role','anti_links_enabled','anti_links_log_channel','anti_links_action','anti_links_whitelist_domains','anti_links_bypass_roles','anti_links_allowed_roles'}
         if not set(values)<=allowed: raise ValueError(f'unknown config field: {set(values)-allowed}')
         with self.connect() as db:
             db.execute('INSERT INTO guild_config(guild_id) VALUES(?) ON CONFLICT DO NOTHING',(guild_id,))
@@ -100,6 +100,19 @@ class Database:
             if row[f"staff_role_{n}"] == role_id:
                 self.upsert_config(guild_id, **{f"staff_role_{n}": None}); return True
         return False
+
+    def anti_links_allowed_role_ids(self, guild_id):
+        row = self.config(guild_id)
+        return safe_json_list(row['anti_links_allowed_roles'] if row else '[]', int)
+
+    def upsert_anti_links_allowed_role(self, guild_id, role_id, enabled):
+        roles = self.anti_links_allowed_role_ids(guild_id)
+        if enabled:
+            if role_id not in roles: roles.append(role_id)
+        else:
+            roles = [value for value in roles if value != role_id]
+        self.upsert_config(guild_id, anti_links_allowed_roles=json.dumps(roles[:100]))
+        return role_id in roles
 
     def configured_permission_role_ids(self, guild_id):
         row = self.config(guild_id)
