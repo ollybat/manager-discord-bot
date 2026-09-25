@@ -38,8 +38,12 @@ class GridA1Bot(commands.Bot):
         self._global_sync_in_progress = True; self._global_sync_last_at = now
         try:
             out=[]
-            if settings.test_guild_id:
-                guild=discord.Object(id=settings.test_guild_id); self.tree.clear_commands(guild=guild); await self.tree.sync(guild=guild); out.append(f"removed guild-scoped duplicates from `{settings.test_guild_id}`")
+            # Remove stale guild-scoped copies from every guild, then publish one global set.
+            for existing_guild in self.guilds:
+                guild=discord.Object(id=existing_guild.id)
+                self.tree.clear_commands(guild=guild)
+                await self.tree.sync(guild=guild)
+            out.append(f"cleared guild-scoped command copies from {len(self.guilds)} guild(s)")
             synced_global=await self.tree.sync(); out.append(f"global: {len(synced_global)}"); return out
         finally: self._global_sync_in_progress = False
     @tasks.loop(seconds=60)
