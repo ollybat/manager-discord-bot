@@ -11,6 +11,7 @@ Forms accept Discord role/channel/category mentions or IDs and strictly validate
 ## Optional staff notifications
 
 ```text
+/setup roles add|remove role
 /setup staff action role
 ```
 
@@ -30,4 +31,4 @@ Keep the bot token, `.env`, database, transcripts, and logs private. Test role h
 
 ## Anti-links
 
-Run `/anti-links enabled:true action:delete_warn` with Manage Server permission. Optional comma-separated `whitelist_domains` (for example `example.com`) and `bypass_roles` can be configured. Actions are `delete`, `delete_warn`, or `delete_log`; changes are stored in SQLite. Ensure the bot role has **Manage Messages** in channels to enforce deletion.
+Run `/anti-links enabled:true action:delete_warn` with Manage Server permission. Optional comma-separated `whitelist_domains` (for example `example.com`) and `bypass_roles` can be configured. Actions are `delete`, `delete_warn`, or `delete_log`; changes are stored in SQLite. Optional allowed link roles are managed with `/setup roles add` and `/setup roles remove`; when configured, members need an allowed role to send links, with owner/admin/Manage Messages/bypass exceptions. Ensure the bot role has **Manage Messages** in channels to enforce deletion.
