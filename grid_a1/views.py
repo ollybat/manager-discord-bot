@@ -55,7 +55,7 @@ class DashboardSelect(discord.ui.Select):
     def __init__(self, view: "DashboardView"):
         self.dashboard = view
         super().__init__(
-            placeholder="✨ Choose a configuration module…",
+            placeholder="📱 Open the App Drawer to Configure…",
             options=[discord.SelectOption(label=label, value=value, description=description, emoji=emoji) for value, label, description, emoji in self.OPTIONS],
             custom_id="grid-a1:dashboard:module",
         )
@@ -66,6 +66,9 @@ class DashboardSelect(discord.ui.Select):
 
 class DashboardView(discord.ui.View):
     """Private, owner-level configuration dashboard; never grants moderator access."""
+
+    MODULE_LABELS = {"ticket": "Ticket setup", "staff": "Staff roles", "permission": "Permission roles", "verification": "Verification panel", "welcome": "Welcome system", "moderation": "Moderation settings", "server": "Server information", "announcement": "Announcement channels", "status": "Bot status"}
+    NEXT_ACTIONS = {"ticket": "Next action: configure the panel, logs, category, and inactivity hours.", "staff": "Next action: add at least one notification role if staff alerts are needed.", "permission": "Next action: configure all owner/co-owner and staff permission roles.", "verification": "Next action: configure the panel channel and a manageable verification role.", "welcome": "Next action: configure every community channel used by the welcome system.", "moderation": "Next action: moderation commands are ready; review command permissions if needed.", "server": "Next action: no configuration is required; use this page for live server details.", "announcement": "Next action: configure a channel here, then use `/wipefeed enable enabled:true` and `/wipefeed send`.", "status": "Next action: no configuration is required; investigate only if gateway latency is unavailable."}
     def __init__(self, database, bot_owner_id: int | None):
         super().__init__(timeout=600)
         self.database = database
@@ -97,28 +100,44 @@ class DashboardView(discord.ui.View):
         e.add_field(name="🔐 Access", value="Owner-level access verified", inline=True)
         e.add_field(name="⚙️ Configuration", value="`Ready`" if config else "`Not initialized`", inline=True)
         e.add_field(name="📡 Session", value="Private • ephemeral", inline=True)
-        e.add_field(name="📊 Live module status", value="\n".join(f"{state} **{label}**" for label, state in self.module_statuses(guild)), inline=False)
+        statuses = self.module_statuses(guild)
+        counts = {"🟢 Active": 0, "🟡 Partial": 0, "🔴 Disabled / Not Setup": 0}
+        for _, state in statuses: counts[state] = counts.get(state, 0) + 1
+        e.add_field(name="📊 Status summary", value=f"🟢 Active: **{counts['🟢 Active']}** • 🟡 Partial: **{counts['🟡 Partial']}** • 🔴 Disabled: **{counts['🔴 Disabled / Not Setup']}**", inline=False)
+        e.add_field(name="📊 Live module status", value="\n".join(f"{state} **{label}**" for label, state in statuses), inline=False)
         if guild.icon:
             e.set_thumbnail(url=guild.icon.url)
         e.set_footer(text="Grid A1 • Refresh configuration to reload live values")
         return e
 
     def module_statuses(self, guild: discord.Guild):
+        """Return all nine modules using persisted configuration and live runtime state."""
         config = self.database.config(guild.id)
-        def state(required, partial=()):
+        def state(required=(), partial=()):
             if not config: return "🔴 Disabled / Not Setup"
-            present = sum(bool(config[key]) for key in required)
-            if present == len(required): return "🟢 Active"
-            if present or any(config[key] for key in partial): return "🟡 Partial"
+            present = sum(config[key] not in (None, "", 0) for key in required)
+            if required and present == len(required): return "🟢 Active"
+            if present or any(config[key] not in (None, "", 0) for key in partial): return "🟡 Partial"
             return "🔴 Disabled / Not Setup"
-        return [("Ticket setup", state(("panel_channel", "logs_channel", "ticket_category", "panel_message"))), ("Staff roles", state(("staff_role_1",), tuple(f"staff_role_{n}" for n in range(2, 11)))), ("Permission roles", state(("owner_role", "co_owner_role"), ("moderator_role", "admin_role", "head_admin_role"))), ("Verification panel", state(("verify_panel_channel", "verify_role", "verify_panel_message"))), ("Welcome system", state(("welcome_channel", "link_channel", "bot_commands_channel", "shop_channel", "verify_channel"))), ("Moderation settings", "🟡 Partial" if config else "🔴 Disabled / Not Setup"), ("Server information", "🟢 Active"), ("Announcement channels", state(("wipefeed_enabled", "wipefeed_channel"))), ("Bot status", "🟢 Active" if guild.me else "🟡 Partial")]
+        return [
+            ("Ticket setup", state(("panel_channel", "logs_channel", "ticket_category", "panel_message"))),
+            ("Staff roles", state(("staff_role_1",), tuple(f"staff_role_{n}" for n in range(2, 11)))),
+            ("Permission roles", state(("owner_role", "co_owner_role"), ("moderator_role", "admin_role", "head_admin_role"))),
+            ("Verification panel", state(("verify_panel_channel", "verify_role", "verify_panel_message"))),
+            ("Welcome system", state(("welcome_channel", "link_channel", "bot_commands_channel", "shop_channel", "verify_channel"))),
+            ("Moderation settings", "🟢 Active" if config else "🔴 Disabled / Not Setup"),
+            ("Server information", "🟢 Active"),
+            ("Announcement channels", state(("wipefeed_enabled", "wipefeed_channel"))),
+            ("Bot status", "🟢 Active" if guild.me else "🟡 Partial"),
+        ]
 
     async def show_module(self, interaction: discord.Interaction, module: str):
         guild = interaction.guild
         if not guild:
             return await interaction.response.send_message("❌ This dashboard only works inside a server.", ephemeral=True)
         config = self.database.config(guild.id)
-        labels = dict((value, label) for value, label, _, _ in DashboardSelect.OPTIONS)
+        labels = self.MODULE_LABELS
+        status = dict(self.module_statuses(guild)).get(labels.get(module, module.title()), "🟡 Partial")
         if module == "server":
             value = f"**Owner:** <@{guild.owner_id}>\n**Members:** `{guild.member_count or 0:,}`\n**Channels:** `{len(guild.channels)}`\n**Roles:** `{max(0, len(guild.roles) - 1)}`"
         elif module == "status":
@@ -137,15 +156,16 @@ class DashboardView(discord.ui.View):
             lines = []
             for label, key in fields:
                 raw = "Existing moderation commands remain unchanged." if key is None else (config[key] if config else None)
-                if key and "channel" in key and raw: raw = f"<#${raw}>".replace("<$", "<")
+                if key and "channel" in key and raw: raw = f"<#{raw}>"
                 if key and key.endswith("role") and raw: raw = f"<@&{raw}>"
                 lines.append(f"**{label}:** {raw if raw not in (None, 0, '') else '`Not configured`'}")
             if module == "staff":
                 roles = [config[f"staff_role_{n}"] for n in range(1, 11) if config and config[f"staff_role_{n}"]]
                 lines = [f"**Notification roles:** {', '.join(f'<@&{role}>' for role in roles) if roles else '`Not configured`'}"]
             value = "\n".join(lines)
+        value = f"**Status:** {status}\n{self.NEXT_ACTIONS.get(module, 'Next action: return to the overview and refresh configuration.')}\n\n{value}"
         e = embed(f"💜 Dashboard • {labels.get(module, module.title())}", value, discord.Colour.from_rgb(177, 77, 255))
-        e.set_footer(text="Changes are private and saved to SQLite; no public panel is deployed from this screen.")
+        e.set_footer(text="Changes are private and saved to SQLite; use Back to return to the overview.")
         await interaction.response.edit_message(embed=e, view=self)
 
     async def _configure(self, interaction, modal_cls):
@@ -167,11 +187,19 @@ class DashboardView(discord.ui.View):
     @discord.ui.button(label="Verification panel", style=discord.ButtonStyle.secondary, emoji="✅", row=2, custom_id="grid-a1:dashboard:verification-config")
     async def verification_config(self, interaction, button): await self._configure(interaction, VerificationPanelModal)
 
+    @discord.ui.button(label="Back", style=discord.ButtonStyle.secondary, emoji="↩️", row=3, custom_id="grid-a1:dashboard:back")
+    async def back(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.edit_message(embed=self.dashboard_embed(interaction.guild), view=self)
+
     @discord.ui.button(label="Refresh configuration", style=discord.ButtonStyle.primary, emoji="🔄", custom_id="grid-a1:dashboard:refresh")
     async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.edit_message(embed=self.dashboard_embed(interaction.guild), view=self)
 
-    @discord.ui.button(label="Close", style=discord.ButtonStyle.secondary, emoji="✖️", custom_id="grid-a1:dashboard:close")
+    @discord.ui.button(label="Announcement config", style=discord.ButtonStyle.secondary, emoji="📣", row=3, custom_id="grid-a1:dashboard:announcement-config")
+    async def announcement_config(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._configure(interaction, AnnouncementSettingsModal)
+
+    @discord.ui.button(label="Close", style=discord.ButtonStyle.secondary, emoji="✖️", row=4, custom_id="grid-a1:dashboard:close")
     async def close(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.edit_message(content="💜 Dashboard closed.", embed=None, view=None)
 
@@ -255,6 +283,24 @@ class VerificationPanelModal(_ConfigModal):
         c=_valid_text(i.guild,self.children[0].value); r=_valid_role(i.guild,self.children[1].value)
         if not c or not r or not i.guild.me or r>=i.guild.me.top_role: return await i.response.send_message('❌ Use a valid text channel and manageable role. Nothing was saved.',ephemeral=True)
         self.database.upsert_config(i.guild.id,verify_panel_channel=c.id,verify_role=r.id); await i.response.send_message('✅ Verification config saved. No public panel was posted; use /verifypanel explicitly to deploy one.',ephemeral=True)
+
+
+class AnnouncementSettingsModal(_ConfigModal):
+    def __init__(self, d, o):
+        super().__init__(d, o, "Configure announcement settings")
+        self.add_item(discord.ui.TextInput(label="Announcement text channel ID or mention", custom_id="channel", max_length=30))
+        self.add_item(discord.ui.TextInput(label="Enable wipefeed? (yes/no)", custom_id="enabled", required=False, max_length=3, placeholder="yes or no"))
+
+    async def on_submit(self, i):
+        if await self.deny(i): return
+        channel = _valid_text(i.guild, self.children[0].value)
+        enabled = self.children[1].value.strip().lower()
+        if not channel or enabled not in ("", "yes", "no"):
+            return await i.response.send_message("❌ Use a valid text channel and enter yes or no. Nothing was saved.", ephemeral=True)
+        updates = {"wipefeed_channel": channel.id}
+        if enabled: updates["wipefeed_enabled"] = int(enabled == "yes")
+        self.database.upsert_config(i.guild.id, **updates)
+        await i.response.send_message("✅ Announcement settings saved. To post: /wipefeed enable enabled:true, then /wipefeed send.", ephemeral=True)
 
 
 class RegionSelect(discord.ui.Select):
