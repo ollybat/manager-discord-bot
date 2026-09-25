@@ -11,6 +11,8 @@ Dashboard forms validate role/channel/category IDs and mentions against the curr
 ## Main setup
 
 ```text
+/setup roles add @LinkSenders
+/setup roles remove @LinkSenders
 /setup tickets panel_channel logs_channel category inactivity_hours
 /setup welcomer welcome_channel link_channel bot_commands_channel shop_channel verify_channel
 /verifypanel channel role
@@ -31,4 +33,4 @@ Up to 10 roles may receive one DM per new ticket; duplicate role matches are ded
 
 ## Anti-links protection
 
-Admins can run `/anti-links enabled:true` to persistently block websites, bare domains, Discord invites, and common Unicode/spacing obfuscations. Choose `delete`, `delete_warn`, or `delete_log`; the last option records the deleted message metadata in the configured TextChannel without copying message content or secrets. Whitelist domains and bypass roles accept comma-separated domains and role IDs/mentions. The bot needs **Manage Messages**. Bot messages, DMs, owners, administrators, and Manage Messages members are ignored. Edited messages are scanned too.
+Admins can run `/anti-links enabled:true` to persistently block websites, bare domains, Discord invites, and common Unicode/spacing obfuscations. Choose `delete`, `delete_warn`, or `delete_log`; the last option records the deleted message metadata in the configured TextChannel without copying message content or secrets. Whitelist domains and bypass roles accept comma-separated domains and role IDs/mentions. When any allowed link role is configured, only members with one of those roles may send links; owner, bot owner, administrator, Manage Messages, and bypass-role exceptions remain unchanged. The bot needs **Manage Messages**. Bot messages, DMs, owners, administrators, and Manage Messages members are ignored. Edited messages are scanned too.
