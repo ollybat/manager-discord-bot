@@ -115,6 +115,7 @@ class Database:
         return role_id in roles
 
     def configured_permission_role_ids(self, guild_id):
+        """All five configured staff roles, used by staff permission checks."""
         row = self.config(guild_id)
         if not row: return []
-        return [int(row[name]) for name in ("owner_role", "moderator_role", "admin_role", "co_owner_role", "head_admin_role") if row[name]]
+        return [int(row[name]) for name in ("owner_role", "co_owner_role", "head_admin_role", "admin_role", "moderator_role") if row[name]]
