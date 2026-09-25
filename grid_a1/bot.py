@@ -214,7 +214,7 @@ async def prefix_unlock(ctx):
     except discord.Forbidden: return await ctx.send("❌ I cannot unlock this channel. Check Manage Channels and Manage Permissions.")
     await ctx.send("🔓 This channel is now unlocked for members.")
 
-@bot.tree.command(name="setuproles", description="Configure Grid A1 staff permission roles")
+@setup_group.command(name="roles", description="Configure Grid A1 staff permission roles")
 @server_owner_only()
 @app_commands.describe(owner_role="Owner staff role", co_owner_role="Co-owner staff role", head_admin_role="Head administrator staff role", admin_role="Administrator staff role", moderator_role="Moderator staff role")
 async def setup_roles(i: discord.Interaction, owner_role: discord.Role, co_owner_role: discord.Role, head_admin_role: discord.Role, admin_role: discord.Role, moderator_role: discord.Role):
