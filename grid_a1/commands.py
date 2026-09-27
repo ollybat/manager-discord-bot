@@ -52,7 +52,11 @@ def register_commands(bot)->None:
         try:owner=int(raw)
         except ValueError:raise OwnerConfigurationError("OWNER_ID is not a valid Discord user ID.") from None
         if i.user.id!=owner:raise OwnerOnlyError("Only the configured bot owner can use /sync.")
-        out=await bot.sync_commands_on_request(); await i.response.send_message(embed=embed("💜 Commands synchronized","✅ "+"\n".join(out)),ephemeral=True)
+        try:
+            out=await bot.sync_commands_on_request()
+        except (discord.HTTPException, RuntimeError) as error:
+            return await i.response.send_message(f"❌ Sync failed: {error}", ephemeral=True)
+        await i.response.send_message(embed=embed("💜 Commands synchronized","✅ "+"\n".join(out)),ephemeral=True)
     @bot.tree.command(name="embed-edit",description="Edit a bot-authored embed in this channel")
     @app_commands.checks.has_permissions(manage_messages=True)
     async def edit_command(i,message_id:str,title:Optional[str]=None,description:Optional[str]=None,image:Optional[discord.Attachment]=None):
