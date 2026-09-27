@@ -8,7 +8,13 @@ SCHEMA_VERSION = 12
 class Database:
     def __init__(self, path: Path): self.path = path
     def connect(self):
-        db=sqlite3.connect(self.path); db.row_factory=sqlite3.Row; db.execute('PRAGMA foreign_keys=ON'); return db
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        db=sqlite3.connect(self.path, timeout=10, isolation_level=None)
+        db.row_factory=sqlite3.Row
+        db.execute('PRAGMA foreign_keys=ON')
+        db.execute('PRAGMA journal_mode=WAL')
+        db.execute('PRAGMA busy_timeout=10000')
+        return db
     def migrate(self):
         with self.connect() as db:
             db.execute('CREATE TABLE IF NOT EXISTS schema_migrations(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)')
@@ -22,6 +28,9 @@ class Database:
             for n,d in {'inactivity_notice_at':'TEXT','owner_left':'INTEGER NOT NULL DEFAULT 0','auto_close_at':'TEXT','auto_close_reason':'TEXT','urgent_at':'TEXT','urgent_by':'INTEGER'}.items():
                 if n not in existing: db.execute(f'ALTER TABLE tickets ADD COLUMN {n} {d}')
             db.execute("CREATE UNIQUE INDEX IF NOT EXISTS only_one_open_ticket ON tickets(guild_id, owner_id) WHERE status IN ('open','close_requested')")
+            db.execute("CREATE INDEX IF NOT EXISTS idx_tickets_guild_status_activity ON tickets(guild_id, status, last_activity_at)")
+            db.execute("CREATE INDEX IF NOT EXISTS idx_tickets_channel_status ON tickets(channel_id, status)")
+            db.execute("CREATE INDEX IF NOT EXISTS idx_audit_guild_created ON audit_log(guild_id, created_at)")
             db.execute('''CREATE TABLE IF NOT EXISTS audit_log (id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id INTEGER NOT NULL, ticket_id TEXT, actor_id INTEGER NOT NULL, action TEXT NOT NULL, metadata TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL)''')
             db.execute('''CREATE TABLE IF NOT EXISTS closed_tickets (id INTEGER PRIMARY KEY AUTOINCREMENT, guild INTEGER NOT NULL, region TEXT NOT NULL, issue TEXT NOT NULL, closed_by INTEGER NOT NULL, reason TEXT NOT NULL, closed_at TEXT NOT NULL)''')
             db.execute("UPDATE guild_config SET anti_links_enabled=COALESCE(anti_links_enabled,0), anti_links_action=COALESCE(NULLIF(anti_links_action,''),'delete_warn'), anti_links_whitelist_domains=COALESCE(NULLIF(anti_links_whitelist_domains,''),'[]'), anti_links_bypass_roles=COALESCE(NULLIF(anti_links_bypass_roles,''),'[]'), anti_links_allowed_roles=COALESCE(NULLIF(anti_links_allowed_roles,''),'[]')")
