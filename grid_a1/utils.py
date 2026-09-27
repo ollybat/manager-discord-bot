@@ -45,8 +45,8 @@ def staff_member(member: discord.Member, database=None) -> bool:
     permissions = member.guild_permissions
     if permissions.administrator or permissions.manage_channels or permissions.manage_guild: return True
     if database is None: return False
-    role_ids = set(database.staff_role_ids(member.guild.id))
-    role_ids.update(database.configured_permission_role_ids(member.guild.id))
+    # Notification roles are mention targets only; they do not grant staff access.
+    role_ids = set(database.configured_permission_role_ids(member.guild.id))
     return any(role.id in role_ids for role in member.roles)
 
 def mention_or_id(guild: discord.Guild, value: str) -> str:
