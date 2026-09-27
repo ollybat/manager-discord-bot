@@ -37,17 +37,21 @@ def parse_ticket_topic(channel: discord.abc.GuildChannel | None) -> dict[str, st
 def is_ticket(channel: discord.abc.GuildChannel | None) -> bool:
     return bool(parse_ticket_topic(channel))
 
-def staff_member(member: discord.Member) -> bool:
+def staff_member(member: discord.Member, database=None) -> bool:
+    """Return whether *member* has ticket-staff access."""
     if not isinstance(member, discord.Member): return False
     if member.guild.owner_id == member.id: return True
     if str(member.id) == os.getenv("OWNER_ID", "").strip(): return True
     permissions = member.guild_permissions
-    return permissions.administrator or permissions.manage_channels or permissions.manage_guild
+    if permissions.administrator or permissions.manage_channels or permissions.manage_guild: return True
+    if database is None: return False
+    role_ids = set(database.staff_role_ids(member.guild.id))
+    role_ids.update(database.configured_permission_role_ids(member.guild.id))
+    return any(role.id in role_ids for role in member.roles)
 
 def mention_or_id(guild: discord.Guild, value: str) -> str:
     member = guild.get_member(int(value)) if value.isdigit() else None
     return member.mention if member else f"<@{value}>"
-
 
 _LINK_DOMAIN_RE = re.compile(r'(?<![\w@])(?:https?://|www\.)?[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+(?:[/:?#][^\s<>]*)?', re.I)
 _INVITE_RE = re.compile(r'(?:discord(?:app)?\s*\.\s*(?:gg|com\s*/\s*invite)|discord\s*\.\s*gg)', re.I)
