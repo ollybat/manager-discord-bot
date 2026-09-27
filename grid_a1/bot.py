@@ -26,7 +26,9 @@ class GridA1Bot(commands.Bot):
         self._global_sync_in_progress = False
         register_commands(self)
     async def setup_hook(self):
-        self.database.migrate(); self.add_view(TicketPanel(self.tickets)); self.add_view(TicketControls(self.tickets)); self.add_view(VerifyPanel(self.database)); self.refresh_panels.start(); self.inactivity_loop.start()
+        self.database.migrate(); self.add_view(TicketPanel(self.tickets)); self.add_view(TicketControls(self.tickets)); self.add_view(VerifyPanel(self.database))
+        for row in self.database.open_tickets_all(): self.add_view(OwnerInactivityView(self.tickets, row['ticket_id']))
+        self.refresh_panels.start(); self.inactivity_loop.start()
         # Clear stale guild registrations, then publish exactly one global tree.
         # Do not copy global commands into guild trees.
         cleared = 0
@@ -88,29 +90,35 @@ class GridA1Bot(commands.Bot):
     @tasks.loop(minutes=5)
     async def inactivity_loop(self):
         from datetime import datetime, timezone, timedelta
-        for guild in self.guilds:
-            config = self.database.config(guild.id)
-            if not config: continue
-            threshold = int(config['inactivity_hours'])
-            for row in self.database.open_tickets(guild.id):
-                channel = guild.get_channel(row['channel_id'])
-                if not isinstance(channel, discord.TextChannel): continue
-                indicator, duration = inactivity_indicator(row['last_activity_at'], threshold, bool(row['owner_left']))
-                red = indicator == '🔴'
-                if red and not row['inactivity_notice_at']:
-                    owner = guild.get_member(row['owner_id'])
-                    now = datetime.now(timezone.utc); notice_at = now.isoformat()
-                    if owner:
-                        try:
-                            await owner.send(f'🔴 Your Grid A1 ticket **{row["ticket_id"]}** has been inactive for **{duration}**. Please choose an option below within 24 hours.', view=OwnerInactivityView(self.tickets, row["ticket_id"]))
-                        except discord.DiscordException: log.info('Could not DM inactive ticket owner %s', row['owner_id'])
-                    self.database.update_ticket(row['ticket_id'], inactivity_notice_at=notice_at, auto_close_at=(now + timedelta(hours=24)).isoformat())
-                    self.database.audit(guild.id,row['ticket_id'],0,'inactivity_notice', '{"indicator":"red"}')
-                elif red and row['auto_close_at'] and datetime.fromisoformat(row['auto_close_at']) <= datetime.now(timezone.utc):
-                    await self.tickets.close_system(guild, channel, 'Auto-closed after inactivity grace period')
-                await self.tickets.refresh_status(channel, row)
+        for guild in list(self.guilds):
+            try:
+                config = self.database.config(guild.id)
+                if not config: continue
+                threshold = int(config['inactivity_hours'])
+                for row in self.database.open_tickets(guild.id):
+                    try:
+                        channel = guild.get_channel(row['channel_id'])
+                        if not isinstance(channel, discord.TextChannel): continue
+                        indicator, duration = inactivity_indicator(row['last_activity_at'], threshold, bool(row['owner_left']))
+                        red = indicator == '🔴'
+                        if red and not row['inactivity_notice_at']:
+                            owner = guild.get_member(row['owner_id'])
+                            now = datetime.now(timezone.utc)
+                            view = OwnerInactivityView(self.tickets, row['ticket_id'])
+                            self.add_view(view)
+                            if owner:
+                                try: await owner.send(f'🔴 Your Grid A1 ticket **{row["ticket_id"]}** has been inactive for **{duration}**. Please choose an option below within 24 hours.', view=view)
+                                except discord.DiscordException: log.info('Could not DM inactive ticket owner %s', row['owner_id'])
+                            self.database.update_ticket(row['ticket_id'], inactivity_notice_at=now.isoformat(), auto_close_at=(now + timedelta(hours=24)).isoformat())
+                            self.database.audit(guild.id,row['ticket_id'],0,'inactivity_notice', '{"indicator":"red"}')
+                        elif red and row['auto_close_at'] and datetime.fromisoformat(row['auto_close_at']) <= datetime.now(timezone.utc):
+                            await self.tickets.close_system(guild, channel, 'Auto-closed after inactivity grace period')
+                            continue
+                        await self.tickets.refresh_status(channel, row)
+                    except Exception: log.exception('Inactivity ticket failed: %s', row['ticket_id'])
+            except Exception: log.exception('Inactivity loop failed for guild %s; continuing', getattr(guild, 'id', 'unknown'))
 
-    @inactivity_loop.before_loop
+return     @inactivity_loop.before_loop
     async def before_inactivity_loop(self): await self.wait_until_ready()
     @refresh_panels.before_loop
     async def before_refresh_panels(self): await self.wait_until_ready()
@@ -125,7 +133,7 @@ def _privileged(interaction: discord.Interaction, require_staff: bool = False) -
     if interaction.user.id == interaction.guild.owner_id or interaction.user.id == settings.owner_id: return True
     permissions = interaction.user.guild_permissions
     if permissions.administrator or permissions.manage_guild: return True
-    return require_staff and (permissions.manage_channels or bool(set(role.id for role in interaction.user.roles) & set(bot.database.staff_role_ids(interaction.guild.id) + bot.database.configured_permission_role_ids(interaction.guild.id))))
+    return require_staff and (permissions.manage_channels or bool(set(role.id for role in interaction.user.roles) & set(bot.database.configured_permission_role_ids(interaction.guild.id))))
 
 def _prefix_privileged(ctx, require_staff: bool = False) -> bool:
     if not ctx.guild or not isinstance(ctx.author, discord.Member): return False
@@ -145,6 +153,7 @@ def staff(): return _permission_check(True)
 def _dashboard_access(interaction: discord.Interaction) -> bool:
     if not interaction.guild or not isinstance(interaction.user, discord.Member): return False
     config = bot.database.config(interaction.guild.id)
+    if interaction.user.id == interaction.guild.owner_id or interaction.user.id == settings.owner_id: return True
     if not config or not config["owner_role"] or not config["co_owner_role"]: return False
     return bool({role.id for role in interaction.user.roles} & {int(config["owner_role"]), int(config["co_owner_role"])})
 
@@ -197,7 +206,7 @@ async def moderation_ban(i: discord.Interaction, member: discord.Member, reason:
     if member.id == i.user.id or member.id == i.guild.owner_id: return await i.response.send_message("❌ You cannot ban yourself or the server owner.", ephemeral=True)
     if member.top_role >= i.user.top_role and i.user.id != i.guild.owner_id: return await i.response.send_message("❌ That member has an equal or higher role than you.", ephemeral=True)
     if not i.guild.me or member.top_role >= i.guild.me.top_role: return await i.response.send_message("❌ My bot role must be above that member.", ephemeral=True)
-    try: await member.ban(reason=f"{reason} • Moderator: {i.user}", delete_message_days=0)
+    try: await member.ban(reason=f"{reason} • Moderator: {i.user}", delete_message_seconds=0)
     except discord.Forbidden: return await i.response.send_message("❌ Discord denied the ban. Check Ban Members permission and role hierarchy.", ephemeral=True)
     bot.database.audit(i.guild.id, None, i.user.id, "ban", discord.utils.escape_markdown(reason)[:500])
     await i.response.send_message(embed=embed("💜 Member banned", f"🔨 {member.mention} was banned from the server.\n\n**Reason:** {discord.utils.escape_markdown(reason)[:500]}"), ephemeral=True)
@@ -419,7 +428,7 @@ async def welcomer_test(i):
 async def ticket_claim(i): await claim(i,bot.tickets)
 @ticket_group.command(name="transfer", description="Transfer the current ticket")
 @staff()
-async def ticket_transfer(i,staff_member:discord.Member): await claim(i,bot.tickets,staff_member)
+async def ticket_transfer(i,target_member:discord.Member): await claim(i,bot.tickets,target_member)
 @ticket_group.command(name="requestclose", description="Request closure of the current ticket")
 async def ticket_requestclose(i,reason:str):
     if not is_ticket(i.channel): return await i.response.send_message("This only works inside a ticket.",ephemeral=True)
@@ -441,7 +450,7 @@ async def _scan_link_message(message):
     if not config or not config["anti_links_enabled"]: return
     member=message.author; perms=member.guild_permissions; bypass=set(safe_json_list(config["anti_links_bypass_roles"], int)); allowed=set(safe_json_list(config["anti_links_allowed_roles"], int))
     if member.id in {message.guild.owner_id, settings.owner_id} or perms.administrator or perms.manage_messages or any(r.id in bypass for r in member.roles): return
-    if allowed and not any(r.id in allowed for r in member.roles): return
+    if any(r.id in allowed for r in member.roles): return
     links=detected_external_links(message.content or "", tuple(safe_json_list(config["anti_links_whitelist_domains"], str)))
     if not links: return
     try: await message.delete(reason="Anti-links protection")
@@ -489,15 +498,10 @@ async def on_app_command_error(i,error):
         msg = "You do not have permission to use that command."
     elif isinstance(error, (OwnerConfigurationError, OwnerOnlyError)):
         msg = str(error)
-    elif isinstance(error, RuntimeError):
+    elif isinstance(original, RuntimeError):
         msg = str(error)
     else:
         msg = "That command could not be completed. Check setup and bot permissions."
     if i.response.is_done(): await i.followup.send(msg, ephemeral=True)
-    else: await i.response.send_message(msg, ephemeral=True)
 
-def run():
-    if not settings.token: raise RuntimeError("DISCORD_TOKEN is missing. Copy .env.example to .env and set it outside Discord.")
-    bot.run(settings.token, log_handler=None)
-
-if __name__ == "__main__": run()
+[8 more lines in file. Use offset=501 to continue.]
