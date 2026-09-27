@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from typing import Any
 from .utils import utcnow, safe_json_list
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 class Database:
     def __init__(self, path: Path): self.path = path
     def connect(self):
