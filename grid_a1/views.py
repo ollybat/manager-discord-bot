@@ -80,6 +80,7 @@ class DashboardView(discord.ui.View):
         member = interaction.user
         if not guild or not isinstance(member, discord.Member):
             return False
+        if member.id == guild.owner_id or member.id == self.bot_owner_id: return True
         config = self.database.config(guild.id)
         if not config or not config["owner_role"] or not config["co_owner_role"]:
             return False
@@ -355,7 +356,7 @@ class VerificationConfirm(discord.ui.View):
 class OwnerInactivityView(discord.ui.View):
     """Buttons sent privately to a ticket owner after a red inactivity warning."""
     def __init__(self, service: TicketService, ticket_id: str):
-        super().__init__(timeout=86400); self.service = service; self.ticket_id = ticket_id
+        super().__init__(timeout=None); self.service = service; self.ticket_id = ticket_id
     async def _owner_check(self, interaction):
         row = self.service.db.ticket(self.ticket_id)
         if not row or row["status"] not in ("open", "close_requested") or row["owner_id"] != interaction.user.id:
@@ -368,7 +369,7 @@ class OwnerInactivityView(discord.ui.View):
     @discord.ui.button(label="Request another staff member", style=discord.ButtonStyle.secondary, emoji="🙋", custom_id="grid-a1:inactive:staff")
     async def staff(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not await self._owner_check(interaction): return
-        self.service.db.set_claim(self.ticket_id, None); self.service.db.mark_activity(self.ticket_id); self.service.db.audit(interaction.guild.id if interaction.guild else 0, self.ticket_id, interaction.user.id, "staff_requested"); await interaction.response.send_message("✅ Your request was sent to staff.", ephemeral=True)
+        self.service.db.set_claim(self.ticket_id, None); self.service.db.mark_activity(self.ticket_id); self.service.db.audit(self.service.db.ticket(self.ticket_id)["guild_id"], self.ticket_id, interaction.user.id, "staff_requested"); await interaction.response.send_message("✅ Your request was sent to staff.", ephemeral=True)
     @discord.ui.button(label="Close ticket", style=discord.ButtonStyle.danger, emoji="🔒", custom_id="grid-a1:inactive:close")
     async def close(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not await self._owner_check(interaction): return
@@ -391,7 +392,8 @@ class TicketControls(discord.ui.View):
         if row["owner_id"] != interaction.user.id: return await interaction.response.send_message("Only the ticket owner can mark a ticket urgent.", ephemeral=True)
         from datetime import datetime, timezone, timedelta
         now = datetime.now(timezone.utc)
-        if row["urgent_at"] and now - datetime.fromisoformat(row["urgent_at"]) < timedelta(hours=1): return await interaction.response.send_message("🚨 This ticket was already marked urgent recently. Staff have been notified.", ephemeral=True)
+        urgent_at = row["urgent_at"] if "urgent_at" in row.keys() else None
+        if urgent_at and now - datetime.fromisoformat(urgent_at) < timedelta(hours=1): return await interaction.response.send_message("🚨 This ticket was already marked urgent recently. Staff have been notified.", ephemeral=True)
         self.service.db.update_ticket(row["ticket_id"], urgent_at=now.isoformat(), urgent_by=interaction.user.id)
         roles = [interaction.guild.get_role(role_id) for role_id in self.service.db.staff_role_ids(interaction.guild.id)]; roles = [role for role in roles if role]
         mentions = " ".join(role.mention for role in roles) or "staff"
