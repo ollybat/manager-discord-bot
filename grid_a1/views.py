@@ -80,7 +80,6 @@ class DashboardView(discord.ui.View):
         member = interaction.user
         if not guild or not isinstance(member, discord.Member):
             return False
-        if member.id == guild.owner_id or member.id == self.bot_owner_id: return True
         config = self.database.config(guild.id)
         if not config or not config["owner_role"] or not config["co_owner_role"]:
             return False
@@ -208,7 +207,6 @@ class _ConfigModal(discord.ui.Modal):
     def allowed(self, i):
         g=i.guild; m=i.user
         if not g or not isinstance(m, discord.Member): return False
-        if m.id == g.owner_id or m.id == self.owner_id: return True
         c=self.database.config(g.id)
         return bool(c and c['owner_role'] and c['co_owner_role'] and {r.id for r in m.roles}&{int(c['owner_role']),int(c['co_owner_role'])})
     async def deny(self,i):
@@ -364,15 +362,15 @@ class OwnerInactivityView(discord.ui.View):
         if not row or row["status"] not in ("open", "close_requested") or row["owner_id"] != interaction.user.id:
             await interaction.response.send_message("This inactivity action is no longer available.", ephemeral=True); return False
         return True
-    @discord.ui.button(label="Keep ticket open", style=discord.ButtonStyle.success, emoji="🟢", custom_id=f"grid-a1:inactive:keep:{ticket_id}")
+    @discord.ui.button(label="Keep ticket open", style=discord.ButtonStyle.success, emoji="🟢", custom_id="grid-a1:inactive:keep")
     async def keep(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not await self._owner_check(interaction): return
         self.service.db.mark_activity(self.ticket_id); await interaction.response.send_message("✅ The ticket will stay open. Staff have been notified.", ephemeral=True)
-    @discord.ui.button(label="Request another staff member", style=discord.ButtonStyle.secondary, emoji="🙋", custom_id=f"grid-a1:inactive:staff:{ticket_id}")
+    @discord.ui.button(label="Request another staff member", style=discord.ButtonStyle.secondary, emoji="🙋", custom_id="grid-a1:inactive:staff")
     async def staff(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not await self._owner_check(interaction): return
         self.service.db.set_claim(self.ticket_id, None); self.service.db.mark_activity(self.ticket_id); self.service.db.audit(self.service.db.ticket(self.ticket_id)["guild_id"], self.ticket_id, interaction.user.id, "staff_requested"); await interaction.response.send_message("✅ Your request was sent to staff.", ephemeral=True)
-    @discord.ui.button(label="Close ticket", style=discord.ButtonStyle.danger, emoji="🔒", custom_id=f"grid-a1:inactive:close:{ticket_id}")
+    @discord.ui.button(label="Close ticket", style=discord.ButtonStyle.danger, emoji="🔒", custom_id="grid-a1:inactive:close")
     async def close(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not await self._owner_check(interaction): return
         row = self.service.db.ticket(self.ticket_id)
