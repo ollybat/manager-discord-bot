@@ -503,4 +503,4 @@ async def on_app_command_error(i,error):
         msg = "That command could not be completed. Check setup and bot permissions."
     if i.response.is_done(): await i.followup.send(msg, ephemeral=True)
 
-[8 more lines in file. Use offset=501 to continue.]
+    else: await i.response.send_message(msg, ephemeral=True)
