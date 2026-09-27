@@ -118,7 +118,7 @@ class GridA1Bot(commands.Bot):
                     except Exception: log.exception('Inactivity ticket failed: %s', row['ticket_id'])
             except Exception: log.exception('Inactivity loop failed for guild %s; continuing', getattr(guild, 'id', 'unknown'))
 
-return     @inactivity_loop.before_loop
+    @inactivity_loop.before_loop
     async def before_inactivity_loop(self): await self.wait_until_ready()
     @refresh_panels.before_loop
     async def before_refresh_panels(self): await self.wait_until_ready()
@@ -140,7 +140,7 @@ def _prefix_privileged(ctx, require_staff: bool = False) -> bool:
     if ctx.author.id == ctx.guild.owner_id or ctx.author.id == settings.owner_id: return True
     permissions = ctx.author.guild_permissions
     if permissions.administrator or permissions.manage_guild: return True
-    return require_staff and (permissions.manage_channels or bool(set(role.id for role in ctx.author.roles) & set(bot.database.staff_role_ids(ctx.guild.id) + bot.database.configured_permission_role_ids(ctx.guild.id))))
+    return require_staff and (permissions.manage_channels or bool(set(role.id for role in ctx.author.roles) & set(bot.database.configured_permission_role_ids(ctx.guild.id))))
 
 def _permission_check(require_staff: bool = False):
     async def predicate(interaction: discord.Interaction) -> bool:
@@ -206,7 +206,7 @@ async def moderation_ban(i: discord.Interaction, member: discord.Member, reason:
     if member.id == i.user.id or member.id == i.guild.owner_id: return await i.response.send_message("❌ You cannot ban yourself or the server owner.", ephemeral=True)
     if member.top_role >= i.user.top_role and i.user.id != i.guild.owner_id: return await i.response.send_message("❌ That member has an equal or higher role than you.", ephemeral=True)
     if not i.guild.me or member.top_role >= i.guild.me.top_role: return await i.response.send_message("❌ My bot role must be above that member.", ephemeral=True)
-    try: await member.ban(reason=f"{reason} • Moderator: {i.user}", delete_message_seconds=0)
+    try: await member.ban(reason=f"{reason} • Moderator: {i.user}", delete_message_days=0)
     except discord.Forbidden: return await i.response.send_message("❌ Discord denied the ban. Check Ban Members permission and role hierarchy.", ephemeral=True)
     bot.database.audit(i.guild.id, None, i.user.id, "ban", discord.utils.escape_markdown(reason)[:500])
     await i.response.send_message(embed=embed("💜 Member banned", f"🔨 {member.mention} was banned from the server.\n\n**Reason:** {discord.utils.escape_markdown(reason)[:500]}"), ephemeral=True)
@@ -313,7 +313,7 @@ async def wipefeed_send(i: discord.Interaction, timestamp: str, channel: discord
     try: unix = int(timestamp.strip().replace("<t:", "").split(":", 1)[0])
     except ValueError: return await i.response.send_message("❌ Timestamp must be a Unix timestamp, such as `1785524400`.", ephemeral=True)
     if unix < 0: return await i.response.send_message("❌ Timestamp cannot be negative.", ephemeral=True)
-    content = (f"🇪🇺 **a rust server EU 6X WIPE 2 months ago !** <t:{unix}:R> 🇪🇺\n\n" f"**Server Name**\nVALORA | CLAN | 5X | EU | WEEKLY | .gg/valora5x\n\n" f"Search the name displayed above and add the server to your favorites to be ready.\n\n" f"**Server Information**\n:jack: 5X Gather Rates\n:bp: Instant Crafting\n:crate: Fast Respawn\n:Time: Automatic Events\n:player: 100+ Players\n\n" f"**Latest wipe** • <t:{unix}:F> (<t:{unix}:R>)")
+    content = (f"🇪🇺 **EU 6X WIPE ANNOUNCEMENT** • <t:{unix}:R> 🇪🇺\n\n" f"**Server Name**\nVALORA | CLAN | 5X | EU | WEEKLY | .gg/valora5x\n\n" f"Search the name displayed above and add the server to your favorites to be ready.\n\n" f"**Server Information**\n:jack: 5X Gather Rates\n:bp: Instant Crafting\n:crate: Fast Respawn\n:Time: Automatic Events\n:player: 100+ Players\n\n" f"**Latest wipe** • <t:{unix}:F> (<t:{unix}:R>)")
     try: await channel.send(content)
     except discord.Forbidden: return await i.response.send_message("❌ I cannot post in that channel. Check View Channel and Send Messages permissions.", ephemeral=True)
     bot.database.upsert_config(i.guild.id, wipefeed_channel=channel.id)
