@@ -229,6 +229,8 @@ def _valid_category(g,v):
     c=g.get_channel(_snowflake(v) or 0); return c if isinstance(c,discord.CategoryChannel) else None
 
 class PermissionRolesModal(_ConfigModal):
+    def allowed(self, i):
+        return bool(i.guild and isinstance(i.user, discord.Member) and i.user.id == i.guild.owner_id)
     def __init__(self,d,o):
         super().__init__(d,o,'Configure permission roles')
         for n,l in [('owner','Owner role'),('co_owner','Co-owner role'),('moderator','Moderator role'),('admin','Admin role'),('head_admin','Head admin role')]: self.add_item(discord.ui.TextInput(label=f'{l} ID or mention',custom_id=n,max_length=30))
