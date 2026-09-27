@@ -58,6 +58,7 @@ class DashboardSelect(discord.ui.Select):
             placeholder="📱 Open the App Drawer to Configure…",
             options=[discord.SelectOption(label=label, value=value, description=description, emoji=emoji) for value, label, description, emoji in self.OPTIONS],
             custom_id="grid-a1:dashboard:module",
+            row=0,
         )
 
     async def callback(self, interaction: discord.Interaction):
