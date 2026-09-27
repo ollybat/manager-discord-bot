@@ -504,3 +504,12 @@ async def on_app_command_error(i,error):
     if i.response.is_done(): await i.followup.send(msg, ephemeral=True)
 
     else: await i.response.send_message(msg, ephemeral=True)
+
+
+def run():
+    if not settings.token:
+        raise RuntimeError("DISCORD_TOKEN is missing. Copy .env.example to .env and set it outside Discord.")
+    bot.run(settings.token, log_handler=None)
+
+if __name__ == "__main__":
+    run()
