@@ -69,6 +69,7 @@ class TicketService:
         data=parse_ticket_topic(channel); config=self.db.config(interaction.guild.id); archive=interaction.guild.get_channel(config['logs_channel']) if config else None
         if not isinstance(archive,discord.TextChannel):return await interaction.response.send_message('The logs channel is missing.',ephemeral=True)
         if not interaction.response.is_done():await interaction.response.defer(ephemeral=True)
+        # Defer before any transcript I/O so the interaction token remains valid.
         transcript=await self.transcript(channel); tid=data.get('id',str(channel.id)); closed=utcnow().isoformat(); self.db.update_ticket(tid,status='closed',closed_at=closed,closed_by=interaction.user.id,close_reason=reason,transcript_filename=f'{channel.name}-transcript.html')
         await archive.send(embed=ticket_archive_embed(tid,data.get('region','EU'),data.get('issue','unknown'),interaction.user,reason),file=discord.File(io.BytesIO(transcript.encode()),filename=f'{channel.name}-transcript.html'))
         if hasattr(interaction,'followup'): await interaction.followup.send('✅ Transcript archived. This ticket will now be deleted.',ephemeral=True)
