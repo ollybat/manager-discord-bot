@@ -502,9 +502,11 @@ async def on_app_command_error(i,error):
         msg = str(error)
     else:
         msg = "That command could not be completed. Check setup and bot permissions."
-    if i.response.is_done(): await i.followup.send(msg, ephemeral=True)
-
-    else: await i.response.send_message(msg, ephemeral=True)
+    try:
+        if i.response.is_done(): await i.followup.send(msg, ephemeral=True)
+        else: await i.response.send_message(msg, ephemeral=True)
+    except discord.NotFound:
+        log.warning("Could not deliver application-command error response; interaction expired")
 
 
 def run():
