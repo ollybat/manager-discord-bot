@@ -26,6 +26,7 @@ class GridA1Bot(commands.Bot):
         self._global_sync_in_progress = False
         register_commands(self)
     async def setup_hook(self):
+        log.info("Starting Grid A1: database=%s prefix=%s owner_configured=%s", self.database.path, settings.prefix, bool(settings.owner_id))
         self.database.migrate(); self.add_view(TicketPanel(self.tickets)); self.add_view(TicketControls(self.tickets)); self.add_view(VerifyPanel(self.database))
         for row in self.database.open_tickets_all(): self.add_view(OwnerInactivityView(self.tickets, row['ticket_id']))
         self.refresh_panels.start(); self.inactivity_loop.start()
