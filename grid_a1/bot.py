@@ -183,8 +183,9 @@ async def anti_links(i: discord.Interaction, enabled: bool, action: app_commands
     await i.response.send_message(embed=embed("Anti-links settings saved", f"Protection: {'enabled' if enabled else 'disabled'}\nAction: {mode}\nWhitelist domains: {len(domains)}\nBypass roles: {len(roles)}"), ephemeral=True)
 
 @bot.tree.command(name="dashboard", description="Open the private owner master dashboard")
-@dashboard_access()
 async def dashboard(i: discord.Interaction):
+    if not _dashboard_access(i):
+        return await i.response.send_message("Dashboard access requires the configured owner or co-owner role. The server owner must first run /setup roles.", ephemeral=True)
     if not i.guild: return await i.response.send_message("❌ The dashboard can only be opened inside a server.", ephemeral=True)
     view = DashboardView(bot.database, settings.owner_id)
     await i.response.send_message(embed=view.dashboard_embed(i.guild), view=view, ephemeral=True)
