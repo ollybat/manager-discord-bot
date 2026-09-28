@@ -10,7 +10,7 @@ class TicketService:
     async def create(self,interaction,issue,label,region,details):
         guild=interaction.guild
         if not interaction.response.is_done(): await interaction.response.defer(ephemeral=True)
-        if not guild or region!='EU': return await interaction.followup.send('Only EU support is currently available.',ephemeral=True)
+        if not guild or region!='EU': return await interaction.followup.send('❌ Only EU support is currently available. Choose EU and try again.',ephemeral=True)
         config=self.db.config(guild.id)
         if not config or not config['ticket_category'] or not config['logs_channel']: return await interaction.followup.send('Tickets are not configured.',ephemeral=True)
         existing=self.db.open_ticket_for_owner(guild.id,interaction.user.id)
