@@ -498,6 +498,10 @@ async def on_app_command_error(i,error):
         msg = "You do not have permission to use that command."
     elif isinstance(error, (OwnerConfigurationError, OwnerOnlyError)):
         msg = str(error)
+    elif isinstance(error, app_commands.CheckFailure) and getattr(error, "command", None) and error.command.name == "dashboard":
+        msg = "Dashboard access is not configured for you. The server owner must run /setup roles with the owner and co-owner roles."
+    elif isinstance(error, app_commands.CheckFailure):
+        msg = "You do not have permission to use this command."
     elif isinstance(original, RuntimeError):
         msg = str(error)
     else:
