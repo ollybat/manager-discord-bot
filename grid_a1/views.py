@@ -71,6 +71,8 @@ class DashboardView(discord.ui.View):
     MODULE_LABELS = {"ticket": "Ticket setup", "staff": "Staff roles", "permission": "Permission roles", "verification": "Verification panel", "welcome": "Welcome system", "moderation": "Moderation settings", "server": "Server information", "announcement": "Announcement channels", "status": "Bot status"}
     NEXT_ACTIONS = {"ticket": "Next action: configure the panel, logs, category, and inactivity hours.", "staff": "Next action: add at least one notification role if staff alerts are needed.", "permission": "Next action: configure all owner/co-owner and staff permission roles.", "verification": "Next action: configure the panel channel and a manageable verification role.", "welcome": "Next action: configure every community channel used by the welcome system.", "moderation": "Next action: moderation commands are ready; review command permissions if needed.", "server": "Next action: no configuration is required; use this page for live server details.", "announcement": "Next action: configure a channel here, then use `/wipefeed enable enabled:true` and `/wipefeed send`.", "status": "Next action: no configuration is required; investigate only if gateway latency is unavailable."}
     def __init__(self, database, bot_owner_id: int | None):
+        # Five explicit rows: drawer, three config actions, navigation/actions.
+        # Discord rejects component layouts that spill beyond row 4.
         super().__init__(timeout=600)
         self.database = database
         self.bot_owner_id = bot_owner_id
@@ -190,7 +192,7 @@ class DashboardView(discord.ui.View):
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.edit_message(embed=self.dashboard_embed(interaction.guild), view=self)
 
-    @discord.ui.button(label="Refresh configuration", style=discord.ButtonStyle.primary, emoji="🔄", custom_id="grid-a1:dashboard:refresh")
+    @discord.ui.button(label="Refresh configuration", style=discord.ButtonStyle.primary, emoji="🔄", row=3, custom_id="grid-a1:dashboard:refresh")
     async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.edit_message(embed=self.dashboard_embed(interaction.guild), view=self)
 
