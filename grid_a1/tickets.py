@@ -3,7 +3,7 @@ import io, logging, uuid
 import discord
 from .database import Database
 from .embeds import embed, ticket_archive_embed, ticket_embed, inactivity_indicator
-from .utils import is_ticket, parse_ticket_topic, sanitize_channel_name, staff_member, ticket_topic, utcnow
+from .utils import is_ticket, parse_ticket_topic, sanitize_channel_name, staff_member, ticket_status_title, ticket_topic, utcnow
 log=logging.getLogger(__name__)
 class TicketService:
     def __init__(self,database:Database): self.db=database
@@ -17,11 +17,23 @@ class TicketService:
         if existing:
             channel=guild.get_channel(existing['channel_id'])
             if channel:return await interaction.followup.send(f'You already have an open ticket: {channel.mention}',ephemeral=True)
+            try:
+                channel=await guild.fetch_channel(existing['channel_id'])
+            except discord.NotFound:
+                self.db.close_orphaned_ticket(existing['ticket_id'])
+                log.info('Closed orphaned ticket %s after Discord confirmed its channel is missing', existing['ticket_id'])
+            except discord.Forbidden:
+                return await interaction.followup.send('I cannot verify your existing ticket channel. Please contact staff before opening another ticket.',ephemeral=True)
+            except discord.HTTPException as error:
+                log.warning('Could not verify existing ticket channel %s: %s', existing['channel_id'], error)
+                return await interaction.followup.send('I could not verify your existing ticket channel right now. Please try again shortly.',ephemeral=True)
+            else:
+                return await interaction.followup.send(f'You already have an open ticket: {channel.mention}',ephemeral=True)
         category=guild.get_channel(config['ticket_category'])
         if not isinstance(category,discord.CategoryChannel):return await interaction.followup.send('The configured ticket category is missing.',ephemeral=True)
         ticket_id=uuid.uuid4().hex[:8].upper(); overwrites={guild.default_role:discord.PermissionOverwrite(view_channel=False),interaction.user:discord.PermissionOverwrite(view_channel=True,send_messages=True,read_message_history=True,attach_files=True)}
         if guild.me:overwrites[guild.me]=discord.PermissionOverwrite(view_channel=True,send_messages=True,manage_channels=True,attach_files=True)
-        role_ids=set(self.db.staff_role_ids(guild.id))|set(self.db.configured_permission_role_ids(guild.id))
+        role_ids=set(self.db.ticket_access_role_ids(guild.id))
         for rid in role_ids:
             role=guild.get_role(rid)
             if role:overwrites[role]=discord.PermissionOverwrite(view_channel=True,send_messages=True,read_message_history=True,attach_files=True)
@@ -32,7 +44,7 @@ class TicketService:
         welcome=ticket_embed(label,region,details); welcome.title=f'💜 {label.title()} Support Ticket'; welcome.description=f'Welcome {interaction.user.mention}! Your private support channel is ready.'
         await channel.send(content=interaction.user.mention,embed=welcome,view=TicketControls(self)); await self.notify_staff(guild,channel,ticket_id,label,region,interaction.user.id); await interaction.followup.send(f'✅ Ticket **{ticket_id}** created: {channel.mention}',ephemeral=True)
     async def notify_staff(self,guild,channel,ticket_id,issue,region,owner_id):
-        roles=[guild.get_role(r) for r in self.db.staff_role_ids(guild.id)]; roles=[r for r in roles if r]
+        roles=[guild.get_role(r) for r in self.db.configured_permission_role_ids(guild.id)]; roles=[r for r in roles if r]
         if roles: await channel.send('📣 '+' '.join(r.mention for r in roles)+' — staff notification: a support ticket needs attention.',allowed_mentions=discord.AllowedMentions(roles=True))
     async def transcript(self,channel):
         from .transcript import render
@@ -52,7 +64,7 @@ class TicketService:
         try:
             async for message in channel.history(limit=20,oldest_first=True):
                 if message.author==channel.guild.me and message.embeds:
-                    e=message.embeds[0].copy(); e.title=f'{indicator} 🎫 {e.title.lstrip("🟢🟡🔴 ")}'
+                    e=message.embeds[0].copy(); e.title=ticket_status_title(e.title,indicator)
                     for idx,field in enumerate(e.fields):
                         if field.name in ('🟢 Status','🟡 Status','🔴 Status','🟣 Status','Activity'): e.set_field_at(idx,name=field.name,value=f'Inactive for **{duration}**',inline=True)
                     await message.edit(embed=e); return
@@ -61,7 +73,7 @@ class TicketService:
         row=self.db.ticket(ticket_id); guild=interaction.client.get_guild(row['guild_id']) if row else None; channel=guild.get_channel(row['channel_id']) if guild and row else None
         if not row or not isinstance(channel,discord.TextChannel):return await interaction.response.send_message('This ticket is already closed.',ephemeral=True)
         class P:pass
-        p=P();p.channel=channel;p.guild=guild;p.user=interaction.user;p.response=interaction.response;await self.close(p,reason,True)
+        p=P();p.channel=channel;p.guild=guild;p.user=interaction.user;p.response=interaction.response;p.followup=interaction.followup;await self.close(p,reason,True)
     async def close(self,interaction,reason,allow_owner=False):
         channel=interaction.channel
         if not isinstance(channel,discord.TextChannel) or not is_ticket(channel):return await interaction.response.send_message('This only works inside a ticket.',ephemeral=True)
