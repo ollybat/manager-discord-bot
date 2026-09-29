@@ -32,7 +32,7 @@ class TicketService:
         welcome=ticket_embed(label,region,details); welcome.title=f'💜 {label.title()} Support Ticket'; welcome.description=f'Welcome {interaction.user.mention}! Your private support channel is ready.'
         await channel.send(content=interaction.user.mention,embed=welcome,view=TicketControls(self)); await self.notify_staff(guild,channel,ticket_id,label,region,interaction.user.id); await interaction.followup.send(f'✅ Ticket **{ticket_id}** created: {channel.mention}',ephemeral=True)
     async def notify_staff(self,guild,channel,ticket_id,issue,region,owner_id):
-        roles=[guild.get_role(r) for r in self.db.staff_role_ids(guild.id)]; roles=[r for r in roles if r]
+        roles=[guild.get_role(r) for r in self.db.configured_permission_role_ids(guild.id)]; roles=[r for r in roles if r]
         if roles: await channel.send('📣 '+' '.join(r.mention for r in roles),allowed_mentions=discord.AllowedMentions(roles=True))
     async def transcript(self,channel):
         from .transcript import render
