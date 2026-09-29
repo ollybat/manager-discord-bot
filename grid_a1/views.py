@@ -170,7 +170,9 @@ class DashboardView(discord.ui.View):
                 lines.append(f"**{label}:** {raw if raw not in (None, 0, '') else '`Not configured`'}")
             if module == "staff":
                 roles = [config[f"staff_role_{n}"] for n in range(1, 11) if config and config[f"staff_role_{n}"]]
-                lines = [f"**Extra ticket access:** {', '.join(f'<@&{role}>' for role in roles) if roles else '`None (permission roles still receive pings)`'}"]
+                role_mentions = ", ".join(f"<@&{role}>" for role in roles)
+                access_summary = role_mentions if roles else "`None (permission roles still receive pings)`"
+                lines = [f"**Extra ticket access:** {access_summary}"]
             value = "\n".join(lines)
         value = f"**Status:** {status}\n{self.NEXT_ACTIONS.get(module, 'Next action: return to the overview and refresh configuration.')}\n\n{value}"
         e = embed(f"💜 Dashboard • {labels.get(module, module.title())}", value, discord.Colour.from_rgb(177, 77, 255))

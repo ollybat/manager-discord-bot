@@ -30,7 +30,8 @@ async def render(messages, channel, data, record=None) -> str:
                     images += f'<p>Image unavailable after channel deletion: {e(a.filename)}</p>'
             elif (a.content_type or '').startswith('image/'):
                 images += f'<p>Image not embedded: {e(a.filename)} (5 MB per-image or 20 MB total transcript cache limit)</p>'
-        cards.append(f'<article class="message-card"><div class="avatar" aria-hidden="true">{initials}</div><div class="message-body"><header><strong>{name}</strong><time>{dt(m.created_at)}</time></header><div class="content">{body}</div>{images}{f"<ul class=attachments aria-label=Attachments>{files}</ul>" if files else ""}</div></article>')
+        attachment_list = f'<ul class="attachments" aria-label="Attachments">{files}</ul>' if files else ''
+        cards.append(f'<article class="message-card"><div class="avatar" aria-hidden="true">{initials}</div><div class="message-body"><header><strong>{name}</strong><time>{dt(m.created_at)}</time></header><div class="content">{body}</div>{images}{attachment_list}</div></article>')
     owner = channel.guild.get_member(int(data['owner'])) if data.get('owner','').isdigit() else None
     closer = channel.guild.get_member(record['closed_by']) if record and record['closed_by'] else None
     summary = f'<dl><div><dt>Ticket ID</dt><dd><code>{e(data.get("id", str(channel.id)))}</code></dd></div><div><dt>Issue</dt><dd>{e(data.get("issue", "Not available"))}</dd></div><div><dt>Region</dt><dd>{e(data.get("region", "Not available"))}</dd></div><div><dt>Opened</dt><dd>{dt(channel.created_at)}</dd></div><div><dt>Owner</dt><dd>{e(owner.display_name if owner else "Not available")}</dd></div><div><dt>Closed</dt><dd>{dt(record['closed_at']) if record and record['closed_at'] else "Not closed"}</dd></div><div><dt>Closer</dt><dd>{e(closer.display_name if closer else "Not available")}</dd></div></dl>'
