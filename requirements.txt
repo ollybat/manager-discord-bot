@@ -3,3 +3,6 @@ python-dotenv>=1.0,<2
 
 davey>=0.1,<1
 PyNaCl>=1.5,<2
+# Optional only: the bot's Database implementation is SQLite-only. This adapter is
+# not selected by the runtime; install it only for operator-led PostgreSQL tooling.
+psycopg[binary]>=3.1,<4
