@@ -20,8 +20,7 @@ def register_commands(bot)->None:
     @bot.tree.command(name="help",description="Open the Grid A1 command center")
     async def help_command(i):
         e=embed("💜 Grid A1 • Command Center","✨ A concise, permission-aware guide to the commands available in this bot.",discord.Colour.from_rgb(177,77,255))
-        e.add_field(name="🌐 Everyone",value="`/help` — This guide\n`/info server` — Server overview\n`/embed` — Post a custom embed\n`/anti-links` — Configure external link protection (Manage Server)
-`/wipefeed enable` / `/wipefeed send` — Manage EU 6X wipe announcements",inline=False)
+        e.add_field(name="🌐 Everyone",value="`/help` — This guide\n`/info server` — Server overview\n`/embed` — Post a custom embed",inline=False)
         if not i.guild or not isinstance(i.user,discord.Member):
             e.set_footer(text="Use commands inside a server for permission-aware sections."); return await i.response.send_message(embed=e,ephemeral=True)
         m=i.user; c=bot.database.config(i.guild.id); owner=m.id==i.guild.owner_id or m.id==bot.settings_owner_id
@@ -29,8 +28,8 @@ def register_commands(bot)->None:
         admin=owner or m.guild_permissions.administrator or m.guild_permissions.manage_guild
         staff=admin or m.guild_permissions.manage_channels or bool({r.id for r in m.roles}&set(bot.database.configured_permission_role_ids(i.guild.id)))
         if dashboard:e.add_field(name="🎛️ Owner dashboard",value="`/dashboard` — Private master overview, module drawer, refresh, and safe configuration\n`/setup roles owner_role: ... co_owner_role: ... head_admin_role: ... admin_role: ... moderator_role: ...` — Configure the five staff roles (server owner only)\nAccess: members holding the configured owner or co-owner role only.",inline=False)
-        if admin:e.add_field(name="🛡️ Safety & moderation",value="`/anti-links` — Block websites and Discord invites\nConfigure enabled, action, log channel, whitelist domains, bypass roles, and allowed link roles. The bot needs Message Content Intent and Manage Messages.",inline=False)
-        if admin:e.add_field(name="⚙️ Setup & community",value="`/setup tickets` — Configure and publish support panel; new-ticket pings use the roles from `/setup roles`\n`/setup welcomer` — Configure welcome channels\n`/verifypanel` — Publish verification panel\n`/staff` — View notification roles\n`/roles setchannel` — Post role directory\n`/wipefeed enable` / `/wipefeed send` — Manage announcements\n`/welcomer preview` / `/welcomer test` — Preview or test welcome",inline=False)
+        if admin:e.add_field(name="🛡️ Safety & moderation",value="`/anti-links` — Block external websites and Discord invites; configure enabled, action, and log channel. The bot needs Message Content Intent and Manage Messages.",inline=False)
+        if admin:e.add_field(name="⚙️ Setup & community",value="`/setup tickets` — Configure and publish support panel; new-ticket pings use the roles from `/setup roles`\n`/setup welcomer` — Configure welcome channels\n`/verifypanel` — Publish verification panel\n`/roles setchannel` — Post role directory\n`/wipefeed enable` / `/wipefeed send` — Manage announcements\n`/welcomer preview` / `/welcomer test` — Preview or test welcome",inline=False)
         if staff:e.add_field(name="🛡️ Staff tools",value="`/ticket claim` / `/ticket transfer` — Assign tickets\n`/ticket remove` / `/ticket requestclose` / `/ticket close` — Manage tickets\n`/kick` `/ban` `/warn` `/timeout` — Moderation\n`!lock` / `!unlock` — Lock or unlock a channel",inline=False)
         if owner:e.add_field(name="👑 Bot owner",value="`/ping` — Private diagnostics\n`/sync` — Explicit command synchronization",inline=False)
         e.set_footer(text="Protected sections appear only when your current access permits them."); await i.response.send_message(embed=e,ephemeral=True)
