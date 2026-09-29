@@ -115,6 +115,36 @@ class Database:
             db.execute("UPDATE tickets SET status='closed', closed_at=?, close_reason=? WHERE ticket_id=?",(now,reason,row['ticket_id']))
             db.execute("INSERT INTO audit_log(guild_id,ticket_id,actor_id,action,metadata,created_at) VALUES(?,?,?,?,?,?)",(row['guild_id'],row['ticket_id'],0,'channel_missing',json.dumps({'channel_id':channel_id}),now))
             return row['ticket_id']
+    def finalize_ticket_close(self, ticket_id, *, closed_by, reason, closed_at, region, issue, transcript_filename):
+        """Atomically mark a ticket closed and record its archive/audit row."""
+        with self.connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            try:
+                row = db.execute("SELECT guild_id, status FROM tickets WHERE ticket_id=?", (ticket_id,)).fetchone()
+                if not row or row['status'] not in ('open', 'close_requested'):
+                    db.execute('COMMIT')
+                    return False
+                changed = db.execute(
+                    "UPDATE tickets SET status='closed', closed_at=?, closed_by=?, close_reason=?, transcript_filename=? "
+                    "WHERE ticket_id=? AND status IN ('open','close_requested')",
+                    (closed_at, closed_by, reason[:1000], transcript_filename, ticket_id),
+                ).rowcount
+                if changed:
+                    db.execute(
+                        'INSERT INTO closed_tickets(guild,region,issue,closed_by,reason,closed_at) VALUES(?,?,?,?,?,?)',
+                        (row['guild_id'], region, issue, closed_by, reason[:1000], closed_at),
+                    )
+                    db.execute(
+                        'INSERT INTO audit_log(guild_id,ticket_id,actor_id,action,metadata,created_at) VALUES(?,?,?,?,?,?)',
+                        (row['guild_id'], ticket_id, closed_by, 'closed',
+                         json.dumps({'region': region, 'issue': issue, 'reason': reason[:1000]}), closed_at),
+                    )
+                db.execute('COMMIT')
+                return bool(changed)
+            except Exception:
+                db.execute('ROLLBACK')
+                raise
+
     def close_orphaned_ticket(self, ticket_id):
         """Close an open ticket whose Discord channel was confirmed missing."""
         now = utcnow().isoformat()
