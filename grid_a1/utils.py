@@ -22,6 +22,12 @@ def sanitize_channel_name(region: str, issue: str, username: str, ticket_id: str
     value = re.sub(r"-+", "-", value).strip("-")
     return (value or f"ticket-{ticket_id}")[:90]
 
+def ticket_status_title(title: str | None, indicator: str) -> str:
+    """Return a bounded, idempotent status title without accumulating decorations."""
+    base = re.sub(r'^(?:(?:🟢|🟡|🔴|🟣|💜|🎫)\s*)+', '', title or '').strip()
+    prefix = f"{indicator} 🎫 "
+    return (prefix + base)[:256]
+
 def ticket_topic(ticket_id: str, owner_id: int, issue: str, region: str) -> str:
     return f"{TICKET_TOPIC_PREFIX};id={ticket_id};owner={owner_id};issue={quote(issue, safe='')};region={region}"
 
