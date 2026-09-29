@@ -10,7 +10,7 @@ from pathlib import Path
 
 from grid_a1.database import Database
 from grid_a1.embeds import inactivity_indicator
-from grid_a1.utils import detected_external_links, inactivity_custom_id, safe_json_list, sanitize_channel_name, ticket_status_title
+from grid_a1.utils import detected_external_links, inactivity_custom_id, is_http_url, safe_json_list, sanitize_channel_name, ticket_status_title
 
 
 ROOT = Path(__file__).parent
@@ -29,14 +29,15 @@ class CoreTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             database = Database(Path(directory) / "manager.sqlite3")
             database.migrate()
-            database.upsert_config(42, owner_role=101, co_owner_role=102, head_admin_role=103, admin_role=104, moderator_role=105)
+            database.upsert_config(42, owner_role=101, co_owner_role=102, head_admin_role=103, admin_role=104, moderator_role=105, report_channel=9900)
             database.create_ticket(ticket_id="ABC123", guild_id=42, channel_id=9001, owner_id=7001,
                                    issue="links", region="EU", opened_at="2024-01-01T00:00:00+00:00",
                                    last_activity_at="2024-01-01T00:00:00+00:00")
             database.migrate()
             self.assertEqual(database.ticket("ABC123")["issue"], "links")
             self.assertEqual(database.config(42)["owner_role"], 101)
-            self.assertEqual(database.startup_check()["schema_version"], 16)
+            self.assertEqual(database.config(42)["report_channel"], 9900)
+            self.assertEqual(database.startup_check()["schema_version"], 17)
 
     def test_one_open_ticket_constraint(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -148,7 +149,7 @@ class CoreTests(unittest.TestCase):
                 yield child
                 pending.extend(ast.iter_child_nodes(child))
 
-        for path in (ROOT / "grid_a1" / "bot.py", ROOT / "grid_a1" / "views.py", ROOT / "grid_a1" / "tickets.py", ROOT / "grid_a1" / "commands.py"):
+        for path in (ROOT / "grid_a1" / "bot.py", ROOT / "grid_a1" / "views.py", ROOT / "grid_a1" / "dashboard_setup.py", ROOT / "grid_a1" / "tickets.py", ROOT / "grid_a1" / "commands.py"):
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
             for node in ast.walk(tree):
                 if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -158,6 +159,32 @@ class CoreTests(unittest.TestCase):
                 response_lines = [call.lineno for call in calls if call_path(call).endswith("response.send_message")]
                 for defer_line in defer_lines:
                     self.assertFalse(any(line > defer_line for line in response_lines), f"{path}:{node.name} sends an initial response after deferring")
+
+    def test_report_proof_urls_require_absolute_http_or_https(self):
+        self.assertTrue(is_http_url("https://evidence.example/report/123"))
+        self.assertTrue(is_http_url("http://example.org/file.png"))
+        self.assertFalse(is_http_url("javascript:alert(1)"))
+        self.assertFalse(is_http_url("relative/path"))
+        self.assertFalse(is_http_url("https://"))
+
+    def test_report_command_is_public_and_accepts_link_or_uploaded_proof(self):
+        source = (ROOT / "grid_a1" / "bot.py").read_text(encoding="utf-8")
+        start = source.index('@bot.tree.command(name="report"')
+        end = source.index('@bot.tree.command(name="dashboard"', start)
+        command = source[start:end]
+        self.assertIn("member: discord.Member", command)
+        self.assertIn("proof_link: str | None", command)
+        self.assertIn("proof_file: discord.Attachment | None", command)
+        self.assertNotIn("has_permissions", command)
+        self.assertIn("report_channel", command)
+
+    def test_dashboard_configuration_uses_native_dropdowns(self):
+        source = (ROOT / "grid_a1" / "dashboard_setup.py").read_text(encoding="utf-8")
+        self.assertIn("discord.ui.RoleSelect", source)
+        self.assertIn("discord.ui.ChannelSelect", source)
+        self.assertIn("class TicketSetupWizardView", source)
+        self.assertIn("class WelcomeStepOneView", source)
+        self.assertIn("class ReportChannelWizardView", source)
 
     def test_help_does_not_advertise_removed_commands_or_anti_link_options(self):
         source = (ROOT / "grid_a1" / "commands.py").read_text(encoding="utf-8")
