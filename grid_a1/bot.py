@@ -115,21 +115,54 @@ class GridA1Bot(commands.Bot):
                 for row in self.database.open_tickets(guild.id):
                     try:
                         channel = guild.get_channel(row['channel_id'])
+                        if channel is None:
+                            try:
+                                channel = await guild.fetch_channel(row['channel_id'])
+                            except discord.NotFound:
+                                self.database.mark_channel_missing(row['channel_id'])
+                                continue
+                            except discord.Forbidden:
+                                log.warning('Cannot verify ticket channel %s; leaving its record untouched', row['channel_id'])
+                                continue
+                            except discord.HTTPException as error:
+                                log.warning('Could not fetch ticket channel %s (HTTP %s); retrying later', row['channel_id'], getattr(error, 'status', 'unknown'))
+                                continue
                         if not isinstance(channel, discord.TextChannel):
-                            self.database.mark_channel_missing(row['channel_id'])
+                            log.warning('Ticket %s resolves to a non-text channel; leaving its record untouched', row['ticket_id'])
                             continue
                         indicator, duration = inactivity_indicator(row['last_activity_at'], threshold, bool(row['owner_left']))
                         red = indicator == '🔴'
                         if red and not row['inactivity_notice_at']:
-                            owner = guild.get_member(row['owner_id'])
                             now = datetime.now(timezone.utc)
-                            view = OwnerInactivityView(self.tickets, row['ticket_id'])
-                            self.add_view(view)
-                            if owner:
-                                try: await owner.send(f'🔴 Your Grid A1 ticket **{row["ticket_id"]}** has been inactive for **{duration}**. Please choose an option below within 24 hours.', view=view)
-                                except discord.DiscordException: log.info('Could not DM inactive ticket owner %s', row['owner_id'])
-                            self.database.update_ticket(row['ticket_id'], inactivity_notice_at=now.isoformat(), auto_close_at=(now + timedelta(hours=24)).isoformat())
-                            self.database.audit(guild.id,row['ticket_id'],0,'inactivity_notice', '{"indicator":"red"}')
+                            deadline = (now + timedelta(hours=24)).isoformat()
+                            if row['owner_left']:
+                                self.database.update_ticket(row['ticket_id'], inactivity_notice_at=now.isoformat(), auto_close_at=deadline, auto_close_reason='owner_left')
+                                self.database.audit(guild.id,row['ticket_id'],0,'inactivity_owner_left', '{"auto_close_hours":24}')
+                            else:
+                                owner = guild.get_member(row['owner_id'])
+                                if owner is None:
+                                    try:
+                                        owner = await guild.fetch_member(row['owner_id'])
+                                    except discord.NotFound:
+                                        self.database.update_ticket(row['ticket_id'], owner_left=1, inactivity_notice_at=now.isoformat(), auto_close_at=deadline, auto_close_reason='owner_left')
+                                        self.database.audit(guild.id,row['ticket_id'],0,'inactivity_owner_missing', '{"auto_close_hours":24}')
+                                        owner = None
+                                    except discord.HTTPException as error:
+                                        log.warning('Could not fetch ticket owner %s (HTTP %s); leaving ticket open', row['owner_id'], getattr(error, 'status', 'unknown'))
+                                        continue
+                                if owner is not None:
+                                    view = OwnerInactivityView(self.tickets, row['ticket_id'])
+                                    self.add_view(view)
+                                    try:
+                                        await owner.send(f'🔴 Your Grid A1 ticket **{row["ticket_id"]}** has been inactive for **{duration}**. Please choose an option below within 24 hours.', view=view)
+                                    except discord.Forbidden:
+                                        log.info('Ticket owner %s has DMs disabled; leaving the ticket open without an auto-close deadline', row['owner_id'])
+                                        continue
+                                    except discord.HTTPException as error:
+                                        log.warning('Could not send inactivity notice to %s (HTTP %s); leaving ticket open', row['owner_id'], getattr(error, 'status', 'unknown'))
+                                        continue
+                                    self.database.update_ticket(row['ticket_id'], inactivity_notice_at=now.isoformat(), auto_close_at=deadline)
+                                    self.database.audit(guild.id,row['ticket_id'],0,'inactivity_notice', '{"indicator":"red"}')
                         elif red and row['auto_close_at'] and datetime.fromisoformat(row['auto_close_at']) <= datetime.now(timezone.utc):
                             await self.tickets.close_system(guild, channel, 'Auto-closed after inactivity grace period')
                             continue
@@ -208,10 +241,11 @@ async def moderation_kick(i: discord.Interaction, member: discord.Member, reason
     if member.id == i.user.id or member.id == i.guild.owner_id: return await i.response.send_message("❌ You cannot kick yourself or the server owner.", ephemeral=True)
     if member.top_role >= i.user.top_role and i.user.id != i.guild.owner_id: return await i.response.send_message("❌ That member has an equal or higher role than you.", ephemeral=True)
     if not i.guild.me or member.top_role >= i.guild.me.top_role: return await i.response.send_message("❌ My bot role must be above that member.", ephemeral=True)
+    await i.response.defer(ephemeral=True)
     try: await member.kick(reason=f"{reason} • Moderator: {i.user}")
-    except discord.Forbidden: return await i.response.send_message("❌ Discord denied the kick. Check Kick Members permission and role hierarchy.", ephemeral=True)
+    except discord.Forbidden: return await i.followup.send("❌ Discord denied the kick. Check Kick Members permission and role hierarchy.", ephemeral=True)
     bot.database.audit(i.guild.id, None, i.user.id, "kick", discord.utils.escape_markdown(reason)[:500])
-    await i.response.send_message(embed=embed("💜 Member kicked", f"✅ {member.mention} was removed from the server.\n\n**Reason:** {discord.utils.escape_markdown(reason)[:500]}"), ephemeral=True)
+    await i.followup.send(embed=embed("💜 Member kicked", f"✅ {member.mention} was removed from the server.\n\n**Reason:** {discord.utils.escape_markdown(reason)[:500]}"), ephemeral=True)
 
 @bot.tree.command(name="ban", description="Ban a member from this Discord server")
 @staff()
@@ -219,10 +253,11 @@ async def moderation_ban(i: discord.Interaction, member: discord.Member, reason:
     if member.id == i.user.id or member.id == i.guild.owner_id: return await i.response.send_message("❌ You cannot ban yourself or the server owner.", ephemeral=True)
     if member.top_role >= i.user.top_role and i.user.id != i.guild.owner_id: return await i.response.send_message("❌ That member has an equal or higher role than you.", ephemeral=True)
     if not i.guild.me or member.top_role >= i.guild.me.top_role: return await i.response.send_message("❌ My bot role must be above that member.", ephemeral=True)
+    await i.response.defer(ephemeral=True)
     try: await member.ban(reason=f"{reason} • Moderator: {i.user}", delete_message_seconds=0)
-    except discord.Forbidden: return await i.response.send_message("❌ Discord denied the ban. Check Ban Members permission and role hierarchy.", ephemeral=True)
+    except discord.Forbidden: return await i.followup.send("❌ Discord denied the ban. Check Ban Members permission and role hierarchy.", ephemeral=True)
     bot.database.audit(i.guild.id, None, i.user.id, "ban", discord.utils.escape_markdown(reason)[:500])
-    await i.response.send_message(embed=embed("💜 Member banned", f"🔨 {member.mention} was banned from the server.\n\n**Reason:** {discord.utils.escape_markdown(reason)[:500]}"), ephemeral=True)
+    await i.followup.send(embed=embed("💜 Member banned", f"🔨 {member.mention} was banned from the server.\n\n**Reason:** {discord.utils.escape_markdown(reason)[:500]}"), ephemeral=True)
 
 @bot.tree.command(name="warn", description="Record a warning for a member")
 @staff()
@@ -237,10 +272,11 @@ async def moderation_timeout(i: discord.Interaction, member: discord.Member, min
     if member.id == i.user.id or member.id == i.guild.owner_id: return await i.response.send_message("❌ You cannot timeout yourself or the server owner.", ephemeral=True)
     if member.top_role >= i.user.top_role and i.user.id != i.guild.owner_id: return await i.response.send_message("❌ That member has an equal or higher role than you.", ephemeral=True)
     if not i.guild.me or member.top_role >= i.guild.me.top_role: return await i.response.send_message("❌ My bot role must be above that member.", ephemeral=True)
+    await i.response.defer(ephemeral=True)
     try: await member.timeout(discord.utils.utcnow() + __import__("datetime").timedelta(minutes=minutes), reason=f"{reason} • Moderator: {i.user}")
-    except discord.Forbidden: return await i.response.send_message("❌ Discord denied the timeout. Check Moderate Members permission and role hierarchy.", ephemeral=True)
+    except discord.Forbidden: return await i.followup.send("❌ Discord denied the timeout. Check Moderate Members permission and role hierarchy.", ephemeral=True)
     bot.database.audit(i.guild.id, None, i.user.id, "timeout", f"member={member.id}; minutes={minutes}; {discord.utils.escape_markdown(reason)[:400]}")
-    await i.response.send_message(embed=embed("💜 Member timed out", f"⏳ {member.mention} was timed out for **{minutes} minute(s)**.\n\n**Reason:** {discord.utils.escape_markdown(reason)[:500]}"), ephemeral=True)
+    await i.followup.send(embed=embed("💜 Member timed out", f"⏳ {member.mention} was timed out for **{minutes} minute(s)**.\n\n**Reason:** {discord.utils.escape_markdown(reason)[:500]}"), ephemeral=True)
 
 @bot.command(name="lock")
 async def prefix_lock(ctx):
@@ -284,9 +320,10 @@ async def verifypanel(i: discord.Interaction, channel: discord.TextChannel, role
     panel.add_field(name="🔐 Verification steps", value="1️⃣ Start verification\n2️⃣ Review your result\n3️⃣ Confirm the rules\n4️⃣ Receive access", inline=False)
     panel.add_field(name="💬 Need help?", value="If you need help, please open a support ticket.", inline=False)
     panel.set_footer(text="Grid A1 • Secure, fair, Discord-only verification")
+    await i.response.defer(ephemeral=True)
     message = await channel.send(embed=panel, view=VerifyPanel(bot.database))
     bot.database.upsert_config(i.guild.id, verify_panel_channel=channel.id, verify_panel_message=message.id, verify_role=role.id)
-    await i.response.send_message(embed=embed("💜 Verification panel created", f"✅ Panel posted in {channel.mention}.\n🎭 Role: {role.mention}"), ephemeral=True)
+    await i.followup.send(embed=embed("💜 Verification panel created", f"✅ Panel posted in {channel.mention}.\n🎭 Role: {role.mention}"), ephemeral=True)
 
 
 @ticket_group.command(name="remove", description="Remove a user from the current ticket")
@@ -295,9 +332,10 @@ async def ticket_remove(i: discord.Interaction, user: discord.Member):
     if not isinstance(i.channel, discord.TextChannel) or not is_ticket(i.channel): return await i.response.send_message("❌ This only works inside a ticket.", ephemeral=True)
     data = parse_ticket_topic(i.channel)
     if user.id == int(data.get("owner", "0")): return await i.response.send_message("❌ You cannot remove the ticket owner.", ephemeral=True)
+    await i.response.defer(ephemeral=True)
     try: await i.channel.set_permissions(user, overwrite=None, reason=f"Removed from ticket by {i.user}")
-    except discord.Forbidden: return await i.response.send_message("❌ I cannot remove that user from this ticket.", ephemeral=True)
-    await i.response.send_message(f"✅ Removed {user.mention} from this ticket.", ephemeral=True)
+    except discord.Forbidden: return await i.followup.send("❌ I cannot remove that user from this ticket.", ephemeral=True)
+    await i.followup.send(f"✅ Removed {user.mention} from this ticket.", ephemeral=True)
 
 wipefeed_group = app_commands.Group(name="wipefeed", description="Manage EU 6X wipe announcements")
 bot.tree.add_command(wipefeed_group)
@@ -319,10 +357,11 @@ async def wipefeed_send(i: discord.Interaction, timestamp: str, channel: discord
     except ValueError: return await i.response.send_message("❌ Timestamp must be a Unix timestamp, such as `1785524400`.", ephemeral=True)
     if unix < 0: return await i.response.send_message("❌ Timestamp cannot be negative.", ephemeral=True)
     content = (f"🇪🇺 **EU 6X WIPE ANNOUNCEMENT** • <t:{unix}:R> 🇪🇺\n\n" f"**Server Name**\nVALORA | CLAN | 5X | EU | WEEKLY | .gg/valora5x\n\n" f"Search the name displayed above and add the server to your favorites to be ready.\n\n" f"**Server Information**\n:jack: 5X Gather Rates\n:bp: Instant Crafting\n:crate: Fast Respawn\n:Time: Automatic Events\n:player: 100+ Players\n\n" f"**Latest wipe** • <t:{unix}:F> (<t:{unix}:R>)")
+    await i.response.defer(ephemeral=True)
     try: await channel.send(content)
-    except discord.Forbidden: return await i.response.send_message("❌ I cannot post in that channel. Check View Channel and Send Messages permissions.", ephemeral=True)
+    except discord.Forbidden: return await i.followup.send("❌ I cannot post in that channel. Check View Channel and Send Messages permissions.", ephemeral=True)
     bot.database.upsert_config(i.guild.id, wipefeed_channel=channel.id)
-    await i.response.send_message(f"✅ EU 6X wipe announcement posted in {channel.mention}.", ephemeral=True)
+    await i.followup.send(f"✅ EU 6X wipe announcement posted in {channel.mention}.", ephemeral=True)
 
 info_group = app_commands.Group(name="info", description="Show Discord information")
 bot.tree.add_command(info_group)
@@ -368,9 +407,10 @@ async def roles_setchannel(i: discord.Interaction, channel: discord.TextChannel)
     description = "\n".join(lines)[:4000] if lines else "No custom roles found."
     e = embed("💜 Grid A1 • Server role directory", "✨ All custom server roles, arranged from highest to lowest.\n\n" + description, discord.Colour.from_rgb(177, 77, 255))
     e.set_footer(text=f"{len(roles)} custom roles • Grid A1 Manager")
+    await i.response.defer(ephemeral=True)
     try: await channel.send(embed=e)
-    except discord.Forbidden: return await i.response.send_message("❌ I cannot post in that channel.", ephemeral=True)
-    await i.response.send_message(f"✅ Role directory posted in {channel.mention}.", ephemeral=True)
+    except discord.Forbidden: return await i.followup.send("❌ I cannot post in that channel.", ephemeral=True)
+    await i.followup.send(f"✅ Role directory posted in {channel.mention}.", ephemeral=True)
 
 @setup_group.command(name="tickets", description="Configure ticket channels and deploy the support panel")
 @admin()
@@ -387,7 +427,7 @@ async def setup_tickets(i, panel_channel: discord.TextChannel, logs_channel: dis
         except discord.NotFound:
             message = None
         except discord.DiscordException:
-            return await i.response.send_message("❌ I could not update the existing panel. Check Manage Messages and Embed Links permissions.", ephemeral=True)
+            return await i.followup.send("❌ I could not update the existing panel. Check Manage Messages and Embed Links permissions.", ephemeral=True)
     if message is None:
         message = await panel_channel.send(embed=support_panel(g, bot.database), view=TicketPanel(bot.tickets))
     bot.database.upsert_config(g.id, panel_message=message.id)
@@ -409,7 +449,8 @@ async def welcomer_test(i):
     if problems: return await i.response.send_message("Welcomer is not configured correctly.",ephemeral=True)
     channel=guild(i).get_channel(config['welcome_channel'])
     if not isinstance(channel,discord.TextChannel): return await i.response.send_message("Welcome channel is missing.",ephemeral=True)
-    await channel.send(embed=welcome_embed(bot,guild(i),i.user,config)); await i.response.send_message("✅ Welcome test sent.",ephemeral=True)
+    await i.response.defer(ephemeral=True)
+    await channel.send(embed=welcome_embed(bot,guild(i),i.user,config)); await i.followup.send("✅ Welcome test sent.",ephemeral=True)
 @ticket_group.command(name="claim", description="Claim the current ticket")
 @staff()
 async def ticket_claim(i): await claim(i,bot.tickets)
@@ -419,7 +460,7 @@ async def ticket_transfer(i,target_member:discord.Member): await claim(i,bot.tic
 @ticket_group.command(name="requestclose", description="Request closure of the current ticket")
 async def ticket_requestclose(i,reason:str):
     if not is_ticket(i.channel): return await i.response.send_message("This only works inside a ticket.",ephemeral=True)
-    if not staff_member(i.user): return await i.response.send_message("Only staff can request closure.",ephemeral=True)
+    if not staff_member(i.user, bot.database): return await i.response.send_message("Only staff can request closure.",ephemeral=True)
     data=parse_ticket_topic(i.channel); bot.database.update_ticket(data.get('id',''),status='close_requested',close_requested_by=i.user.id); bot.database.audit(guild(i).id,data.get('id',''),i.user.id,'close_requested'); await i.response.send_message(f"🔒 Closure requested: {reason}")
 @ticket_group.command(name="close", description="Archive transcript and delete current ticket")
 @staff()
