@@ -10,7 +10,8 @@ Startup loads `.env`, validates settings, configures logging, runs SQLite migrat
 
 - `grid_a1/bot.py`: bot composition, commands, lifecycle, sync safety, event/error handling, anti-links, and loops.
 - `grid_a1/config.py`: environment settings and logging.
-- `grid_a1/database.py`: SQLite schema repair/migration, ticket persistence, indexes, and audit log.
+- `grid_a1/database.py`: SQLite schema repair/migration, ticket persistence, indexes, backup, and audit log.
+- `grid_a1/postgres.py`: optional operator-only PostgreSQL connection/schema sketch; not imported by the bot and not a data migration tool.
 - `grid_a1/commands.py`: standalone commands and owner diagnostics.
 - `grid_a1/views.py`: dashboard, setup modals, persistent ticket and verification views.
 - `grid_a1/tickets.py`: ticket creation, permissions, defer/followup closure, transcripts, and archive.
@@ -23,6 +24,6 @@ Startup loads `.env`, validates settings, configures logging, runs SQLite migrat
 
 ## Reliability notes
 
-SQLite startup creates base tables before inspecting or adding columns, then creates indexes and records the schema version. Ticket creation and closure defer before slow Discord/history operations and respond through followups. Unexpected loop errors are isolated per guild/ticket so one bad record does not stop maintenance. All operator-facing failures use actionable messages where possible.
+SQLite startup creates base tables before inspecting or adding columns, then creates indexes and records the schema version. Ticket creation and closure defer before slow Discord/history operations and respond through followups. A ticket is marked closed only after the transcript archive succeeds; its ticket, closure-history, and audit rows are finalized atomically. Inactivity DM component IDs are unique per ticket, scans confirm a missing channel with Discord before cleaning an open row, and reachable owners are not auto-closed if their notice could not be delivered. Unexpected loop errors are isolated per guild/ticket so one bad record does not stop maintenance. All operator-facing failures use actionable messages where possible.
 
 Keep tokens, SQLite files, logs, and transcripts private. Validate with `python validate_bot.py` and `python validate_dashboard.py` before publishing.
