@@ -1,21 +1,19 @@
 # Grid A1 Manager Discord Bot
 
-## Staff roles and dashboard
+This repository preserves the existing SQLite deployment and `DATABASE_PATH` contract. SQLite migrations are additive and schema version 16; use `Database.backup()` before upgrades. A startup schema/integrity check runs before the Discord client starts.
 
-The server owner must run exactly:
+PostgreSQL is optional tooling only and is not implemented as a runtime backend: `grid_a1/database.py` always uses SQLite and `DATABASE_PATH`. `grid_a1/postgres.py` provides an isolated psycopg connection factory, portable baseline schema, and a non-destructive migration plan for operator-led work; configuring `DATABASE_URL` does not switch the bot to PostgreSQL. The SQLite source is never modified. Install the optional adapter from `requirements.txt` only when using that tooling.
 
-`/setup roles owner_role: ... co_owner_role: ... head_admin_role: ... admin_role: ... moderator_role: ...`
+## Setup
 
-This command configures the five persistent staff roles in the exact order shown. It is restricted to the Discord server owner only—not the bot owner, administrators, Manage Server users, or other staff. Each role must be a distinct normal role from the current server; @everyone and managed/integration roles are rejected.
+Run `/setup roles owner_role: ... co_owner_role: ... head_admin_role: ... admin_role: ... moderator_role: ...`. These five roles are both the permission roles and ticket notification targets. There is no `/setup staff`; this preserves the established semantics.
 
-All five configured roles count as staff for staff permissions and ticket controls. Only members holding `owner_role` or `co_owner_role` may open `/dashboard`; head admins, admins, moderators, the bot owner, and other staff cannot open it. Dashboard access is rechecked for every interaction.
+Keep tokens, databases, transcripts, and logs private. Validate with:
 
-There is no separate `/setup roles action role` staff-role command. `/setup roles` also determines which configured staff roles are pinged for new tickets. There is no `/setup staff` role command.
+```text
+python validate_bot.py
+python validate_dashboard.py
+python -m unittest -v test_core.py
+```
 
-## Other setup
-
-`/setup tickets panel_channel logs_channel category inactivity_hours`
-`/setup welcomer welcome_channel link_channel bot_commands_channel shop_channel verify_channel`
-`/verifypanel channel role`
-
-Ticket setup and verification configuration save settings without unexpectedly posting a public panel. Keep tokens, databases, logs, and transcripts private.
+These checks parse every Python module, reject truncation placeholders and destructive/tunnel tokens, and exercise migrations, ticket constraints, schema columns, configured roles, `safe_json_list`, channel-name sanitization, and anti-links source behavior. Do not execute the bot as part of validation.
