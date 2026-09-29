@@ -4,7 +4,7 @@ This repository is a standalone Python Discord bot. `bot.py` is the supported en
 
 ## Runtime flow
 
-Startup loads `.env`, validates settings, configures logging, runs SQLite migrations, registers persistent views, starts resilient panel/inactivity loops, removes stale guild command copies, and publishes the global application command tree. The bot is Discord-only and has no unrelated network transport layer. SQLite schema version is 15; migrations are additive and preserve DATABASE_PATH and existing records.
+Startup loads `.env`, validates settings, configures logging, runs SQLite migrations, registers persistent views, starts resilient panel/inactivity loops, removes stale guild command copies, and publishes the global application command tree. The bot is Discord-only and has no unrelated network transport layer. SQLite schema version is 16; migrations are additive and preserve DATABASE_PATH and existing records.
 
 ## Modules
 
@@ -19,7 +19,7 @@ Startup loads `.env`, validates settings, configures logging, runs SQLite migrat
 
 ## Configuration contract
 
-`/setup roles owner_role co_owner_role head_admin_role admin_role moderator_role` accepts exactly five distinct normal roles and is server-owner-only. Those five roles are permission roles. `/setup staff` controls separate notification roles only. `/dashboard` is restricted to configured owner/co-owner roles and its checks are repeated on every interaction. Ticket inactivity is persisted in SQLite and views are re-registered at startup.
+`/setup roles owner_role co_owner_role head_admin_role admin_role moderator_role` accepts exactly five distinct normal roles and is server-owner-only. Those five roles grant staff permissions and are the ticket notification targets. There is no `/setup staff` command. `/dashboard` is restricted to configured owner/co-owner roles and its checks are repeated on every interaction. Ticket inactivity is persisted in SQLite and views are re-registered at startup.
 
 ## Reliability notes
 
