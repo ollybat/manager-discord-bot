@@ -20,25 +20,25 @@ class TicketService:
         if not interaction.response.is_done(): await interaction.response.defer(ephemeral=True)
         if not guild or region!='EU': return await interaction.followup.send('❌ Only EU support is currently available. Choose EU and try again.',ephemeral=True)
         config=self.db.config(guild.id)
-        if not config or not config['ticket_category'] or not config['logs_channel']: return await interaction.followup.send('Tickets are not configured.',ephemeral=True)
+        if not config or not config['ticket_category'] or not config['logs_channel']: return await interaction.followup.send('⚠️ Tickets are not set up yet. Ask an admin to configure the panel, logs, and category in `/dashboard`.',ephemeral=True)
         existing=self.db.open_ticket_for_owner(guild.id,interaction.user.id)
         if existing:
             channel=guild.get_channel(existing['channel_id'])
-            if channel:return await interaction.followup.send(f'You already have an open ticket: {channel.mention}',ephemeral=True)
+            if channel:return await interaction.followup.send(f'📌 You already have an open ticket: {channel.mention}',ephemeral=True)
             try:
                 channel=await guild.fetch_channel(existing['channel_id'])
             except discord.NotFound:
                 self.db.close_orphaned_ticket(existing['ticket_id'])
                 log.info('Closed orphaned ticket %s after Discord confirmed its channel is missing', existing['ticket_id'])
             except discord.Forbidden:
-                return await interaction.followup.send('I cannot verify your existing ticket channel. Please contact staff before opening another ticket.',ephemeral=True)
+                return await interaction.followup.send('⚠️ I cannot verify your existing ticket channel. Please contact staff before opening another ticket.',ephemeral=True)
             except discord.HTTPException as error:
                 log.warning('Could not verify existing ticket channel %s: %s', existing['channel_id'], error)
-                return await interaction.followup.send('I could not verify your existing ticket channel right now. Please try again shortly.',ephemeral=True)
+                return await interaction.followup.send('⏳ I could not verify your existing ticket channel right now. Please try again shortly.',ephemeral=True)
             else:
-                return await interaction.followup.send(f'You already have an open ticket: {channel.mention}',ephemeral=True)
+                return await interaction.followup.send(f'📌 You already have an open ticket: {channel.mention}',ephemeral=True)
         category=guild.get_channel(config['ticket_category'])
-        if not isinstance(category,discord.CategoryChannel):return await interaction.followup.send('The configured ticket category is missing.',ephemeral=True)
+        if not isinstance(category,discord.CategoryChannel):return await interaction.followup.send('❌ The configured ticket category is missing. Ask an admin to update `/dashboard`.',ephemeral=True)
         ticket_id=uuid.uuid4().hex[:8].upper(); overwrites={guild.default_role:discord.PermissionOverwrite(view_channel=False),interaction.user:discord.PermissionOverwrite(view_channel=True,send_messages=True,read_message_history=True,attach_files=True)}
         if guild.me:overwrites[guild.me]=discord.PermissionOverwrite(view_channel=True,send_messages=True,manage_channels=True,attach_files=True)
         role_ids=set(self.db.ticket_access_role_ids(guild.id))
@@ -107,15 +107,15 @@ class TicketService:
         if not interaction.response.is_done():await interaction.response.defer(ephemeral=True)
         row=self.db.ticket(ticket_id); guild=interaction.client.get_guild(row['guild_id']) if row else None
         channel=await self.resolve_ticket_channel(guild,row['channel_id']) if guild and row else None
-        if not row or not guild or not isinstance(channel,discord.TextChannel):return await _respond(interaction,'This ticket is closed or its channel is currently unavailable.',ephemeral=True)
+        if not row or not guild or not isinstance(channel,discord.TextChannel):return await _respond(interaction,'⚠️ This ticket is closed or its channel is currently unavailable.',ephemeral=True)
         class P:pass
         p=P();p.channel=channel;p.guild=guild;p.user=interaction.user;p.response=interaction.response;p.followup=interaction.followup;await self.close(p,reason,True)
     async def close(self,interaction,reason,allow_owner=False):
         channel=interaction.channel
-        if not isinstance(channel,discord.TextChannel) or not is_ticket(channel):return await _respond(interaction,'This only works inside a ticket.',ephemeral=True)
-        if not staff_member(interaction.user,self.db) and not allow_owner:return await _respond(interaction,'Only staff can close tickets.',ephemeral=True)
+        if not isinstance(channel,discord.TextChannel) or not is_ticket(channel):return await _respond(interaction,'❌ This command only works inside an active ticket.',ephemeral=True)
+        if not staff_member(interaction.user,self.db) and not allow_owner:return await _respond(interaction,'🔒 Only ticket staff can close tickets.',ephemeral=True)
         data=parse_ticket_topic(channel); config=self.db.config(interaction.guild.id); archive=interaction.guild.get_channel(config['logs_channel']) if config else None
-        if not isinstance(archive,discord.TextChannel):return await _respond(interaction,'The logs channel is missing.',ephemeral=True)
+        if not isinstance(archive,discord.TextChannel):return await _respond(interaction,'❌ The ticket logs channel is missing. Ask an admin to update `/dashboard`.',ephemeral=True)
         if not interaction.response.is_done():await interaction.response.defer(ephemeral=True)
         # Defer before transcript I/O, then archive successfully before changing durable ticket state.
         transcript=await self.transcript(channel); tid=data.get('id',str(channel.id)); closed=utcnow().isoformat(); filename=f'{channel.name}-transcript.html'
@@ -143,9 +143,9 @@ class TicketService:
         if hasattr(interaction,'followup'): await interaction.followup.send('✅ Transcript archived and ticket channel deleted.',ephemeral=True)
 async def claim(interaction,service,member=None):
     if not interaction.response.is_done(): await interaction.response.defer(ephemeral=True)
-    if not staff_member(interaction.user,service.db):return await interaction.followup.send('Only staff can claim tickets.',ephemeral=True)
-    if not isinstance(interaction.channel,discord.TextChannel) or not is_ticket(interaction.channel):return await interaction.followup.send('This only works inside a ticket.',ephemeral=True)
-    if member is not None and not staff_member(member,service.db):return await interaction.followup.send('Only staff members can receive a ticket transfer.',ephemeral=True)
+    if not staff_member(interaction.user,service.db):return await interaction.followup.send('🔒 Only ticket staff can claim tickets.',ephemeral=True)
+    if not isinstance(interaction.channel,discord.TextChannel) or not is_ticket(interaction.channel):return await interaction.followup.send('❌ This command only works inside an active ticket.',ephemeral=True)
+    if member is not None and not staff_member(member,service.db):return await interaction.followup.send('🔒 Only configured ticket staff can receive a transfer.',ephemeral=True)
     data=parse_ticket_topic(interaction.channel); target=member or interaction.user
     if data.get('id'):service.db.update_ticket(data['id'],claimed_by=target.id)
     await interaction.followup.send(embed=embed('🙋 Ticket claimed',f'Assigned to {target.mention}.'))
