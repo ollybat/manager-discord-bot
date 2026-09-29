@@ -75,6 +75,14 @@ _ZERO_WIDTH = dict.fromkeys(map(ord, '\u200b\u200c\u200d\ufeff'), None)
 def normalize_link_text(text: str) -> str:
     text=unicodedata.normalize('NFKC',text).translate(_ZERO_WIDTH).translate(str.maketrans({'。':'.','．':'.','／':'/','：':':'}))
     return re.sub(r'(?<=[a-zA-Z0-9])\s+(?=[./:])|(?<=[./:])\s+(?=[a-zA-Z0-9])','',text)
+def is_http_url(value: str) -> bool:
+    """Accept only absolute HTTP(S) evidence links; never fetch them server-side."""
+    try:
+        parsed = urlsplit((value or "").strip())
+    except ValueError:
+        return False
+    return parsed.scheme.lower() in {"http", "https"} and bool(parsed.netloc)
+
 def normalize_domain(value: str) -> str | None:
     value=value.strip().lower().rstrip('.')
     if not value or len(value)>253 or any(ch.isspace() for ch in value): return None
