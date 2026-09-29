@@ -212,6 +212,49 @@ class CoreTests(unittest.TestCase):
         self.assertIn("Select your issue type ...", views)
         self.assertNotIn('label="How it works"', views)
 
+    def test_commands_have_emoji_descriptions_and_slash_options_have_hints(self):
+        files = (ROOT / "grid_a1" / "bot.py", ROOT / "grid_a1" / "commands.py")
+        for path in files:
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            for node in ast.walk(tree):
+                if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    continue
+                command_calls = [d for d in node.decorator_list if isinstance(d, ast.Call) and isinstance(d.func, ast.Attribute) and d.func.attr == "command"]
+                for call in command_calls:
+                    keywords = {kw.arg: kw.value for kw in call.keywords if kw.arg}
+                    help_text = keywords.get("description") or keywords.get("help")
+                    self.assertIsInstance(help_text, ast.Constant, f"{path}:{node.name} needs a visible command description")
+                    self.assertGreater(ord(help_text.value[0]), 127, f"{path}:{node.name} description should start with an emoji")
+                    is_slash = "description" in keywords
+                    if is_slash:
+                        described = {kw.arg for dec in node.decorator_list if isinstance(dec, ast.Call) and isinstance(dec.func, ast.Attribute) and dec.func.attr == "describe" for kw in dec.keywords if kw.arg}
+                        parameters = [arg.arg for arg in node.args.args[1:]]
+                        self.assertTrue(set(parameters) <= described, f"{path}:{node.name} needs option descriptions")
+
+    def test_every_command_has_emoji_description_and_slash_options_have_hints(self):
+        for path in (ROOT / "grid_a1" / "bot.py", ROOT / "grid_a1" / "commands.py"):
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            for node in ast.walk(tree):
+                if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    continue
+                commands = [decorator for decorator in node.decorator_list if isinstance(decorator, ast.Call) and isinstance(decorator.func, ast.Attribute) and decorator.func.attr == "command"]
+                for decorator in commands:
+                    keywords = {keyword.arg: keyword.value for keyword in decorator.keywords if keyword.arg}
+                    help_text = keywords.get("description") or keywords.get("help")
+                    self.assertIsInstance(help_text, ast.Constant, f"{path}:{node.name} needs a visible command description")
+                    self.assertGreater(ord(help_text.value[0]), 127, f"{path}:{node.name} description should start with an emoji")
+                    if "description" in keywords:
+                        described = {keyword.arg for item in node.decorator_list if isinstance(item, ast.Call) and isinstance(item.func, ast.Attribute) and item.func.attr == "describe" for keyword in item.keywords if keyword.arg}
+                        parameters = {argument.arg for argument in node.args.args[1:]}
+                        self.assertTrue(parameters <= described, f"{path}:{node.name} needs descriptions for every slash option")
+
+    def test_help_lists_all_command_groups(self):
+        source = (ROOT / "grid_a1" / "commands.py").read_text(encoding="utf-8")
+        for section in ("🌐 Everyone", "🎛️ Private dashboard", "👑 Server owner setup", "⚙️ Server setup & safety", "🛡️ Staff tools", "🔧 Bot owner"):
+            self.assertIn(section, source)
+        for command in ("/report", "/setup tickets", "/setup welcomer", "/ticket transfer", "/ticket close", "/anti-links", "/embed-edit", "/sync"):
+            self.assertIn(command, source)
+
     def test_help_does_not_advertise_removed_commands_or_anti_link_options(self):
         source = (ROOT / "grid_a1" / "commands.py").read_text(encoding="utf-8")
         for stale in ("`/staff`", "whitelist domains", "bypass roles", "allowed link roles"):

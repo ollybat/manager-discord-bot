@@ -17,28 +17,36 @@ def _validate_image(a:Optional[discord.Attachment])->Optional[str]:
 def register_commands(bot)->None:
     if getattr(bot,"_grid_a1_commands_registered",False):return
     bot._grid_a1_commands_registered=True
-    @bot.tree.command(name="help",description="Open the Grid A1 command center")
+    @bot.tree.command(name="help",description="📚 Open the complete, permission-aware command guide")
     async def help_command(i):
-        e=embed("💜 Grid A1 • Command Center","✨ A concise, permission-aware guide to the commands available in this bot.",discord.Colour.from_rgb(177,77,255))
-        e.add_field(name="🌐 Everyone",value="`/help` — This guide\n`/info server` — Server overview\n`/embed` — Post a custom embed\n`/report member reason proof_link proof_file` — Privately report a member to staff",inline=False)
+        e=embed("💜 Grid A1 • Command Guide","✨ Here’s what you can do. Discord shows each command’s options as you type; protected actions only work for members with the required access.",discord.Colour.from_rgb(177,77,255))
+        e.add_field(name="🌐 Everyone",value="`/help` — Open this guide\n`/info server` — View server details\n`/embed title description image` — Post a custom embed (image optional)\n`/report member reason proof_link proof_file` — Privately report a member; reason and HTTP(S) link or upload are optional. Staff must configure a report channel first.",inline=False)
         if not i.guild or not isinstance(i.user,discord.Member):
-            e.set_footer(text="Use commands inside a server for permission-aware sections."); return await i.response.send_message(embed=e,ephemeral=True)
-        m=i.user; c=bot.database.config(i.guild.id); owner=m.id==i.guild.owner_id or m.id==bot.settings_owner_id
+            e.set_footer(text="Use commands inside a server to see the sections available to your roles."); return await i.response.send_message(embed=e,ephemeral=True)
+        m=i.user; c=bot.database.config(i.guild.id); server_owner=m.id==i.guild.owner_id; bot_owner=m.id==bot.settings_owner_id
+        owner=server_owner or bot_owner
         access={int(c[k]) for k in ("owner_role","co_owner_role") if c and c[k]}; dashboard=bool({r.id for r in m.roles}&access)
-        admin=owner or m.guild_permissions.administrator or m.guild_permissions.manage_guild
+        manage_guild=server_owner or m.guild_permissions.administrator or m.guild_permissions.manage_guild
+        admin=owner or manage_guild
         staff=admin or m.guild_permissions.manage_channels or bool({r.id for r in m.roles}&set(bot.database.configured_permission_role_ids(i.guild.id)))
-        if dashboard:e.add_field(name="🎛️ Owner dashboard",value="`/dashboard` — Private master overview, module drawer, refresh, and safe configuration\n`/setup roles owner_role: ... co_owner_role: ... head_admin_role: ... admin_role: ... moderator_role: ...` — Configure the five staff roles (server owner only)\nAccess: members holding the configured owner or co-owner role only.",inline=False)
-        if admin:e.add_field(name="🛡️ Safety & moderation",value="`/anti-links` — Block external websites and Discord invites; configure enabled, action, and log channel. The bot needs Message Content Intent and Manage Messages.",inline=False)
-        if admin:e.add_field(name="⚙️ Setup & community",value="`/setup tickets` — Configure and publish support panel; new-ticket pings use the roles from `/setup roles`\n`/setup welcomer` — Configure welcome channels\n`/verifypanel` — Publish verification panel\n`/roles setchannel` — Post role directory\n`/wipefeed enable` / `/wipefeed send` — Manage announcements\n`/welcomer preview` / `/welcomer test` — Preview or test welcome",inline=False)
-        if staff:e.add_field(name="🛡️ Staff tools",value="`/ticket claim` / `/ticket transfer` — Assign tickets\n`/ticket remove` / `/ticket requestclose` / `/ticket close` — Manage tickets\n`/kick` `/ban` `/warn` `/timeout` — Moderation\n`!lock` / `!unlock` — Lock or unlock a channel",inline=False)
-        if owner:e.add_field(name="👑 Bot owner",value="`/ping` — Private diagnostics\n`/sync` — Explicit command synchronization",inline=False)
-        e.set_footer(text="Protected sections appear only when your current access permits them."); await i.response.send_message(embed=e,ephemeral=True)
-    @bot.tree.command(name="ping",description="Show detailed bot diagnostics (owner only)")
+        can_manage_messages=server_owner or m.guild_permissions.administrator or m.guild_permissions.manage_messages
+        if dashboard:e.add_field(name="🎛️ Private dashboard",value="`/dashboard` — Open the button-and-dropdown setup center for ticket, welcome, verification, announcement, and report settings. Access requires your server’s configured Owner or Co-owner role.",inline=False)
+        if server_owner:e.add_field(name="👑 Server owner setup",value="`/setup roles owner_role co_owner_role head_admin_role admin_role moderator_role` — Choose five distinct roles to initialize staff access. The Owner and Co-owner roles also unlock `/dashboard`.",inline=False)
+        if admin:
+            setup_help="`/setup tickets panel_channel logs_channel category inactivity_hours` — Save ticket locations and publish the support panel.\n`/setup welcomer welcome_channel link_channel bot_commands_channel shop_channel verify_channel` — Save community channels.\n`/welcomer preview` / `/welcomer test` — Preview privately or send a test greeting."
+            if manage_guild:
+                setup_help += "\n`/verifypanel channel role` — Publish a verification panel; the bot role must be above the assigned role.\n`/anti-links enabled action log_channel` — configure enabled, action, and log channel. The bot needs Message Content Intent and Manage Messages.\n`/wipefeed enable enabled` / `/wipefeed send timestamp channel` — Configure and post wipe announcements.\n`/roles setchannel channel` — Publish the role directory."
+            e.add_field(name="⚙️ Server setup & safety",value=setup_help,inline=False)
+        if can_manage_messages:e.add_field(name="📝 Message management",value="`/embed-edit message_id title description image` — Edit a bot-authored embed. Requires Manage Messages; title, description, and image are optional.",inline=False)
+        if staff:e.add_field(name="🛡️ Staff tools",value="`/ticket claim` — Claim the current ticket.\n`/ticket transfer target_member` — Assign it to another staff member.\n`/ticket remove user` — Remove a member from the ticket.\n`/ticket requestclose reason` / `/ticket close reason` — Request or complete ticket closure; closure saves a transcript.\n`/kick member reason` / `/ban member reason` / `/warn member reason` / `/timeout member minutes reason` — Moderation actions. Check role order before kick, ban, or timeout.\n`!lock` / `!unlock` — Lock or unlock the current channel.",inline=False)
+        if bot_owner:e.add_field(name="🔧 Bot owner",value="`/ping` — View private latency, uptime, and runtime diagnostics.\n`/sync` — Synchronize application commands; cooldown-protected.",inline=False)
+        e.set_footer(text="Commands keep their existing permission checks. Need access? Ask your server owner."); await i.response.send_message(embed=e,ephemeral=True)
+    @bot.tree.command(name="ping",description="🏓 View private bot health, latency, and runtime details (owner only)")
     async def ping_command(i):
         if bot.settings_owner_id is None or i.user.id!=bot.settings_owner_id:return await i.response.send_message("🔒 This diagnostic command is owner-only.",ephemeral=True)
         uptime=max(0,int(time.time()-getattr(bot,"started_at",time.time()))); d,rem=divmod(uptime,86400); h,rem=divmod(rem,3600); mi,s=divmod(rem,60); gateway=round(bot.latency*1000) if bot.latency>=0 else None
         e=embed("💜 Grid A1 • Owner Diagnostics","🔍 Private health report.",discord.Colour.from_rgb(177,77,255)); e.add_field(name="🟢 Status",value="`Online and responding`",inline=True); e.add_field(name="🏓 Gateway",value=f"`{gateway} ms`" if gateway is not None else "`Unavailable`",inline=True); e.add_field(name="⏱️ Uptime",value=f"`{d}d {h}h {mi}m {s}s`",inline=True); e.add_field(name="🌐 Servers",value=f"`{len(bot.guilds)}`",inline=True); e.add_field(name="🧩 Runtime",value=f"Python `{platform.python_version()}`\ndiscord.py `{discord.__version__}`",inline=True); e.set_footer(text="No tokens or secret environment values are displayed."); await i.response.send_message(embed=e,ephemeral=True)
-    @bot.tree.command(name="embed",description="Post a custom embed with an optional image")
+    @bot.tree.command(name="embed",description="🎨 Post a custom embed with an optional image")
     @app_commands.describe(title="Embed title",description="Embed description",image="Optional image attachment")
     async def embed_command(i,title:str,description:str,image:Optional[discord.Attachment]=None):
         if (err:=_validate_image(image)):return await i.response.send_message(f"❌ {err}",ephemeral=True)
@@ -46,7 +54,7 @@ def register_commands(bot)->None:
         e=embed(title[:256],description[:4096]); f=await image.to_file() if image else None
         if f:e.set_image(url=f"attachment://{f.filename}")
         await i.followup.send(embed=e,file=f)
-    @bot.tree.command(name="sync",description="Sync application commands (owner only)")
+    @bot.tree.command(name="sync",description="🔄 Synchronize application commands (bot owner only)")
     async def sync_command(i):
         raw=os.getenv("OWNER_ID","").strip()
         if not raw:raise OwnerConfigurationError("OWNER_ID is not configured; /sync is unavailable.")
@@ -59,8 +67,9 @@ def register_commands(bot)->None:
         except (discord.HTTPException, RuntimeError) as error:
             return await i.followup.send(f"❌ Sync failed: {error}", ephemeral=True)
         await i.followup.send(embed=embed("💜 Commands synchronized","✅ "+"\n".join(out)),ephemeral=True)
-    @bot.tree.command(name="embed-edit",description="Edit a bot-authored embed in this channel")
+    @bot.tree.command(name="embed-edit",description="🖊️ Edit a bot-authored embed in this channel")
     @app_commands.checks.has_permissions(manage_messages=True)
+    @app_commands.describe(message_id="Numeric ID of the bot-authored message",title="Optional replacement title",description="Optional replacement description",image="Optional replacement image attachment")
     async def edit_command(i,message_id:str,title:Optional[str]=None,description:Optional[str]=None,image:Optional[discord.Attachment]=None):
         if not i.channel or not hasattr(i.channel,"fetch_message"):return await i.response.send_message("❌ Use this in a message channel.",ephemeral=True)
         try: target_id=int(message_id)
