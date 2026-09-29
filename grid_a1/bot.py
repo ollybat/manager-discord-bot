@@ -10,7 +10,7 @@ from .config import Settings, configure_logging, validate_runtime
 from .database import Database
 from .embeds import embed, support_panel, inactivity_indicator
 from .tickets import TicketService, claim
-from .utils import is_ticket, parse_ticket_topic, staff_member, detected_external_links, normalize_domain, safe_json_list
+from .utils import is_http_url, is_ticket, parse_ticket_topic, staff_member, detected_external_links, normalize_domain, safe_json_list
 from .views import DashboardView, OwnerInactivityView, TicketControls, TicketPanel, VerifyPanel
 from .welcomer import missing, send_welcome, welcome_embed
 from .commands import OwnerConfigurationError, OwnerOnlyError, register_commands
@@ -226,6 +226,46 @@ async def anti_links(i: discord.Interaction, enabled: bool, action: app_commands
     mode = action.value if action else "delete_warn"
     bot.database.upsert_config(i.guild.id, anti_links_enabled=int(enabled), anti_links_action=mode, anti_links_log_channel=log_channel.id if log_channel else None)
     await i.followup.send(embed=embed("Anti-links settings saved", f"Protection: {'enabled' if enabled else 'disabled'}\nAction: {mode}"), ephemeral=True)
+
+@bot.tree.command(name="report", description="Privately report a member to server staff")
+@app_commands.guild_only()
+@app_commands.describe(member="Member being reported", reason="What happened?", proof_link="Optional link to supporting evidence", proof_file="Optional screenshot or evidence file")
+async def report_member(i: discord.Interaction, member: discord.Member, reason: str | None = None, proof_link: str | None = None, proof_file: discord.Attachment | None = None):
+    guild = i.guild
+    if not guild:
+        return await i.response.send_message("❌ Use /report inside the server where the incident happened.", ephemeral=True)
+    config = bot.database.config(guild.id)
+    report_channel = guild.get_channel(config["report_channel"]) if config and config["report_channel"] else None
+    if not isinstance(report_channel, discord.TextChannel):
+        return await i.response.send_message("⚠️ Reports are not configured yet. Ask a server owner to choose a report channel in /dashboard.", ephemeral=True)
+    if report_channel.permissions_for(guild.default_role).view_channel:
+        return await i.response.send_message("⚠️ The configured report channel is visible to @everyone. Ask an admin to restrict it to trusted staff before submitting reports.", ephemeral=True)
+    link = (proof_link or "").strip()
+    if link:
+        if len(link) > 1000 or not is_http_url(link):
+            return await i.response.send_message("❌ Proof link must be a valid http(s) URL under 1000 characters.", ephemeral=True)
+    if proof_file and proof_file.size > 8_000_000:
+        return await i.response.send_message("❌ Evidence files must be 8 MB or smaller.", ephemeral=True)
+    await i.response.defer(ephemeral=True)
+    e = embed("🚩 Member report", "A server member submitted a report for staff review.", discord.Colour.red())
+    e.add_field(name="Reported member", value=f"{member.mention} (`{member.id}`)", inline=True)
+    e.add_field(name="Submitted by", value=f"{i.user.mention} (`{i.user.id}`)", inline=True)
+    clean_reason = (reason or "").strip() or "No reason provided"
+    e.add_field(name="Reason", value=discord.utils.escape_markdown(clean_reason)[:1000], inline=False)
+    if link: e.add_field(name="Proof link", value=link, inline=False)
+    if proof_file: e.add_field(name="Uploaded evidence", value=f"{discord.utils.escape_markdown(proof_file.filename)} ({proof_file.size:,} bytes)", inline=False)
+    e.set_footer(text=f"{guild.name} • Report submitted privately")
+    try:
+        upload = await proof_file.to_file() if proof_file else None
+        await report_channel.send(embed=e, file=upload, allowed_mentions=discord.AllowedMentions.none())
+    except discord.DiscordException as error:
+        log.exception("Could not deliver a member report in guild %s: %s", guild.id, error)
+        return await i.followup.send("❌ I could not deliver this report. Please contact a moderator directly.", ephemeral=True)
+    metadata = json.dumps({"target_id": member.id, "reason": (reason or "").strip()[:1000], "proof_link": link or None, "proof_filename": proof_file.filename if proof_file else None, "channel_id": report_channel.id})
+    try: bot.database.audit(guild.id, None, i.user.id, "report_submitted", metadata)
+    except Exception: log.exception("Report was delivered but its audit row could not be recorded (guild %s)", guild.id)
+    await i.followup.send("✅ Your report was sent privately to the server's report channel. Thank you.", ephemeral=True)
+
 @bot.tree.command(name="dashboard", description="Open the private owner master dashboard")
 async def dashboard(i: discord.Interaction):
     await i.response.defer(ephemeral=True)
