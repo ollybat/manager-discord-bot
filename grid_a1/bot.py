@@ -93,7 +93,10 @@ class GridA1Bot(commands.Bot):
                     self.database.upsert_config(guild.id, panel_fingerprint=fingerprint)
             except discord.NotFound:
                 try:
-                    message = await channel.send(embed=support_panel(guild, self.database), view=TicketPanel(self.tickets)); self.database.upsert_config(guild.id, panel_message=message.id)
+                    panel = support_panel(guild, self.database)
+                    message = await channel.send(embed=panel, view=TicketPanel(self.tickets))
+                    fingerprint = hashlib.sha256(json.dumps(panel.to_dict(), sort_keys=True).encode()).hexdigest()
+                    self.database.upsert_config(guild.id, panel_message=message.id, panel_fingerprint=fingerprint)
                 except discord.DiscordException: log.exception("Panel recovery failed")
             except discord.DiscordServerError as error:
                 log.warning("Panel refresh temporarily unavailable (HTTP %s); will retry next cycle", getattr(error, "status", "unknown"))
