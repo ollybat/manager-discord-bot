@@ -14,8 +14,8 @@ class Settings:
         except ValueError: raise ValueError("OWNER_ID must be an integer Discord user ID") from None
         token = os.getenv("DISCORD_TOKEN")
         prefix = os.getenv("PREFIX", "!")
-        if len(prefix) > 8 or "\n" in prefix or "\r" in prefix:
-            raise ValueError("PREFIX must be at most 8 characters and contain no newlines")
+        if not prefix or len(prefix) > 8 or "\n" in prefix or "\r" in prefix:
+            raise ValueError("PREFIX must be 1-8 characters and contain no newlines")
         database_path = Path(os.getenv("DATABASE_PATH", "manager.sqlite3"))
         if database_path.is_dir():
             raise ValueError("DATABASE_PATH must point to a SQLite file")
