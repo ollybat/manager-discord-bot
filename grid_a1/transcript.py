@@ -9,20 +9,27 @@ async def render(messages, channel, data, record=None) -> str:
         if isinstance(value, str): value = datetime.fromisoformat(value)
         return value.astimezone(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')
     cards = []
+    cached_image_bytes = 0
+    max_cached_image_bytes = 20_000_000
     for m in messages:
         name = e(getattr(m.author, 'display_name', str(m.author))); initials = e(''.join(p[:1] for p in name.split()[:2]).upper() or '?')
         body = e(m.content or '(no text)').replace('\n', '<br>')
         files = ''.join(f'<li><a href="{e(a.url, quote=True)}" target="_blank" rel="noopener">📎 {e(a.filename)}</a><span>{a.size:,} bytes</span></li>' for a in m.attachments)
         images = ''
         for a in m.attachments:
-            if (a.content_type or '').startswith('image/') and a.size <= 5_000_000:
+            if (a.content_type or '').startswith('image/') and a.size <= 5_000_000 and cached_image_bytes + a.size <= max_cached_image_bytes:
                 try:
-                    raw = await a.read(); uri = f'data:{a.content_type};base64,{base64.b64encode(raw).decode()}'
+                    raw = await a.read()
+                    if len(raw) > 5_000_000 or cached_image_bytes + len(raw) > max_cached_image_bytes:
+                        images += f'<p>Image not embedded: {e(a.filename)} (transcript cache limit reached)</p>'
+                        continue
+                    cached_image_bytes += len(raw)
+                    uri = f'data:{a.content_type};base64,{base64.b64encode(raw).decode()}'
                     images += f'<figure><img src="{uri}" alt="Attachment: {e(a.filename)}" loading="lazy"><figcaption>{e(a.filename)} (cached in transcript)</figcaption></figure>'
                 except Exception:
                     images += f'<p>Image unavailable after channel deletion: {e(a.filename)}</p>'
             elif (a.content_type or '').startswith('image/'):
-                images += f'<p>Image unavailable: {e(a.filename)} (over 5 MB transcript cache limit)</p>'
+                images += f'<p>Image not embedded: {e(a.filename)} (5 MB per-image or 20 MB total transcript cache limit)</p>'
         cards.append(f'<article class="message-card"><div class="avatar" aria-hidden="true">{initials}</div><div class="message-body"><header><strong>{name}</strong><time>{dt(m.created_at)}</time></header><div class="content">{body}</div>{images}{f"<ul class=attachments aria-label=Attachments>{files}</ul>" if files else ""}</div></article>')
     owner = channel.guild.get_member(int(data['owner'])) if data.get('owner','').isdigit() else None
     closer = channel.guild.get_member(record['closed_by']) if record and record['closed_by'] else None

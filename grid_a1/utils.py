@@ -28,6 +28,15 @@ def ticket_status_title(title: str | None, indicator: str) -> str:
     prefix = f"{indicator} 🎫 "
     return (prefix + base)[:256]
 
+def inactivity_custom_id(action: str, ticket_id: str) -> str:
+    """Make inactivity DM component IDs unique so persistent views route to the right ticket."""
+    if action not in {"keep", "staff", "close"}:
+        raise ValueError("unknown inactivity action")
+    safe_ticket_id = re.sub(r"[^A-Za-z0-9_-]", "", str(ticket_id))[:32]
+    if not safe_ticket_id:
+        raise ValueError("ticket_id is required")
+    return f"grid-a1:inactive:{safe_ticket_id}:{action}"[:100]
+
 def ticket_topic(ticket_id: str, owner_id: int, issue: str, region: str) -> str:
     return f"{TICKET_TOPIC_PREFIX};id={ticket_id};owner={owner_id};issue={quote(issue, safe='')};region={region}"
 

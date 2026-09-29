@@ -42,9 +42,10 @@ def register_commands(bot)->None:
     @app_commands.describe(title="Embed title",description="Embed description",image="Optional image attachment")
     async def embed_command(i,title:str,description:str,image:Optional[discord.Attachment]=None):
         if (err:=_validate_image(image)):return await i.response.send_message(f"❌ {err}",ephemeral=True)
+        await i.response.defer()
         e=embed(title[:256],description[:4096]); f=await image.to_file() if image else None
         if f:e.set_image(url=f"attachment://{f.filename}")
-        await i.response.send_message(embed=e,file=f)
+        await i.followup.send(embed=e,file=f)
     @bot.tree.command(name="sync",description="Sync application commands (owner only)")
     async def sync_command(i):
         raw=os.getenv("OWNER_ID","").strip()
@@ -52,22 +53,26 @@ def register_commands(bot)->None:
         try:owner=int(raw)
         except ValueError:raise OwnerConfigurationError("OWNER_ID is not a valid Discord user ID.") from None
         if i.user.id!=owner:raise OwnerOnlyError("Only the configured bot owner can use /sync.")
+        await i.response.defer(ephemeral=True)
         try:
             out=await bot.sync_commands_on_request()
         except (discord.HTTPException, RuntimeError) as error:
-            return await i.response.send_message(f"❌ Sync failed: {error}", ephemeral=True)
-        await i.response.send_message(embed=embed("💜 Commands synchronized","✅ "+"\n".join(out)),ephemeral=True)
+            return await i.followup.send(f"❌ Sync failed: {error}", ephemeral=True)
+        await i.followup.send(embed=embed("💜 Commands synchronized","✅ "+"\n".join(out)),ephemeral=True)
     @bot.tree.command(name="embed-edit",description="Edit a bot-authored embed in this channel")
     @app_commands.checks.has_permissions(manage_messages=True)
     async def edit_command(i,message_id:str,title:Optional[str]=None,description:Optional[str]=None,image:Optional[discord.Attachment]=None):
         if not i.channel or not hasattr(i.channel,"fetch_message"):return await i.response.send_message("❌ Use this in a message channel.",ephemeral=True)
-        try:m=await i.channel.fetch_message(int(message_id))
-        except (ValueError,discord.NotFound,discord.Forbidden):return await i.response.send_message("❌ Message ID is invalid, missing, or inaccessible.",ephemeral=True)
-        if not bot.user or m.author.id!=bot.user.id or not m.embeds:return await i.response.send_message("❌ I can only edit bot-authored messages that contain an embed.",ephemeral=True)
+        try: target_id=int(message_id)
+        except ValueError:return await i.response.send_message("❌ Message ID must be a numeric Discord message ID.",ephemeral=True)
         if (err:=_validate_image(image)):return await i.response.send_message(f"❌ {err}",ephemeral=True)
+        await i.response.defer(ephemeral=True)
+        try:m=await i.channel.fetch_message(target_id)
+        except (discord.NotFound,discord.Forbidden):return await i.followup.send("❌ Message is missing or inaccessible.",ephemeral=True)
+        if not bot.user or m.author.id!=bot.user.id or not m.embeds:return await i.followup.send("❌ I can only edit bot-authored messages that contain an embed.",ephemeral=True)
         e=discord.Embed.from_dict(m.embeds[0].to_dict())
         if title is not None:e.title=title[:256]
         if description is not None:e.description=description[:4096]
         f=await image.to_file() if image else None
         if f:e.set_image(url=f"attachment://{f.filename}")
-        await m.edit(embed=e,attachments=[f] if f else discord.utils.MISSING); await i.response.send_message("✅ Embed updated.",ephemeral=True)
+        await m.edit(embed=e,attachments=[f] if f else discord.utils.MISSING); await i.followup.send("✅ Embed updated.",ephemeral=True)

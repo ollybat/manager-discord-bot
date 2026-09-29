@@ -29,6 +29,10 @@ def support_panel(guild: discord.Guild, database: Database) -> discord.Embed:
 def inactivity_indicator(last_activity_at: str, inactivity_hours: int, owner_left: bool = False) -> tuple[str, str]:
     from datetime import datetime, timezone
     last = datetime.fromisoformat(last_activity_at)
+    if last.tzinfo is None:
+        last = last.replace(tzinfo=timezone.utc)
+    else:
+        last = last.astimezone(timezone.utc)
     elapsed = max(0, int((datetime.now(timezone.utc) - last).total_seconds()))
     hours, remainder = divmod(elapsed, 3600); minutes = remainder // 60
     duration = f"{hours}h {minutes}m" if hours else f"{minutes}m"

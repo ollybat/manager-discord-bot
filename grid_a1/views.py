@@ -5,7 +5,7 @@ import time
 
 from .embeds import embed
 from .tickets import TicketService, claim
-from .utils import is_ticket, parse_ticket_topic, staff_member
+from .utils import inactivity_custom_id, is_ticket, parse_ticket_topic, staff_member
 
 QUESTION_SETS = {
     "general": ("What do you need help with?", "Which server or area is involved?"),
@@ -344,13 +344,13 @@ class VerifyPanel(discord.ui.View):
     @discord.ui.button(label="Start verification", style=discord.ButtonStyle.primary, emoji="💜", custom_id="grid-a1:verify:start")
     async def verify(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
-        if not interaction.guild or not isinstance(interaction.user, discord.Member): return await interaction.response.send_message("❌ Verification is only available inside the server.", ephemeral=True)
+        if not interaction.guild or not isinstance(interaction.user, discord.Member): return await interaction.followup.send("❌ Verification is only available inside the server.", ephemeral=True)
         config = self.database.config(interaction.guild.id); role = interaction.guild.get_role(config["verify_role"]) if config and config["verify_role"] else None; me = interaction.guild.me
-        if not isinstance(role, discord.Role): return await interaction.response.send_message("⚠️ Verification is not configured yet.", ephemeral=True)
-        if not me or role.is_default() or role.managed or role >= me.top_role: return await interaction.response.send_message("⚠️ Grid A1 cannot manage this role. Move the bot role above it.", ephemeral=True)
-        if role in interaction.user.roles: return await interaction.response.send_message("✅ You are already verified.", ephemeral=True)
+        if not isinstance(role, discord.Role): return await interaction.followup.send("⚠️ Verification is not configured yet.", ephemeral=True)
+        if not me or role.is_default() or role.managed or role >= me.top_role: return await interaction.followup.send("⚠️ Grid A1 cannot manage this role. Move the bot role above it.", ephemeral=True)
+        if role in interaction.user.roles: return await interaction.followup.send("✅ You are already verified.", ephemeral=True)
         age_days = max(0, (discord.utils.utcnow() - interaction.user.created_at).days)
-        if age_days < 7: return await interaction.response.send_message(f"🛡️ Your Discord account is **{age_days} days old**. Accounts under 7 days require staff review. Please open a ticket.", ephemeral=True)
+        if age_days < 7: return await interaction.followup.send(f"🛡️ Your Discord account is **{age_days} days old**. Accounts under 7 days require staff review. Please open a ticket.", ephemeral=True)
         text = f"Your Discord account is **{age_days} days old**.\n\n✅ Confirm you have read and will follow the server rules.\n✅ Confirm this account belongs to you.\n\nClick **Confirm rules** to receive {role.mention}."
         await interaction.followup.send(embed=embed("💜 Verification review", text), view=VerificationConfirm(self.database, role.id), ephemeral=True)
 class VerificationConfirm(discord.ui.View):
@@ -359,17 +359,21 @@ class VerificationConfirm(discord.ui.View):
     @discord.ui.button(label="Confirm rules", style=discord.ButtonStyle.success, emoji="✅")
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.defer(ephemeral=True)
-        if not interaction.guild or not isinstance(interaction.user, discord.Member): return await interaction.response.send_message("❌ Complete this in the server.", ephemeral=True)
+        if not interaction.guild or not isinstance(interaction.user, discord.Member): return await interaction.followup.send("❌ Complete this in the server.", ephemeral=True)
         role = interaction.guild.get_role(self.role_id); me = interaction.guild.me
-        if not role or not me or role >= me.top_role: return await interaction.response.send_message("⚠️ The verification role is not currently manageable.", ephemeral=True)
+        if not role or not me or role >= me.top_role: return await interaction.followup.send("⚠️ The verification role is not currently manageable.", ephemeral=True)
         try: await interaction.user.add_roles(role, reason="Grid A1 verification completed")
-        except discord.Forbidden: return await interaction.response.send_message("❌ I cannot assign the role. Check Manage Roles and role order.", ephemeral=True)
+        except discord.Forbidden: return await interaction.followup.send("❌ I cannot assign the role. Check Manage Roles and role order.", ephemeral=True)
         await interaction.edit_original_response(embed=embed("💜 Verification complete", f"🎉 Welcome, {interaction.user.mention}! You now have {role.mention}."), view=None)
 
 class OwnerInactivityView(discord.ui.View):
     """Buttons sent privately to a ticket owner after a red inactivity warning."""
     def __init__(self, service: TicketService, ticket_id: str):
         super().__init__(timeout=None); self.service = service; self.ticket_id = ticket_id
+        for item in self.children:
+            if isinstance(item, discord.ui.Button) and item.custom_id:
+                action = item.custom_id.rsplit(":", 1)[-1]
+                item.custom_id = inactivity_custom_id(action, ticket_id)
     async def _owner_check(self, interaction):
         row = self.service.db.ticket(self.ticket_id)
         if not row or row["status"] not in ("open", "close_requested") or row["owner_id"] != interaction.user.id:
@@ -378,20 +382,35 @@ class OwnerInactivityView(discord.ui.View):
     @discord.ui.button(label="Keep ticket open", style=discord.ButtonStyle.success, emoji="🟢", custom_id="grid-a1:inactive:keep")
     async def keep(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not await self._owner_check(interaction): return
-        self.service.db.mark_activity(self.ticket_id); await interaction.response.send_message("✅ The ticket will stay open. Staff have been notified.", ephemeral=True)
+        if not interaction.response.is_done(): await interaction.response.defer(ephemeral=True)
+        row = self.service.db.ticket(self.ticket_id)
+        if not row or row['status'] not in ('open', 'close_requested'):
+            return await interaction.followup.send('This ticket is no longer active.', ephemeral=True)
+        self.service.db.mark_activity(self.ticket_id)
+        self.service.db.audit(row['guild_id'], self.ticket_id, interaction.user.id, 'inactivity_kept_open')
+        guild = interaction.client.get_guild(row['guild_id'])
+        channel = await self.service.resolve_ticket_channel(guild, row['channel_id']) if guild else None
+        notified = bool(guild and isinstance(channel, discord.TextChannel) and await self.service.notify_staff(guild, channel, self.ticket_id, row['issue'], row['region'], row['owner_id'], notice='The ticket owner checked in and kept the ticket open'))
+        message = '✅ The ticket will stay open.' + (' Staff were notified.' if notified else ' I could not notify staff; please message them in the ticket if you need help.')
+        await interaction.followup.send(message, ephemeral=True)
     @discord.ui.button(label="Request another staff member", style=discord.ButtonStyle.secondary, emoji="🙋", custom_id="grid-a1:inactive:staff")
     async def staff(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not await self._owner_check(interaction): return
-        self.service.db.set_claim(self.ticket_id, None); self.service.db.mark_activity(self.ticket_id); self.service.db.audit(self.service.db.ticket(self.ticket_id)["guild_id"], self.ticket_id, interaction.user.id, "staff_requested"); row = self.service.db.ticket(self.ticket_id); guild = interaction.client.get_guild(row['guild_id']) if row else None; channel = guild.get_channel(row['channel_id']) if guild and row else None;
-        if guild and isinstance(channel, discord.TextChannel): await self.service.notify_staff(guild, channel, self.ticket_id, row['issue'], row['region'], row['owner_id'])
-        await interaction.response.send_message("✅ Staff have been notified in the ticket channel.", ephemeral=True)
+        if not interaction.response.is_done(): await interaction.response.defer(ephemeral=True)
+        row = self.service.db.ticket(self.ticket_id)
+        if not row or row['status'] not in ('open', 'close_requested'):
+            return await interaction.followup.send('This ticket is no longer active.', ephemeral=True)
+        self.service.db.set_claim(self.ticket_id, None)
+        self.service.db.mark_activity(self.ticket_id)
+        self.service.db.audit(row['guild_id'], self.ticket_id, interaction.user.id, 'staff_requested')
+        guild = interaction.client.get_guild(row['guild_id'])
+        channel = await self.service.resolve_ticket_channel(guild, row['channel_id']) if guild else None
+        notified = bool(guild and isinstance(channel, discord.TextChannel) and await self.service.notify_staff(guild, channel, self.ticket_id, row['issue'], row['region'], row['owner_id'], notice='The ticket owner requested another staff member'))
+        message = '✅ Your request was recorded.' + (' Staff were notified in the ticket.' if notified else ' The request was recorded, but I could not notify staff; please try again or contact them directly.')
+        await interaction.followup.send(message, ephemeral=True)
     @discord.ui.button(label="Close ticket", style=discord.ButtonStyle.danger, emoji="🔒", custom_id="grid-a1:inactive:close")
     async def close(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not await self._owner_check(interaction): return
-        row = self.service.db.ticket(self.ticket_id)
-        guild = interaction.client.get_guild(row["guild_id"]) if row else None
-        channel = guild.get_channel(row["channel_id"]) if guild and row else None
-        if not isinstance(channel, discord.TextChannel): return await interaction.response.send_message("This ticket is already closed.", ephemeral=True)
         await self.service.close_owner_from_dm(interaction, self.ticket_id, "Closed by ticket owner from inactivity notice")
 
 
@@ -410,12 +429,19 @@ class TicketControls(discord.ui.View):
         from datetime import datetime, timezone, timedelta
         now = datetime.now(timezone.utc)
         urgent_at = row["urgent_at"] if "urgent_at" in row.keys() else None
-        if urgent_at and now - datetime.fromisoformat(urgent_at) < timedelta(hours=1): return await interaction.response.send_message("🚨 This ticket was already marked urgent recently. Staff have been notified.", ephemeral=True)
+        if urgent_at:
+            try:
+                previous = datetime.fromisoformat(urgent_at)
+                if previous.tzinfo is None: previous = previous.replace(tzinfo=timezone.utc)
+            except (TypeError, ValueError):
+                previous = None
+            if previous and now - previous < timedelta(hours=1): return await interaction.response.send_message("🚨 This ticket was already marked urgent recently.", ephemeral=True)
+        await interaction.response.defer(ephemeral=True)
+        notified = await self.service.notify_staff(interaction.guild, interaction.channel, row["ticket_id"], row["issue"], row["region"], row["owner_id"], notice="🚨 URGENT SUPPORT REQUEST — the ticket owner needs immediate staff attention")
+        if not notified:
+            return await interaction.followup.send("⚠️ I could not notify the configured staff roles. Please contact staff directly.", ephemeral=True)
         self.service.db.update_ticket(row["ticket_id"], urgent_at=now.isoformat(), urgent_by=interaction.user.id)
-        roles = [interaction.guild.get_role(role_id) for role_id in self.service.db.configured_permission_role_ids(interaction.guild.id)]; roles = [role for role in roles if role]
-        mentions = " ".join(role.mention for role in roles) or "staff"
-        await interaction.channel.send(f"🚨 {mentions} **URGENT SUPPORT REQUEST** — the ticket owner needs immediate staff attention.", allowed_mentions=discord.AllowedMentions(roles=True) if roles else discord.AllowedMentions.none())
-        await interaction.response.send_message("🚨 Staff have been urgently notified. Please stay available in this ticket.", ephemeral=True)
+        await interaction.followup.send("🚨 Staff were notified. Please stay available in this ticket.", ephemeral=True)
     @discord.ui.button(label="Keep ticket open", style=discord.ButtonStyle.success, emoji="🟢", custom_id="grid-a1:ticket:keep-open")
     async def keep_open(self, interaction: discord.Interaction, button: discord.ui.Button):
         data=parse_ticket_topic(interaction.channel); self.service.db.mark_activity(data.get('id','')); await interaction.response.send_message('✅ Your ticket will remain open. Thanks for checking in!', ephemeral=True)
@@ -423,8 +449,15 @@ class TicketControls(discord.ui.View):
     async def request_staff(self, interaction: discord.Interaction, button: discord.ui.Button):
         data=parse_ticket_topic(interaction.channel)
         if not isinstance(interaction.user, discord.Member) or interaction.user.id != int(data.get('owner','0')): return await interaction.response.send_message('Only the ticket owner can use this button.', ephemeral=True)
-        self.service.db.set_claim(data.get('id',''), None); self.service.db.mark_activity(data.get('id','')); self.service.db.audit(interaction.guild.id,data.get('id'),interaction.user.id,'staff_requested'); await interaction.channel.send('📣 The ticket owner requested another staff member. Please review this ticket.')
-        await interaction.response.send_message('✅ Staff have been alerted and the current claim was cleared.', ephemeral=True)
+        row=self.service.db.ticket(data.get('id',''))
+        if not row or row['status'] not in ('open','close_requested'): return await interaction.response.send_message('This ticket is no longer active.', ephemeral=True)
+        await interaction.response.defer(ephemeral=True)
+        self.service.db.set_claim(row['ticket_id'], None)
+        self.service.db.mark_activity(row['ticket_id'])
+        self.service.db.audit(interaction.guild.id,row['ticket_id'],interaction.user.id,'staff_requested')
+        notified=await self.service.notify_staff(interaction.guild,interaction.channel,row['ticket_id'],row['issue'],row['region'],row['owner_id'],notice='The ticket owner requested another staff member')
+        message='✅ Your request was recorded and the current claim was cleared.' + (' Staff were alerted.' if notified else ' The staff ping could not be delivered; please contact staff directly.')
+        await interaction.followup.send(message, ephemeral=True)
     @discord.ui.button(label="Close ticket", style=discord.ButtonStyle.danger, emoji="🔒", custom_id="grid-a1:ticket:close")
     async def close_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not isinstance(interaction.user, discord.Member) or not staff_member(interaction.user, self.service.db): return await interaction.response.send_message("Only staff can close tickets.", ephemeral=True)
