@@ -15,12 +15,21 @@ def embed(title: str, description: str, colour: discord.Colour = NEON_PURPLE) ->
 
 def support_panel(guild: discord.Guild, database: Database) -> discord.Embed:
     counts = database.open_counts(guild.id)
-    closed = database.closed_count(guild.id)
-    closed_eu = database.closed_count(guild.id, "EU")
-    result = embed("💜 Grid A1 • Support Center", "✨ Choose the type of help you need, select the EU region, and complete the short ticket form.", NEON_PURPLE)
-    result.add_field(name="📊 Live queue", value=f"🟢 Open: **{sum(counts.values())}**\n🇪🇺 EU: **{counts.get('EU', 0)}**\n📁 Closed: **{closed}** ({closed_eu} EU)", inline=True)
-    result.add_field(name="📌 Before opening", value="Please include clear details, screenshots when useful, and keep replies inside your ticket.", inline=False)
-    result.set_footer(text="Grid A1 • EU Support • Manager")
+    bot_name = guild.me.display_name if guild.me else "Grid A1"
+    year = utcnow().year
+    description = (
+        "For any issue you encounter or questions you have, please select one of the following choices.\n\n"
+        "If you need the command list or instructions, use `/help`. It provides the full list of commands and helps staff respond more quickly.\n\n"
+        "📄 **Ticket General**\nFor any request or question that is not covered by the categories below.\n\n"
+        "🏠 **Ticket Base**\nQuestions or problems related to your base or your area.\n\n"
+        "👥 **Ticket Clan**\nClan requests or specific clan-related problems.\n\n"
+        "💎 **Ticket Shop**\nInformation about our online store or any product.\n\n"
+        "⚠️ **Ticket Raid**\nBounty raids or other raid-related problems.\n\n"
+        "🐛 **Ticket Bug**\nBugs or glitches found in-game or with our bots."
+    )
+    result = embed(f"📩 {bot_name} - Support", description, NEON_PURPLE)
+    result.add_field(name="Support Status", value=f"Open Tickets: **{sum(counts.values())}**\nResponse Speed: Fast\nEstimated Help Time: 12 mins", inline=False)
+    result.set_footer(text=f"Support - {bot_name} • {year}")
     return result
 
 
