@@ -16,7 +16,14 @@ class Settings:
         prefix = os.getenv("PREFIX", "!")
         if not prefix or len(prefix) > 8 or "\n" in prefix or "\r" in prefix:
             raise ValueError("PREFIX must be 1-8 characters and contain no newlines")
-        database_path = Path(os.getenv("DATABASE_PATH", "manager.sqlite3"))
+        configured_database_path = os.getenv("DATABASE_PATH", "").strip()
+        volume_mount = os.getenv("RAILWAY_VOLUME_MOUNT_PATH", "").strip()
+        if configured_database_path:
+            database_path = Path(configured_database_path)
+        elif volume_mount:
+            database_path = Path(volume_mount) / "manager.sqlite3"
+        else:
+            database_path = Path("manager.sqlite3")
         if database_path.is_dir():
             raise ValueError("DATABASE_PATH must point to a SQLite file")
         level = os.getenv("LOG_LEVEL", "INFO").upper()
@@ -28,6 +35,15 @@ def validate_runtime(settings: Settings) -> list[str]:
     if not settings.token: problems.append("DISCORD_TOKEN is missing")
     elif settings.token.lower() in {"put_your_bot_token_here", "your_token_here"}: problems.append("DISCORD_TOKEN still contains the example placeholder")
     if settings.owner_id is None: problems.append("OWNER_ID is not configured; owner diagnostics and sync are disabled")
+    if os.getenv("RAILWAY_SERVICE_ID", "").strip():
+        volume_mount = os.getenv("RAILWAY_VOLUME_MOUNT_PATH", "").strip()
+        if not volume_mount:
+            problems.append(f"Railway persistent volume is not detected; SQLite data at {settings.database_path} may be lost on restart/redeploy")
+        else:
+            try:
+                settings.database_path.expanduser().resolve().relative_to(Path(volume_mount).expanduser().resolve())
+            except (OSError, RuntimeError, ValueError):
+                problems.append(f"DATABASE_PATH {settings.database_path} is outside Railway's mounted volume {volume_mount}; data may be lost on restart/redeploy")
     return problems
 
 def configure_logging(level:str)->None:

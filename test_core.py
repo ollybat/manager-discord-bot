@@ -3,11 +3,14 @@ from __future__ import annotations
 
 import ast
 import json
+import os
 import sqlite3
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
+from grid_a1.config import Settings, validate_runtime
 from grid_a1.database import Database
 from grid_a1.embeds import inactivity_indicator
 from grid_a1.utils import detected_external_links, inactivity_custom_id, is_http_url, safe_json_list, sanitize_channel_name, ticket_status_title
@@ -24,6 +27,19 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(safe_json_list("not-json", int), [])
         self.assertEqual(safe_json_list('{"not": "a list"}', int), [])
         self.assertEqual(safe_json_list('[1, true, "2", null, "bad"]', int), [1, 2])
+
+    def test_railway_database_path_must_be_inside_the_attached_volume(self):
+        with patch.dict(os.environ, {"DISCORD_TOKEN": "token", "OWNER_ID": "1", "RAILWAY_VOLUME_MOUNT_PATH": "/data"}, clear=True):
+            self.assertEqual(Settings.from_env().database_path, Path("/data/manager.sqlite3"))
+        settings = Settings("token", "!", Path("/data/manager.sqlite3"), 1, "INFO")
+        with patch.dict(os.environ, {"RAILWAY_SERVICE_ID": "service"}, clear=True):
+            problems = validate_runtime(settings)
+            self.assertTrue(any("persistent volume is not detected" in problem for problem in problems))
+        with patch.dict(os.environ, {"RAILWAY_SERVICE_ID": "service", "RAILWAY_VOLUME_MOUNT_PATH": "/data"}, clear=True):
+            self.assertFalse(any("Railway" in problem or "DATABASE_PATH" in problem for problem in validate_runtime(settings)))
+        wrong_path = Settings("token", "!", Path("/app/manager.sqlite3"), 1, "INFO")
+        with patch.dict(os.environ, {"RAILWAY_SERVICE_ID": "service", "RAILWAY_VOLUME_MOUNT_PATH": "/data"}, clear=True):
+            self.assertTrue(any("outside Railway's mounted volume" in problem for problem in validate_runtime(wrong_path)))
 
     def test_fresh_and_repeat_migration_preserve_ticket_and_config(self):
         with tempfile.TemporaryDirectory() as directory:
