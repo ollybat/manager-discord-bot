@@ -4,7 +4,7 @@ This repository is a standalone Python Discord bot. `bot.py` is the supported en
 
 ## Runtime flow
 
-Startup loads `.env`, validates settings, configures logging, runs SQLite migrations, registers persistent views, starts resilient panel/inactivity loops, removes stale guild command copies, and publishes the global application command tree. The bot is Discord-only and has no unrelated network transport layer.
+Startup loads `.env`, validates settings, configures logging, runs SQLite migrations, registers persistent views, starts resilient panel/inactivity loops, removes stale guild command copies, and publishes the global application command tree. The bot is Discord-only and has no unrelated network transport layer. SQLite schema version is 15; migrations are additive and preserve DATABASE_PATH and existing records.
 
 ## Modules
 
