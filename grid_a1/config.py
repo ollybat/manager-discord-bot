@@ -12,7 +12,24 @@ class Settings:
         owner_raw=os.getenv("OWNER_ID","").strip()
         try: owner=int(owner_raw) if owner_raw else None
         except ValueError: raise ValueError("OWNER_ID must be an integer Discord user ID") from None
-        return cls(os.getenv("DISCORD_TOKEN"),os.getenv("PREFIX","!"),Path(os.getenv("DATABASE_PATH","manager.sqlite3")),owner,os.getenv("LOG_LEVEL","INFO").upper())
+        token = os.getenv("DISCORD_TOKEN")
+        prefix = os.getenv("PREFIX", "!")
+        if len(prefix) > 8 or "\n" in prefix or "\r" in prefix:
+            raise ValueError("PREFIX must be at most 8 characters and contain no newlines")
+        database_path = Path(os.getenv("DATABASE_PATH", "manager.sqlite3"))
+        if database_path.is_dir():
+            raise ValueError("DATABASE_PATH must point to a SQLite file")
+        level = os.getenv("LOG_LEVEL", "INFO").upper()
+        if level not in {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}:
+            raise ValueError("LOG_LEVEL must be DEBUG, INFO, WARNING, ERROR, or CRITICAL")
+        return cls(token, prefix, database_path, owner, level)
+def validate_runtime(settings: Settings) -> list[str]:
+    problems: list[str] = []
+    if not settings.token: problems.append("DISCORD_TOKEN is missing")
+    elif settings.token.lower() in {"put_your_bot_token_here", "your_token_here"}: problems.append("DISCORD_TOKEN still contains the example placeholder")
+    if settings.owner_id is None: problems.append("OWNER_ID is not configured; owner diagnostics and sync are disabled")
+    return problems
+
 def configure_logging(level:str)->None:
     numeric=getattr(logging,level.upper(),logging.INFO)
     logging.basicConfig(level=numeric,format="%(asctime)s %(levelname)s %(name)s: %(message)s",stream=sys.stdout,force=True)
