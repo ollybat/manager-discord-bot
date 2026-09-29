@@ -32,13 +32,13 @@ class TicketService:
         welcome=ticket_embed(label,region,details); welcome.title=f'💜 {label.title()} Support Ticket'; welcome.description=f'Welcome {interaction.user.mention}! Your private support channel is ready.'
         await channel.send(content=interaction.user.mention,embed=welcome,view=TicketControls(self)); await self.notify_staff(guild,channel,ticket_id,label,region,interaction.user.id); await interaction.followup.send(f'✅ Ticket **{ticket_id}** created: {channel.mention}',ephemeral=True)
     async def notify_staff(self,guild,channel,ticket_id,issue,region,owner_id):
-        roles=[guild.get_role(r) for r in self.db.configured_permission_role_ids(guild.id)]; roles=[r for r in roles if r]
-        if roles: await channel.send('📣 '+' '.join(r.mention for r in roles),allowed_mentions=discord.AllowedMentions(roles=True))
+        roles=[guild.get_role(r) for r in self.db.staff_role_ids(guild.id)]; roles=[r for r in roles if r]
+        if roles: await channel.send('📣 '+' '.join(r.mention for r in roles)+' — staff notification: a support ticket needs attention.',allowed_mentions=discord.AllowedMentions(roles=True))
     async def transcript(self,channel):
         from .transcript import render
         messages=[]
         async for message in channel.history(limit=None,oldest_first=True):messages.append(message)
-        data=parse_ticket_topic(channel); return render(messages,channel,data,self.db.ticket(data.get('id',str(channel.id))))
+        data=parse_ticket_topic(channel); return await render(messages,channel,data,self.db.ticket(data.get('id',str(channel.id))))
     async def close_system(self,guild,channel,reason):
         row=self.db.ticket_by_channel(channel.id)
         if not row:return
@@ -77,9 +77,10 @@ class TicketService:
         if hasattr(interaction,'followup'): await interaction.followup.send('✅ Transcript archived. This ticket will now be deleted.',ephemeral=True)
         await channel.delete(reason=f'Grid A1 ticket {tid} closed')
 async def claim(interaction,service,member=None):
-    if not staff_member(interaction.user,service.db):return await interaction.response.send_message('Only staff can claim tickets.',ephemeral=True)
-    if not isinstance(interaction.channel,discord.TextChannel) or not is_ticket(interaction.channel):return await interaction.response.send_message('This only works inside a ticket.',ephemeral=True)
-    if member is not None and not staff_member(member,service.db):return await interaction.response.send_message('Only staff members can receive a ticket transfer.',ephemeral=True)
+    if not interaction.response.is_done(): await interaction.response.defer(ephemeral=True)
+    if not staff_member(interaction.user,service.db):return await interaction.followup.send('Only staff can claim tickets.',ephemeral=True)
+    if not isinstance(interaction.channel,discord.TextChannel) or not is_ticket(interaction.channel):return await interaction.followup.send('This only works inside a ticket.',ephemeral=True)
+    if member is not None and not staff_member(member,service.db):return await interaction.followup.send('Only staff members can receive a ticket transfer.',ephemeral=True)
     data=parse_ticket_topic(interaction.channel); target=member or interaction.user
     if data.get('id'):service.db.update_ticket(data['id'],claimed_by=target.id)
-    await interaction.response.send_message(embed=embed('🙋 Ticket claimed',f'Assigned to {target.mention}.'))
+    await interaction.followup.send(embed=embed('🙋 Ticket claimed',f'Assigned to {target.mention}.'))
