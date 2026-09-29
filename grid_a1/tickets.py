@@ -70,7 +70,9 @@ class TicketService:
         if not isinstance(archive,discord.TextChannel):return await interaction.response.send_message('The logs channel is missing.',ephemeral=True)
         if not interaction.response.is_done():await interaction.response.defer(ephemeral=True)
         # Defer before any transcript I/O so the interaction token remains valid.
-        transcript=await self.transcript(channel); tid=data.get('id',str(channel.id)); closed=utcnow().isoformat(); self.db.update_ticket(tid,status='closed',closed_at=closed,closed_by=interaction.user.id,close_reason=reason,transcript_filename=f'{channel.name}-transcript.html')
+        transcript=await self.transcript(channel); tid=data.get('id',str(channel.id)); closed=utcnow().isoformat()
+        self.db.update_ticket(tid,status='closed',closed_at=closed,closed_by=interaction.user.id,close_reason=reason,transcript_filename=f'{channel.name}-transcript.html')
+        self.db.add_closed_ticket(guild_id=interaction.guild.id,region=data.get('region','EU'),issue=data.get('issue','unknown'),closed_by=interaction.user.id,reason=reason,closed_at=closed)
         await archive.send(embed=ticket_archive_embed(tid,data.get('region','EU'),data.get('issue','unknown'),interaction.user,reason),file=discord.File(io.BytesIO(transcript.encode()),filename=f'{channel.name}-transcript.html'))
         if hasattr(interaction,'followup'): await interaction.followup.send('✅ Transcript archived. This ticket will now be deleted.',ephemeral=True)
         await channel.delete(reason=f'Grid A1 ticket {tid} closed')
