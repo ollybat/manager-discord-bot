@@ -1,6 +1,7 @@
 from __future__ import annotations
 import logging
 import time
+import hashlib
 import discord
 import json
 from discord import app_commands
@@ -84,7 +85,12 @@ class GridA1Bot(commands.Bot):
             channel = guild.get_channel(config['panel_channel'])
             if not isinstance(channel, discord.TextChannel): continue
             try:
-                message = await channel.fetch_message(config['panel_message']); await message.edit(embed=support_panel(guild, self.database), view=TicketPanel(self.tickets))
+                message = await channel.fetch_message(config['panel_message'])
+                panel = support_panel(guild, self.database)
+                fingerprint = hashlib.sha256(json.dumps(panel.to_dict(), sort_keys=True).encode()).hexdigest()
+                if config['panel_fingerprint'] != fingerprint:
+                    await message.edit(embed=panel, view=TicketPanel(self.tickets))
+                    self.database.upsert_config(guild.id, panel_fingerprint=fingerprint)
             except discord.NotFound:
                 try:
                     message = await channel.send(embed=support_panel(guild, self.database), view=TicketPanel(self.tickets)); self.database.upsert_config(guild.id, panel_message=message.id)
@@ -106,7 +112,9 @@ class GridA1Bot(commands.Bot):
                 for row in self.database.open_tickets(guild.id):
                     try:
                         channel = guild.get_channel(row['channel_id'])
-                        if not isinstance(channel, discord.TextChannel): continue
+                        if not isinstance(channel, discord.TextChannel):
+                            self.database.mark_channel_missing(row['channel_id'])
+                            continue
                         indicator, duration = inactivity_indicator(row['last_activity_at'], threshold, bool(row['owner_left']))
                         red = indicator == '🔴'
                         if red and not row['inactivity_notice_at']:
@@ -178,16 +186,18 @@ def server_owner_only():
 @app_commands.describe(enabled="Enable protection", action="delete, delete_warn, or delete_log", log_channel="Optional moderation log channel")
 @app_commands.choices(action=[app_commands.Choice(name="Delete", value="delete"),app_commands.Choice(name="Delete and warn", value="delete_warn"),app_commands.Choice(name="Delete and log", value="delete_log")])
 async def anti_links(i: discord.Interaction, enabled: bool, action: app_commands.Choice[str] = None, log_channel: discord.TextChannel = None):
+    await i.response.defer(ephemeral=True)
     mode = action.value if action else "delete_warn"
     bot.database.upsert_config(i.guild.id, anti_links_enabled=int(enabled), anti_links_action=mode, anti_links_log_channel=log_channel.id if log_channel else None)
-    await i.response.send_message(embed=embed("Anti-links settings saved", f"Protection: {'enabled' if enabled else 'disabled'}\nAction: {mode}"), ephemeral=True)
+    await i.followup.send(embed=embed("Anti-links settings saved", f"Protection: {'enabled' if enabled else 'disabled'}\nAction: {mode}"), ephemeral=True)
 @bot.tree.command(name="dashboard", description="Open the private owner master dashboard")
 async def dashboard(i: discord.Interaction):
+    await i.response.defer(ephemeral=True)
     if not _dashboard_access(i):
-        return await i.response.send_message("Dashboard access requires the configured owner or co-owner role. The server owner must first run /setup roles.", ephemeral=True)
-    if not i.guild: return await i.response.send_message("❌ The dashboard can only be opened inside a server.", ephemeral=True)
+        return await i.followup.send("Dashboard access requires the configured owner or co-owner role. The server owner must first run /setup roles.", ephemeral=True)
+    if not i.guild: return await i.followup.send("❌ The dashboard can only be opened inside a server.", ephemeral=True)
     view = DashboardView(bot.database, settings.owner_id)
-    await i.response.send_message(embed=view.dashboard_embed(i.guild), view=view, ephemeral=True)
+    await i.followup.send(embed=view.dashboard_embed(i.guild), view=view, ephemeral=True)
 
 @bot.tree.command(name="kick", description="Kick a member from this Discord server")
 @staff()
@@ -206,7 +216,7 @@ async def moderation_ban(i: discord.Interaction, member: discord.Member, reason:
     if member.id == i.user.id or member.id == i.guild.owner_id: return await i.response.send_message("❌ You cannot ban yourself or the server owner.", ephemeral=True)
     if member.top_role >= i.user.top_role and i.user.id != i.guild.owner_id: return await i.response.send_message("❌ That member has an equal or higher role than you.", ephemeral=True)
     if not i.guild.me or member.top_role >= i.guild.me.top_role: return await i.response.send_message("❌ My bot role must be above that member.", ephemeral=True)
-    try: await member.ban(reason=f"{reason} • Moderator: {i.user}", delete_message_days=0)
+    try: await member.ban(reason=f"{reason} • Moderator: {i.user}", delete_message_seconds=0)
     except discord.Forbidden: return await i.response.send_message("❌ Discord denied the ban. Check Ban Members permission and role hierarchy.", ephemeral=True)
     bot.database.audit(i.guild.id, None, i.user.id, "ban", discord.utils.escape_markdown(reason)[:500])
     await i.response.send_message(embed=embed("💜 Member banned", f"🔨 {member.mention} was banned from the server.\n\n**Reason:** {discord.utils.escape_markdown(reason)[:500]}"), ephemeral=True)
@@ -247,10 +257,11 @@ async def prefix_unlock(ctx):
 @server_owner_only()
 @app_commands.describe(owner_role="Owner staff role", co_owner_role="Co-owner staff role", head_admin_role="Head administrator staff role", admin_role="Administrator staff role", moderator_role="Moderator staff role")
 async def setup_roles(i: discord.Interaction, owner_role: discord.Role, co_owner_role: discord.Role, head_admin_role: discord.Role, admin_role: discord.Role, moderator_role: discord.Role):
+    await i.response.defer(ephemeral=True)
     roles = {"owner_role": owner_role, "co_owner_role": co_owner_role, "head_admin_role": head_admin_role, "admin_role": admin_role, "moderator_role": moderator_role}
     invalid = [role.mention for role in roles.values() if role.guild.id != i.guild.id or role.is_default() or role.managed]
-    if invalid: return await i.response.send_message(embed=embed("💜 Role setup not saved", "❌ These roles cannot be used: " + ", ".join(invalid)), ephemeral=True)
-    if len({role.id for role in roles.values()}) != len(roles): return await i.response.send_message(embed=embed("💜 Role setup not saved", "❌ Each permission level must use a different role."), ephemeral=True)
+    if invalid: return await i.followup.send(embed=embed("💜 Role setup not saved", "❌ These roles cannot be used: " + ", ".join(invalid)), ephemeral=True)
+    if len({role.id for role in roles.values()}) != len(roles): return await i.followup.send(embed=embed("💜 Role setup not saved", "❌ Each permission level must use a different role."), ephemeral=True)
     bot.database.upsert_config(i.guild.id, **{name: role.id for name, role in roles.items()})
     e = embed("💜 Grid A1 • Permission roles saved", "✅ Staff access roles are now configured for this server.", discord.Colour.from_rgb(177, 77, 255))
     e.add_field(name="👑 Owner", value=owner_role.mention, inline=True)
@@ -259,7 +270,7 @@ async def setup_roles(i: discord.Interaction, owner_role: discord.Role, co_owner
     e.add_field(name="⚙️ Admin", value=admin_role.mention, inline=True)
     e.add_field(name="🔨 Moderator", value=moderator_role.mention, inline=True)
     e.set_footer(text="Grid A1 • Permission configuration • Changes saved to SQLite")
-    await i.response.send_message(embed=e, ephemeral=True)
+    await i.followup.send(embed=e, ephemeral=True)
 
 @bot.tree.command(name="verifypanel", description="Create a verification panel")
 @app_commands.checks.has_permissions(manage_guild=True)
@@ -358,28 +369,10 @@ async def roles_setchannel(i: discord.Interaction, channel: discord.TextChannel)
     except discord.Forbidden: return await i.response.send_message("❌ I cannot post in that channel.", ephemeral=True)
     await i.response.send_message(f"✅ Role directory posted in {channel.mention}.", ephemeral=True)
 
-@setup_group.command(name="staff", description="Manage optional ticket staff notification roles")
-@app_commands.checks.has_permissions(manage_guild=True)
-@app_commands.describe(action="Choose whether to add or remove this staff role", role="Staff role to notify")
-@app_commands.choices(action=[app_commands.Choice(name="Add staff notifications", value="add"), app_commands.Choice(name="Remove staff notifications", value="remove")])
-async def setup_staff(i: discord.Interaction, action: app_commands.Choice[str], role: discord.Role):
-    if role.is_default() or role.managed: return await i.response.send_message("❌ Choose a normal staff role, not @everyone or an integration role.", ephemeral=True)
-    action = action.value.lower()
-    if action not in ("add", "remove"):
-        return await i.response.send_message("Use action add or remove.", ephemeral=True)
-    try:
-        changed = bot.database.add_staff_role(i.guild.id, role.id) if action == "add" else bot.database.remove_staff_role(i.guild.id, role.id)
-    except ValueError as error:
-        return await i.response.send_message(f"❌ {error}", ephemeral=True)
-    if action == "add":
-        message = f"✅ {role.mention} will be notified when a new ticket is created." if changed else f"{role.mention} is already configured."
-    else:
-        message = f"✅ Removed {role.mention} from ticket notifications." if changed else f"{role.mention} was not configured."
-    await i.response.send_message(message, ephemeral=True)
-
 @setup_group.command(name="tickets", description="Configure ticket channels and deploy the support panel")
 @admin()
 async def setup_tickets(i, panel_channel: discord.TextChannel, logs_channel: discord.TextChannel, category: discord.CategoryChannel, inactivity_hours: app_commands.Range[int,1,720]):
+    await i.response.defer(ephemeral=True)
     g = guild(i)
     previous = bot.database.config(g.id)
     bot.database.upsert_config(g.id, panel_channel=panel_channel.id, logs_channel=logs_channel.id, ticket_category=category.id, inactivity_hours=inactivity_hours)
@@ -395,7 +388,7 @@ async def setup_tickets(i, panel_channel: discord.TextChannel, logs_channel: dis
     if message is None:
         message = await panel_channel.send(embed=support_panel(g, bot.database), view=TicketPanel(bot.tickets))
     bot.database.upsert_config(g.id, panel_message=message.id)
-    await i.response.send_message(f"✅ Grid A1 support panel updated in {panel_channel.mention}; logs go to {logs_channel.mention}.", ephemeral=True)
+    await i.followup.send(f"✅ Grid A1 support panel updated in {panel_channel.mention}; logs go to {logs_channel.mention}.", ephemeral=True)
 
 @setup_group.command(name="welcomer", description="Configure welcome and community channels")
 @admin()
@@ -435,6 +428,12 @@ async def on_command_error(ctx, error):
     log.exception("Prefix command failed", exc_info=error)
 
 _anti_link_warning_cooldown = {}
+_ANTI_LINK_COOLDOWN_SECONDS = 30
+
+def _prune_anti_link_cooldown(now):
+    cutoff = now - _ANTI_LINK_COOLDOWN_SECONDS
+    for key, seen in list(_anti_link_warning_cooldown.items()):
+        if seen < cutoff: _anti_link_warning_cooldown.pop(key, None)
 async def _scan_link_message(message):
     if message.author.bot or not message.guild or not isinstance(message.channel, discord.TextChannel) or not isinstance(message.author, discord.Member): return
     config=bot.database.config(message.guild.id)
@@ -446,7 +445,7 @@ async def _scan_link_message(message):
     if not links: return
     try: await message.delete(reason="Anti-links protection")
     except (discord.Forbidden, discord.NotFound, discord.HTTPException): log.warning("Could not delete anti-link message %s", message.id)
-    mode=config["anti_links_action"] if config["anti_links_action"] in {"delete", "delete_warn", "delete_log"} else "delete_warn"; key=(message.guild.id,message.channel.id,member.id); now=time.monotonic()
+    mode=config["anti_links_action"] if config["anti_links_action"] in {"delete", "delete_warn", "delete_log"} else "delete_warn"; key=(message.guild.id,message.channel.id,member.id); now=time.monotonic(); _prune_anti_link_cooldown(now)
     if mode == "delete_log" and config["anti_links_log_channel"]:
         log_channel=message.guild.get_channel(config["anti_links_log_channel"])
         if isinstance(log_channel, discord.TextChannel):
@@ -454,7 +453,7 @@ async def _scan_link_message(message):
                 safe_domains = discord.utils.escape_markdown(", ".join(links))[:900]
                 await log_channel.send(f"🛡️ Deleted external link from {member.mention} in {message.channel.mention}. Domains: `{safe_domains}`", allowed_mentions=discord.AllowedMentions.none())
             except discord.DiscordException: log.warning("Could not write anti-link log for %s", message.id)
-    if mode == "delete_warn" and now-_anti_link_warning_cooldown.get(key,0)>30:
+    if mode == "delete_warn" and now-_anti_link_warning_cooldown.get(key,0)>_ANTI_LINK_COOLDOWN_SECONDS:
         _anti_link_warning_cooldown[key]=now
         try: await message.channel.send(f"{member.mention}, external links are not allowed here.", delete_after=8, allowed_mentions=discord.AllowedMentions(users=[member]))
         except discord.DiscordException: pass
