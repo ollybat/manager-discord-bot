@@ -10,6 +10,10 @@ For interactive setup, open `/dashboard` and use the module buttons. Permission 
 
 Run `/setup roles owner_role: ... co_owner_role: ... head_admin_role: ... admin_role: ... moderator_role: ...` if you need to initialize dashboard access first. These five roles are both permission roles and ticket notification targets. There is no `/setup staff` command.
 
+### Keep data across Railway restarts and redeploys
+
+SQLite already writes tickets, settings, reports, and audit records to `DATABASE_PATH`. On Railway, attach a persistent **Volume** to the bot service with mount path `/data`, then set `DATABASE_PATH=/data/manager.sqlite3`. Railway volume attachment is service configuration and cannot be created by a code deploy. Startup now warns if Railway does not expose a mounted volume or if `DATABASE_PATH` points outside it. Do not delete the volume when redeploying; doing so deletes the stored database.
+
 All server members can use `/report member reason proof_link proof_file`. Reports go to the report channel selected in `/dashboard`; restrict that channel's visibility to trusted staff. A proof URL or uploaded evidence file is optional.
 
 Keep tokens, databases, transcripts, and logs private. Validate with:

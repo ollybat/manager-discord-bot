@@ -19,4 +19,8 @@ Use `/setup roles owner_role: ... co_owner_role: ... head_admin_role: ... admin_
 `/verifypanel channel role`
 `/anti-links enabled:true action:delete_warn`
 
+## Keep data across Railway restarts and redeploys
+
+The bot stores its SQLite database at `DATABASE_PATH`. For Railway, attach a persistent Volume to the bot service and set the volume mount path to `/data`; set the service variable `DATABASE_PATH=/data/manager.sqlite3`. The application cannot create or attach the Railway Volume from source code. On startup it now warns if Railway reports no volume mount or if the database path is outside the mounted directory. Keep the Volume attached when redeploying; deleting it removes the database.
+
 Keep the bot token, database, transcripts, and logs private. Test role hierarchy and permissions in a test server before production.
