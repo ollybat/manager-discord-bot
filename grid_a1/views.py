@@ -400,7 +400,7 @@ class TicketControls(discord.ui.View):
         urgent_at = row["urgent_at"] if "urgent_at" in row.keys() else None
         if urgent_at and now - datetime.fromisoformat(urgent_at) < timedelta(hours=1): return await interaction.response.send_message("🚨 This ticket was already marked urgent recently. Staff have been notified.", ephemeral=True)
         self.service.db.update_ticket(row["ticket_id"], urgent_at=now.isoformat(), urgent_by=interaction.user.id)
-        roles = [interaction.guild.get_role(role_id) for role_id in self.service.db.staff_role_ids(interaction.guild.id)]; roles = [role for role in roles if role]
+        roles = [interaction.guild.get_role(role_id) for role_id in self.service.db.configured_permission_role_ids(interaction.guild.id)]; roles = [role for role in roles if role]
         mentions = " ".join(role.mention for role in roles) or "staff"
         await interaction.channel.send(f"🚨 {mentions} **URGENT SUPPORT REQUEST** — the ticket owner needs immediate staff attention.", allowed_mentions=discord.AllowedMentions(roles=True) if roles else discord.AllowedMentions.none())
         await interaction.response.send_message("🚨 Staff have been urgently notified. Please stay available in this ticket.", ephemeral=True)
