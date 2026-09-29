@@ -240,7 +240,7 @@ class TicketTypeSelect(discord.ui.Select):
     def __init__(self, service: TicketService):
         self.service = service
         options = [discord.SelectOption(label=f"Ticket {k.title()}", value=k, emoji=e, description=d) for k,e,d in [("general","📄","General requests and questions"),("base","🏠","Base or area questions"),("clan","👥","Clan requests"),("shop","💎","Store information"),("raid","⚠️","Raid-related problems"),("bug","🐛","In-game or bot bug")]]
-        super().__init__(placeholder="💜 Choose your support category…", options=options, custom_id="grid-a1:ticket:type")
+        super().__init__(placeholder="Select your issue type ...", options=options, custom_id="grid-a1:ticket:type")
     async def callback(self, interaction: discord.Interaction):
         option = next(x for x in self.options if x.value == self.values[0])
         await interaction.response.send_message("Select EU, then complete the short ticket form.", view=RegionView(self.service, option.value, option.label), ephemeral=True)
