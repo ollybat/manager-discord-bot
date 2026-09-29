@@ -9,7 +9,7 @@ import unittest
 from pathlib import Path
 
 from grid_a1.database import Database
-from grid_a1.utils import detected_external_links, safe_json_list, sanitize_channel_name
+from grid_a1.utils import detected_external_links, safe_json_list, sanitize_channel_name, ticket_status_title
 
 
 ROOT = Path(__file__).parent
@@ -48,6 +48,38 @@ class CoreTests(unittest.TestCase):
             database.update_ticket("ONE", status="closed")
             database.create_ticket(ticket_id="TWO", channel_id=2, **values)
 
+    def test_orphaned_ticket_cleanup_is_audited_and_idempotent(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(Path(directory) / "manager.sqlite3")
+            database.migrate()
+            database.create_ticket(ticket_id="ORPHAN", guild_id=42, channel_id=9002, owner_id=7002,
+                                   issue="missing channel", region="EU", opened_at="now", last_activity_at="now")
+            self.assertTrue(database.close_orphaned_ticket("ORPHAN"))
+            self.assertFalse(database.close_orphaned_ticket("ORPHAN"))
+            row = database.ticket("ORPHAN")
+            self.assertEqual(row["status"], "closed")
+            self.assertEqual(row["close_reason"], "Channel missing (auto-cleaned)")
+            with database.connect() as db:
+                audit = db.execute("SELECT action FROM audit_log WHERE ticket_id='ORPHAN'").fetchone()
+            self.assertEqual(audit["action"], "channel_missing_cleanup")
+
+    def test_ticket_access_roles_deduplicate_and_keep_permission_roles_first(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(Path(directory) / "manager.sqlite3")
+            database.migrate()
+            database.upsert_config(42, owner_role=11, co_owner_role=12, head_admin_role=13, admin_role=14, moderator_role=15)
+            database.add_staff_role(42, 15)
+            database.add_staff_role(42, 16)
+            self.assertEqual(database.ticket_access_role_ids(42), [11, 12, 13, 14, 15, 16])
+
+    def test_ticket_status_title_is_idempotent_and_bounded(self):
+        once = ticket_status_title("💜 Support Ticket", "🟢")
+        twice = ticket_status_title(once, "🟡")
+        self.assertEqual(once, "🟢 🎫 Support Ticket")
+        self.assertEqual(twice, "🟡 🎫 Support Ticket")
+        self.assertEqual(ticket_status_title("🟢 🎫 " + "x" * 400, "🔴")[:2], "🔴 ")
+        self.assertLessEqual(len(ticket_status_title("🎫 " + "x" * 400, "🔴")), 256)
+
     def test_schema_urgent_columns_and_configured_permission_roles(self):
         with tempfile.TemporaryDirectory() as directory:
             database = Database(Path(directory) / "manager.sqlite3")
@@ -60,6 +92,12 @@ class CoreTests(unittest.TestCase):
             self.assertTrue({"urgent_at", "urgent_by"} <= config_columns)
             self.assertTrue({"urgent_at", "urgent_by"} <= ticket_columns)
             self.assertEqual(database.configured_permission_role_ids(42), [11, 12, 13, 14, 15])
+
+    def test_help_does_not_advertise_removed_commands_or_anti_link_options(self):
+        source = (ROOT / "grid_a1" / "commands.py").read_text(encoding="utf-8")
+        for stale in ("`/staff`", "whitelist domains", "bypass roles", "allowed link roles"):
+            self.assertNotIn(stale, source)
+        self.assertIn("configure enabled, action, and log channel", source)
 
     def test_anti_links_source_checks(self):
         self.assertTrue(detected_external_links("visit https://example.com or discord.gg/example"))
