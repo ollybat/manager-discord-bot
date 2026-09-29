@@ -246,9 +246,8 @@ class TicketTypeSelect(discord.ui.Select):
         await interaction.response.send_message("Select EU, then complete the short ticket form.", view=RegionView(self.service, option.value, option.label), ephemeral=True)
 
 class TicketPanel(discord.ui.View):
+    """Public panel showing only the category selector; detailed instructions stay in the flow."""
     def __init__(self, service: TicketService): super().__init__(timeout=None); self.add_item(TicketTypeSelect(service))
-    @discord.ui.button(label="How it works", style=discord.ButtonStyle.secondary, emoji="❔", custom_id="grid-a1:ticket:help")
-    async def how_it_works(self, interaction: discord.Interaction, button: discord.ui.Button): await interaction.response.send_message(embed=embed("How support works", "1️⃣ Pick a category.\n2️⃣ Choose EU.\n3️⃣ Add your in-game name.\n4️⃣ Answer the ticket questions.\n5️⃣ Add screenshots if useful.\n6️⃣ Staff will help you."), ephemeral=True)
 
 
 class VerifyPanel(discord.ui.View):

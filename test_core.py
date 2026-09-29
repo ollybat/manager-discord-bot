@@ -186,6 +186,16 @@ class CoreTests(unittest.TestCase):
         self.assertIn("class WelcomeStepOneView", source)
         self.assertIn("class ReportChannelWizardView", source)
 
+    def test_support_panel_keeps_category_picker_without_explainer_or_help_button(self):
+        embeds = (ROOT / "grid_a1" / "embeds.py").read_text(encoding="utf-8")
+        views = (ROOT / "grid_a1" / "views.py").read_text(encoding="utf-8")
+        panel = embeds.split("def support_panel", 1)[1].split("def inactivity_indicator", 1)[0]
+        self.assertNotIn("How it works", panel)
+        self.assertNotIn("Support categories", panel)
+        self.assertIn("class TicketTypeSelect", views)
+        self.assertIn("Choose your support category", views)
+        self.assertNotIn('label="How it works"', views)
+
     def test_help_does_not_advertise_removed_commands_or_anti_link_options(self):
         source = (ROOT / "grid_a1" / "commands.py").read_text(encoding="utf-8")
         for stale in ("`/staff`", "whitelist domains", "bypass roles", "allowed link roles"):
