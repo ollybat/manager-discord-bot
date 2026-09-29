@@ -30,9 +30,27 @@ async def render(messages, channel, data, record=None) -> str:
                     images += f'<p>Image unavailable after channel deletion: {e(a.filename)}</p>'
             elif (a.content_type or '').startswith('image/'):
                 images += f'<p>Image not embedded: {e(a.filename)} (5 MB per-image or 20 MB total transcript cache limit)</p>'
-        cards.append(f'<article class="message-card"><div class="avatar" aria-hidden="true">{initials}</div><div class="message-body"><header><strong>{name}</strong><time>{dt(m.created_at)}</time></header><div class="content">{body}</div>{images}{f"<ul class=attachments aria-label=Attachments>{files}</ul>" if files else ""}</div></article>')
+        attachment_list = f'<ul class="attachments" aria-label="Attachments">{files}</ul>' if files else ''
+        cards.append(f'<article class="message-card"><div class="avatar" aria-hidden="true">{initials}</div><div class="message-body"><header><strong>{name}</strong><time>{dt(m.created_at)}</time></header><div class="content">{body}</div>{images}{attachment_list}</div></article>')
     owner = channel.guild.get_member(int(data['owner'])) if data.get('owner','').isdigit() else None
     closer = channel.guild.get_member(record['closed_by']) if record and record['closed_by'] else None
-    summary = f'<dl><div><dt>Ticket ID</dt><dd><code>{e(data.get("id", str(channel.id)))}</code></dd></div><div><dt>Issue</dt><dd>{e(data.get("issue", "Not available"))}</dd></div><div><dt>Region</dt><dd>{e(data.get("region", "Not available"))}</dd></div><div><dt>Opened</dt><dd>{dt(channel.created_at)}</dd></div><div><dt>Owner</dt><dd>{e(owner.display_name if owner else "Not available")}</dd></div><div><dt>Closed</dt><dd>{dt(record['closed_at']) if record and record['closed_at'] else "Not closed"}</dd></div><div><dt>Closer</dt><dd>{e(closer.display_name if closer else "Not available")}</dd></div></dl>'
+    ticket_id = e(data.get("id", str(channel.id)))
+    issue = e(data.get("issue", "Not available"))
+    region = e(data.get("region", "Not available"))
+    opened = dt(channel.created_at)
+    owner_name = e(owner.display_name if owner else "Not available")
+    closed = dt(record["closed_at"]) if record and record["closed_at"] else "Not closed"
+    closer_name = e(closer.display_name if closer else "Not available")
+    summary = (
+        "<dl>"
+        f"<div><dt>Ticket ID</dt><dd><code>{ticket_id}</code></dd></div>"
+        f"<div><dt>Issue</dt><dd>{issue}</dd></div>"
+        f"<div><dt>Region</dt><dd>{region}</dd></div>"
+        f"<div><dt>Opened</dt><dd>{opened}</dd></div>"
+        f"<div><dt>Owner</dt><dd>{owner_name}</dd></div>"
+        f"<div><dt>Closed</dt><dd>{closed}</dd></div>"
+        f"<div><dt>Closer</dt><dd>{closer_name}</dd></div>"
+        "</dl>"
+    )
     css='body{margin:0;background:#e9eef5;color:#172033;font:18px/1.6 system-ui,sans-serif}main{max-width:1000px;margin:auto;padding:2rem 1rem}.hero{background:#12345b;color:#fff;padding:2rem;border-radius:16px}.hero .subtitle{color:#dbeafe}.eyebrow{letter-spacing:.12em;font-weight:800}.notice{background:#eaf3ff;color:#172033;padding:1rem;border-radius:10px}h1{font-size:clamp(2rem,5vw,3rem);line-height:1.1}.subtitle,dt,time,footer,.message-count{color:#536176}.summary,.message-card{background:#fff;border:1px solid #c8d1df;border-radius:12px;box-shadow:0 2px 8px #17203318}.summary{padding:1rem 1.25rem;margin:1.5rem 0}dl{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:.8rem}dt{font-size:.8rem;font-weight:700;text-transform:uppercase}dd{margin:0;font-weight:650}.message-card{display:flex;gap:1rem;padding:1rem;margin:1rem 0;border-inline-start:6px solid #124b91;break-inside:avoid}.avatar{flex:0 0 3rem;height:3rem;border-radius:50%;display:grid;place-items:center;background:#dbe9fb;color:#124b91;font-weight:800}.message-body{min-width:0;flex:1}.message-body header{display:flex;gap:1rem;flex-wrap:wrap}.content{overflow-wrap:anywhere}.attachments{padding:.5rem .8rem;background:#f4f7fb;border-radius:8px;list-style:none}.attachments li{display:flex;justify-content:space-between;gap:1rem}.attachments span{color:#536176;font-size:.85rem}img{max-width:100%;border:1px solid #c8d1df;border-radius:8px}a{color:#124b91;font-weight:650}@media print{body{background:#fff;font-size:12pt}main{max-width:none;padding:0}.summary,.message-card{box-shadow:none}.message-card{page-break-inside:avoid}}'
     return f'<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Grid A1 ticket transcript</title><style>{css}</style></head><body><main><header class="hero"><p class="eyebrow">GRID A1 • MANAGER</p><h1>Ticket transcript</h1><p class="subtitle">A clear, readable support record • All times shown in UTC</p><p class="notice"><strong>How to read this:</strong> Each card is one message. Attachments and images appear directly below the message that included them.</p></header><section class="summary" aria-labelledby="summary-title"><h2 id="summary-title">Ticket summary</h2>{summary}</section><section aria-labelledby="messages-title"><h2 id="messages-title">Messages <span class="message-count">({len(messages)})</span></h2>{"".join(cards) or "<p>No messages were recorded.</p>"}</section><footer>Generated from the ticket channel. Text, filenames, and URLs are escaped for safe display.</footer></main></body></html>'

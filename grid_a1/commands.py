@@ -20,7 +20,7 @@ def register_commands(bot)->None:
     @bot.tree.command(name="help",description="Open the Grid A1 command center")
     async def help_command(i):
         e=embed("💜 Grid A1 • Command Center","✨ A concise, permission-aware guide to the commands available in this bot.",discord.Colour.from_rgb(177,77,255))
-        e.add_field(name="🌐 Everyone",value="`/help` — This guide\n`/info server` — Server overview\n`/embed` — Post a custom embed",inline=False)
+        e.add_field(name="🌐 Everyone",value="`/help` — This guide\n`/info server` — Server overview\n`/embed` — Post a custom embed\n`/report member reason proof_link proof_file` — Privately report a member to staff",inline=False)
         if not i.guild or not isinstance(i.user,discord.Member):
             e.set_footer(text="Use commands inside a server for permission-aware sections."); return await i.response.send_message(embed=e,ephemeral=True)
         m=i.user; c=bot.database.config(i.guild.id); owner=m.id==i.guild.owner_id or m.id==bot.settings_owner_id
