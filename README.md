@@ -10,7 +10,7 @@ This command configures the five persistent staff roles in the exact order shown
 
 All five configured roles count as staff for staff permissions and ticket controls. Only members holding `owner_role` or `co_owner_role` may open `/dashboard`; head admins, admins, moderators, the bot owner, and other staff cannot open it. Dashboard access is rechecked for every interaction.
 
-There is no separate `/setup roles action role` staff-role command. `/setup staff` remains only for optional ticket notification roles, while `/anti-links` configures link protection.
+There is no separate `/setup roles action role` staff-role command. `/setup roles` also determines which configured staff roles are pinged for new tickets. There is no `/setup staff` role command.
 
 ## Other setup
 
