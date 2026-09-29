@@ -60,7 +60,7 @@ class CoreTests(unittest.TestCase):
             self.assertEqual(row["status"], "closed")
             self.assertEqual(row["close_reason"], "Channel missing (auto-cleaned)")
             with database.connect() as db:
-                audit = db.execute("SELECT action FROM audit_log WHERE ticket_id='ORPHAN'").fetchone()
+                audit = db.execute("SELECT action FROM audit_log WHERE ticket_id='ORPHAN' AND action='channel_missing_cleanup'").fetchone()
             self.assertEqual(audit["action"], "channel_missing_cleanup")
 
     def test_ticket_access_roles_deduplicate_and_keep_permission_roles_first(self):
