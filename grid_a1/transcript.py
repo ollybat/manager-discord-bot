@@ -1,8 +1,9 @@
 from __future__ import annotations
 import html
+import base64
 from datetime import datetime, timezone
 
-def render(messages, channel, data, record=None) -> str:
+async def render(messages, channel, data, record=None) -> str:
     e = html.escape
     def dt(value):
         if isinstance(value, str): value = datetime.fromisoformat(value)
@@ -12,7 +13,16 @@ def render(messages, channel, data, record=None) -> str:
         name = e(getattr(m.author, 'display_name', str(m.author))); initials = e(''.join(p[:1] for p in name.split()[:2]).upper() or '?')
         body = e(m.content or '(no text)').replace('\n', '<br>')
         files = ''.join(f'<li><a href="{e(a.url, quote=True)}" target="_blank" rel="noopener">📎 {e(a.filename)}</a><span>{a.size:,} bytes</span></li>' for a in m.attachments)
-        images = ''.join(f'<figure><img src="{e(a.url, quote=True)}" alt="Attachment: {e(a.filename)}" loading="lazy"><figcaption>{e(a.filename)}</figcaption></figure>' for a in m.attachments if (a.content_type or '').startswith('image/'))
+        images = ''
+        for a in m.attachments:
+            if (a.content_type or '').startswith('image/') and a.size <= 5_000_000:
+                try:
+                    raw = await a.read(); uri = f'data:{a.content_type};base64,{base64.b64encode(raw).decode()}'
+                    images += f'<figure><img src="{uri}" alt="Attachment: {e(a.filename)}" loading="lazy"><figcaption>{e(a.filename)} (cached in transcript)</figcaption></figure>'
+                except Exception:
+                    images += f'<p>Image unavailable after channel deletion: {e(a.filename)}</p>'
+            elif (a.content_type or '').startswith('image/'):
+                images += f'<p>Image unavailable: {e(a.filename)} (over 5 MB transcript cache limit)</p>'
         cards.append(f'<article class="message-card"><div class="avatar" aria-hidden="true">{initials}</div><div class="message-body"><header><strong>{name}</strong><time>{dt(m.created_at)}</time></header><div class="content">{body}</div>{images}{f"<ul class=attachments aria-label=Attachments>{files}</ul>" if files else ""}</div></article>')
     owner = channel.guild.get_member(int(data['owner'])) if data.get('owner','').isdigit() else None
     closer = channel.guild.get_member(record['closed_by']) if record and record['closed_by'] else None
