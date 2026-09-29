@@ -175,9 +175,9 @@ class GridA1Bot(commands.Bot):
     @refresh_panels.before_loop
     async def before_refresh_panels(self): await self.wait_until_ready()
 bot = GridA1Bot()
-setup_group = app_commands.Group(name="setup", description="Configure Grid A1 bot")
-welcomer_group = app_commands.Group(name="welcomer", description="Preview and test welcome messages")
-ticket_group = app_commands.Group(name="ticket", description="Manage support tickets")
+setup_group = app_commands.Group(name="setup", description="⚙️ Configure server roles and support systems")
+welcomer_group = app_commands.Group(name="welcomer", description="👋 Preview and test welcome messages")
+ticket_group = app_commands.Group(name="ticket", description="🎫 Manage and assign support tickets")
 bot.tree.add_command(setup_group); bot.tree.add_command(welcomer_group); bot.tree.add_command(ticket_group)
 def guild(i): return i.guild
 def _privileged(interaction: discord.Interaction, require_staff: bool = False) -> bool:
@@ -217,17 +217,17 @@ def server_owner_only():
         return bool(interaction.guild and interaction.user and interaction.user.id == interaction.guild.owner_id)
     return app_commands.check(predicate)
 
-@bot.tree.command(name="anti-links", description="Configure external link protection")
+@bot.tree.command(name="anti-links", description="🛡️ Configure protection against outside links and invites")
 @app_commands.checks.has_permissions(manage_guild=True)
 @app_commands.describe(enabled="Enable protection", action="delete, delete_warn, or delete_log", log_channel="Optional moderation log channel")
-@app_commands.choices(action=[app_commands.Choice(name="Delete", value="delete"),app_commands.Choice(name="Delete and warn", value="delete_warn"),app_commands.Choice(name="Delete and log", value="delete_log")])
+@app_commands.choices(action=[app_commands.Choice(name="🗑️ Delete", value="delete"),app_commands.Choice(name="⚠️ Delete and warn", value="delete_warn"),app_commands.Choice(name="📋 Delete and log", value="delete_log")])
 async def anti_links(i: discord.Interaction, enabled: bool, action: app_commands.Choice[str] = None, log_channel: discord.TextChannel = None):
     await i.response.defer(ephemeral=True)
     mode = action.value if action else "delete_warn"
     bot.database.upsert_config(i.guild.id, anti_links_enabled=int(enabled), anti_links_action=mode, anti_links_log_channel=log_channel.id if log_channel else None)
-    await i.followup.send(embed=embed("Anti-links settings saved", f"Protection: {'enabled' if enabled else 'disabled'}\nAction: {mode}"), ephemeral=True)
+    await i.followup.send(embed=embed("🛡️ Anti-links settings saved", f"Protection: {'enabled' if enabled else 'disabled'}\nAction: {mode}"), ephemeral=True)
 
-@bot.tree.command(name="report", description="Privately report a member to server staff")
+@bot.tree.command(name="report", description="🚩 Privately report a server member to staff")
 @app_commands.guild_only()
 @app_commands.describe(member="Member being reported", reason="What happened?", proof_link="Optional link to supporting evidence", proof_file="Optional screenshot or evidence file")
 async def report_member(i: discord.Interaction, member: discord.Member, reason: str | None = None, proof_link: str | None = None, proof_file: discord.Attachment | None = None):
@@ -266,17 +266,18 @@ async def report_member(i: discord.Interaction, member: discord.Member, reason: 
     except Exception: log.exception("Report was delivered but its audit row could not be recorded (guild %s)", guild.id)
     await i.followup.send("✅ Your report was sent privately to the server's report channel. Thank you.", ephemeral=True)
 
-@bot.tree.command(name="dashboard", description="Open the private owner master dashboard")
+@bot.tree.command(name="dashboard", description="🎛️ Open your private server setup and status dashboard")
 async def dashboard(i: discord.Interaction):
     await i.response.defer(ephemeral=True)
     if not _dashboard_access(i):
-        return await i.followup.send("Dashboard access requires the configured owner or co-owner role. The server owner must first run /setup roles.", ephemeral=True)
+        return await i.followup.send("🔒 Dashboard access requires the configured Owner or Co-owner role. The server owner can initialize these with `/setup roles`.", ephemeral=True)
     if not i.guild: return await i.followup.send("❌ The dashboard can only be opened inside a server.", ephemeral=True)
     view = DashboardView(bot.database, settings.owner_id)
     await i.followup.send(embed=view.dashboard_embed(i.guild), view=view, ephemeral=True)
 
-@bot.tree.command(name="kick", description="Kick a member from this Discord server")
+@bot.tree.command(name="kick", description="👢 Remove a member from this server with a recorded reason")
 @staff()
+@app_commands.describe(member="Member to kick", reason="Why the member is being kicked")
 async def moderation_kick(i: discord.Interaction, member: discord.Member, reason: str = "No reason provided"):
     if member.id == i.user.id or member.id == i.guild.owner_id: return await i.response.send_message("❌ You cannot kick yourself or the server owner.", ephemeral=True)
     if member.top_role >= i.user.top_role and i.user.id != i.guild.owner_id: return await i.response.send_message("❌ That member has an equal or higher role than you.", ephemeral=True)
@@ -287,8 +288,9 @@ async def moderation_kick(i: discord.Interaction, member: discord.Member, reason
     bot.database.audit(i.guild.id, None, i.user.id, "kick", discord.utils.escape_markdown(reason)[:500])
     await i.followup.send(embed=embed("💜 Member kicked", f"✅ {member.mention} was removed from the server.\n\n**Reason:** {discord.utils.escape_markdown(reason)[:500]}"), ephemeral=True)
 
-@bot.tree.command(name="ban", description="Ban a member from this Discord server")
+@bot.tree.command(name="ban", description="🔨 Ban a member from this server with a recorded reason")
 @staff()
+@app_commands.describe(member="Member to ban", reason="Why the member is being banned")
 async def moderation_ban(i: discord.Interaction, member: discord.Member, reason: str = "No reason provided"):
     if member.id == i.user.id or member.id == i.guild.owner_id: return await i.response.send_message("❌ You cannot ban yourself or the server owner.", ephemeral=True)
     if member.top_role >= i.user.top_role and i.user.id != i.guild.owner_id: return await i.response.send_message("❌ That member has an equal or higher role than you.", ephemeral=True)
@@ -299,15 +301,17 @@ async def moderation_ban(i: discord.Interaction, member: discord.Member, reason:
     bot.database.audit(i.guild.id, None, i.user.id, "ban", discord.utils.escape_markdown(reason)[:500])
     await i.followup.send(embed=embed("💜 Member banned", f"🔨 {member.mention} was banned from the server.\n\n**Reason:** {discord.utils.escape_markdown(reason)[:500]}"), ephemeral=True)
 
-@bot.tree.command(name="warn", description="Record a warning for a member")
+@bot.tree.command(name="warn", description="⚠️ Record a moderation warning for a member")
 @staff()
+@app_commands.describe(member="Member receiving the warning", reason="What rule or behavior the warning concerns")
 async def moderation_warn(i: discord.Interaction, member: discord.Member, reason: str):
     if member.id == i.user.id or member.id == i.guild.owner_id: return await i.response.send_message("❌ You cannot warn yourself or the server owner.", ephemeral=True)
     bot.database.audit(i.guild.id, None, i.user.id, "warn", f"member={member.id}; {discord.utils.escape_markdown(reason)[:450]}")
     await i.response.send_message(embed=embed("💜 Warning recorded", f"⚠️ A warning was recorded for {member.mention}.\n\n**Reason:** {discord.utils.escape_markdown(reason)[:500]}"), ephemeral=True)
 
-@bot.tree.command(name="timeout", description="Timeout a member")
+@bot.tree.command(name="timeout", description="⏳ Temporarily timeout a member for 1 minute to 28 days")
 @staff()
+@app_commands.describe(member="Member to timeout", minutes="Duration in minutes (1–40320)", reason="Why the timeout is being applied")
 async def moderation_timeout(i: discord.Interaction, member: discord.Member, minutes: app_commands.Range[int, 1, 40320], reason: str = "No reason provided"):
     if member.id == i.user.id or member.id == i.guild.owner_id: return await i.response.send_message("❌ You cannot timeout yourself or the server owner.", ephemeral=True)
     if member.top_role >= i.user.top_role and i.user.id != i.guild.owner_id: return await i.response.send_message("❌ That member has an equal or higher role than you.", ephemeral=True)
@@ -318,21 +322,21 @@ async def moderation_timeout(i: discord.Interaction, member: discord.Member, min
     bot.database.audit(i.guild.id, None, i.user.id, "timeout", f"member={member.id}; minutes={minutes}; {discord.utils.escape_markdown(reason)[:400]}")
     await i.followup.send(embed=embed("💜 Member timed out", f"⏳ {member.mention} was timed out for **{minutes} minute(s)**.\n\n**Reason:** {discord.utils.escape_markdown(reason)[:500]}"), ephemeral=True)
 
-@bot.command(name="lock")
+@bot.command(name="lock", help="🔒 Prevent members from sending messages in this channel (staff only).")
 async def prefix_lock(ctx):
     if not ctx.guild or not _prefix_privileged(ctx, True): return await ctx.send("❌ Only staff, the server owner, or the bot owner can lock channels.")
     try: await ctx.channel.set_permissions(ctx.guild.default_role, send_messages=False, reason=f"Channel locked by {ctx.author}")
     except discord.Forbidden: return await ctx.send("❌ I cannot lock this channel. Check Manage Channels and Manage Permissions.")
     await ctx.send("🔒 This channel is now locked for members.")
 
-@bot.command(name="unlock")
+@bot.command(name="unlock", help="🔓 Restore member messaging in this channel (staff only).")
 async def prefix_unlock(ctx):
     if not ctx.guild or not _prefix_privileged(ctx, True): return await ctx.send("❌ Only staff, the server owner, or the bot owner can unlock channels.")
     try: await ctx.channel.set_permissions(ctx.guild.default_role, send_messages=None, reason=f"Channel unlocked by {ctx.author}")
     except discord.Forbidden: return await ctx.send("❌ I cannot unlock this channel. Check Manage Channels and Manage Permissions.")
     await ctx.send("🔓 This channel is now unlocked for members.")
 
-@setup_group.command(name="roles", description="Configure Grid A1 staff permission roles")
+@setup_group.command(name="roles", description="🎭 Set the five distinct staff permission roles")
 @server_owner_only()
 @app_commands.describe(owner_role="Owner staff role", co_owner_role="Co-owner staff role", head_admin_role="Head administrator staff role", admin_role="Administrator staff role", moderator_role="Moderator staff role")
 async def setup_roles(i: discord.Interaction, owner_role: discord.Role, co_owner_role: discord.Role, head_admin_role: discord.Role, admin_role: discord.Role, moderator_role: discord.Role):
@@ -351,8 +355,9 @@ async def setup_roles(i: discord.Interaction, owner_role: discord.Role, co_owner
     e.set_footer(text="Grid A1 • Permission configuration • Changes saved to SQLite")
     await i.followup.send(embed=e, ephemeral=True)
 
-@bot.tree.command(name="verifypanel", description="Create a verification panel")
+@bot.tree.command(name="verifypanel", description="✅ Publish a verification panel and assignable role")
 @app_commands.checks.has_permissions(manage_guild=True)
+@app_commands.describe(channel="Text channel where the public panel will appear", role="Role granted after successful verification")
 async def verifypanel(i: discord.Interaction, channel: discord.TextChannel, role: discord.Role):
     if role.is_default(): return await i.response.send_message("❌ You cannot use @everyone as the verification role.", ephemeral=True)
     if not i.guild.me or role >= i.guild.me.top_role: return await i.response.send_message("❌ Move Grid A1's bot role above the verification role first.", ephemeral=True)
@@ -366,8 +371,9 @@ async def verifypanel(i: discord.Interaction, channel: discord.TextChannel, role
     await i.followup.send(embed=embed("💜 Verification panel created", f"✅ Panel posted in {channel.mention}.\n🎭 Role: {role.mention}"), ephemeral=True)
 
 
-@ticket_group.command(name="remove", description="Remove a user from the current ticket")
+@ticket_group.command(name="remove", description="👤 Remove a member from the current ticket")
 @staff()
+@app_commands.describe(user="Member who should lose access to this ticket")
 async def ticket_remove(i: discord.Interaction, user: discord.Member):
     if not isinstance(i.channel, discord.TextChannel) or not is_ticket(i.channel): return await i.response.send_message("❌ This only works inside a ticket.", ephemeral=True)
     data = parse_ticket_topic(i.channel)
@@ -377,17 +383,18 @@ async def ticket_remove(i: discord.Interaction, user: discord.Member):
     except discord.Forbidden: return await i.followup.send("❌ I cannot remove that user from this ticket.", ephemeral=True)
     await i.followup.send(f"✅ Removed {user.mention} from this ticket.", ephemeral=True)
 
-wipefeed_group = app_commands.Group(name="wipefeed", description="Manage EU 6X wipe announcements")
+wipefeed_group = app_commands.Group(name="wipefeed", description="📣 Configure and post wipe announcements")
 bot.tree.add_command(wipefeed_group)
 
-@wipefeed_group.command(name="enable", description="Enable or disable wipefeed announcements")
+@wipefeed_group.command(name="enable", description="🔔 Turn wipe announcements on or off")
 @app_commands.checks.has_permissions(manage_guild=True)
+@app_commands.describe(enabled="Whether new wipe announcements are enabled")
 async def wipefeed_enable(i: discord.Interaction, enabled: bool):
     bot.database.upsert_config(i.guild.id, wipefeed_enabled=int(enabled))
     state = "enabled" if enabled else "disabled"
     await i.response.send_message(f"✅ Wipefeed is now **{state}**.", ephemeral=True)
 
-@wipefeed_group.command(name="send", description="Post an EU 6X wipe announcement")
+@wipefeed_group.command(name="send", description="📣 Post an EU 6X wipe announcement")
 @app_commands.checks.has_permissions(manage_guild=True)
 @app_commands.describe(timestamp="Unix timestamp, for example 1785524400", channel="Channel where the wipe announcement will be posted")
 async def wipefeed_send(i: discord.Interaction, timestamp: str, channel: discord.TextChannel):
@@ -403,10 +410,10 @@ async def wipefeed_send(i: discord.Interaction, timestamp: str, channel: discord
     bot.database.upsert_config(i.guild.id, wipefeed_channel=channel.id)
     await i.followup.send(f"✅ EU 6X wipe announcement posted in {channel.mention}.", ephemeral=True)
 
-info_group = app_commands.Group(name="info", description="Show Discord information")
+info_group = app_commands.Group(name="info", description="🌐 View server information")
 bot.tree.add_command(info_group)
 
-@info_group.command(name="server", description="Show information about this server")
+@info_group.command(name="server", description="🏰 View server members, channels, roles, and settings")
 async def info_server(i: discord.Interaction):
     g = i.guild
     if not g: return await i.response.send_message("❌ This command can only be used inside a server.", ephemeral=True)
@@ -436,10 +443,11 @@ async def info_server(i: discord.Interaction):
     e.set_footer(text="Grid A1 • Server information")
     await i.response.send_message(embed=e)
 
-roles_group = app_commands.Group(name="roles", description="Display server roles")
+roles_group = app_commands.Group(name="roles", description="🎭 Display and publish the server role directory")
 bot.tree.add_command(roles_group)
-@roles_group.command(name="setchannel", description="Post a stylish list of server roles")
+@roles_group.command(name="setchannel", description="📋 Post the server role directory in a text channel")
 @app_commands.checks.has_permissions(manage_guild=True)
+@app_commands.describe(channel="Text channel where the role directory should be posted")
 async def roles_setchannel(i: discord.Interaction, channel: discord.TextChannel):
     roles = [role for role in i.guild.roles if not role.is_default()]
     roles.sort(key=lambda role: role.position, reverse=True)
@@ -452,8 +460,9 @@ async def roles_setchannel(i: discord.Interaction, channel: discord.TextChannel)
     except discord.Forbidden: return await i.followup.send("❌ I cannot post in that channel.", ephemeral=True)
     await i.followup.send(f"✅ Role directory posted in {channel.mention}.", ephemeral=True)
 
-@setup_group.command(name="tickets", description="Configure ticket channels and deploy the support panel")
+@setup_group.command(name="tickets", description="🎫 Configure ticket channels and publish the support panel")
 @admin()
+@app_commands.describe(panel_channel="Public channel for the support panel", logs_channel="Private channel for ticket logs", category="Category used for newly opened tickets", inactivity_hours="Hours before the ticket inactivity reminder (1–720)")
 async def setup_tickets(i, panel_channel: discord.TextChannel, logs_channel: discord.TextChannel, category: discord.CategoryChannel, inactivity_hours: app_commands.Range[int,1,720]):
     await i.response.defer(ephemeral=True)
     g = guild(i)
@@ -473,37 +482,41 @@ async def setup_tickets(i, panel_channel: discord.TextChannel, logs_channel: dis
     bot.database.upsert_config(g.id, panel_message=message.id)
     await i.followup.send(f"✅ Grid A1 support panel updated in {panel_channel.mention}; logs go to {logs_channel.mention}.", ephemeral=True)
 
-@setup_group.command(name="welcomer", description="Configure welcome and community channels")
+@setup_group.command(name="welcomer", description="👋 Configure welcome, shop, links, and community channels")
 @admin()
+@app_commands.describe(welcome_channel="Channel for new-member greetings", link_channel="Channel containing server links", bot_commands_channel="Channel for bot commands", shop_channel="Channel for store information", verify_channel="Channel for verification guidance")
 async def setup_welcomer(i,welcome_channel:discord.TextChannel,link_channel:discord.TextChannel,bot_commands_channel:discord.TextChannel,shop_channel:discord.TextChannel,verify_channel:discord.TextChannel): bot.database.upsert_config(guild(i).id,welcome_channel=welcome_channel.id,link_channel=link_channel.id,bot_commands_channel=bot_commands_channel.id,shop_channel=shop_channel.id,verify_channel=verify_channel.id); await i.response.send_message(f"✅ Welcomer configured for {welcome_channel.mention}.",ephemeral=True)
-@welcomer_group.command(name="preview", description="Preview the configured welcome message")
+@welcomer_group.command(name="preview", description="👀 Preview the welcome message privately")
 @admin()
 async def welcomer_preview(i):
     config=bot.database.config(guild(i).id); problems=missing(guild(i),config)
     if problems: return await i.response.send_message(embed=embed("⚠️ Welcomer is not set up","\n".join(f"• {p}" for p in problems),discord.Colour.red()),ephemeral=True)
     await i.response.send_message(embed=welcome_embed(bot,guild(i),i.user,config),ephemeral=True)
-@welcomer_group.command(name="test", description="Send a welcome test")
+@welcomer_group.command(name="test", description="✉️ Send a test welcome message to the configured channel")
 @admin()
 async def welcomer_test(i):
     config=bot.database.config(guild(i).id); problems=missing(guild(i),config)
-    if problems: return await i.response.send_message("Welcomer is not configured correctly.",ephemeral=True)
+    if problems: return await i.response.send_message("⚠️ Welcomer is not configured correctly. Run `/dashboard` and choose Welcome system to review the channel selections.",ephemeral=True)
     channel=guild(i).get_channel(config['welcome_channel'])
-    if not isinstance(channel,discord.TextChannel): return await i.response.send_message("Welcome channel is missing.",ephemeral=True)
+    if not isinstance(channel,discord.TextChannel): return await i.response.send_message("❌ The configured welcome channel is missing. Update it in `/dashboard`.",ephemeral=True)
     await i.response.defer(ephemeral=True)
-    await channel.send(embed=welcome_embed(bot,guild(i),i.user,config)); await i.followup.send("✅ Welcome test sent.",ephemeral=True)
-@ticket_group.command(name="claim", description="Claim the current ticket")
+    await channel.send(embed=welcome_embed(bot,guild(i),i.user,config)); await i.followup.send(f"✅ Welcome test sent to {channel.mention}.",ephemeral=True)
+@ticket_group.command(name="claim", description="🙋 Claim the current support ticket")
 @staff()
 async def ticket_claim(i): await claim(i,bot.tickets)
-@ticket_group.command(name="transfer", description="Transfer the current ticket")
+@ticket_group.command(name="transfer", description="🔁 Assign the current ticket to another staff member")
 @staff()
+@app_commands.describe(target_member="Staff member who should receive the ticket")
 async def ticket_transfer(i,target_member:discord.Member): await claim(i,bot.tickets,target_member)
-@ticket_group.command(name="requestclose", description="Request closure of the current ticket")
+@ticket_group.command(name="requestclose", description="🔒 Request closure of the current ticket with a reason")
+@app_commands.describe(reason="Why the ticket should be closed")
 async def ticket_requestclose(i,reason:str):
-    if not is_ticket(i.channel): return await i.response.send_message("This only works inside a ticket.",ephemeral=True)
-    if not staff_member(i.user, bot.database): return await i.response.send_message("Only staff can request closure.",ephemeral=True)
-    data=parse_ticket_topic(i.channel); bot.database.update_ticket(data.get('id',''),status='close_requested',close_requested_by=i.user.id); bot.database.audit(guild(i).id,data.get('id',''),i.user.id,'close_requested'); await i.response.send_message(f"🔒 Closure requested: {reason}")
-@ticket_group.command(name="close", description="Archive transcript and delete current ticket")
+    if not is_ticket(i.channel): return await i.response.send_message("❌ This command only works inside an active ticket.",ephemeral=True)
+    if not staff_member(i.user, bot.database): return await i.response.send_message("🔒 Only ticket staff can request closure.",ephemeral=True)
+    data=parse_ticket_topic(i.channel); bot.database.update_ticket(data.get('id',''),status='close_requested',close_requested_by=i.user.id); bot.database.audit(guild(i).id,data.get('id',''),i.user.id,'close_requested'); await i.response.send_message(embed=embed("🔒 Ticket closure requested", f"A staff member requested closure.\n\n**Reason:** {discord.utils.escape_markdown(reason)[:500]}"))
+@ticket_group.command(name="close", description="📦 Save the transcript and close the current ticket")
 @staff()
+@app_commands.describe(reason="Resolution or closure reason saved with the transcript")
 async def ticket_close(i,reason:str="No reason provided"): await bot.tickets.close(i,reason)
 @bot.event
 async def on_command_error(ctx, error):
@@ -567,19 +580,19 @@ async def on_app_command_error(i,error):
         return
     log.exception("Application command failed", exc_info=error)
     if isinstance(original, discord.HTTPException) and original.status == 429:
-        msg = "Discord rate-limited this request. Please wait and try again."
+        msg = "⏳ Discord rate-limited this request. Please wait a moment and try again."
     elif isinstance(error, app_commands.MissingPermissions):
-        msg = "You do not have permission to use that command."
+        msg = "🔒 You do not have the Discord permissions required for that command. Run `/help` to see access requirements."
     elif isinstance(error, (OwnerConfigurationError, OwnerOnlyError)):
-        msg = str(error)
+        msg = f"⚠️ {error}"
     elif isinstance(error, app_commands.CheckFailure) and getattr(error, "command", None) and error.command.name == "dashboard":
-        msg = "Dashboard access is not configured for you. The server owner must run /setup roles with the owner and co-owner roles."
+        msg = "🔒 Dashboard access requires the configured Owner or Co-owner role. The server owner can initialize them with `/setup roles`."
     elif isinstance(error, app_commands.CheckFailure):
-        msg = "You do not have permission to use this command."
+        msg = "🔒 You do not have access to this command. Run `/help` to see which roles or permissions are required."
     elif isinstance(original, RuntimeError):
-        msg = str(error)
+        msg = f"⚠️ {error}"
     else:
-        msg = "That command could not be completed. Check setup and bot permissions."
+        msg = "❌ That command could not be completed. Check its setup, your permissions, and the bot's channel/role permissions; run `/help` for guidance."
     try:
         if i.response.is_done(): await i.followup.send(msg, ephemeral=True)
         else: await i.response.send_message(msg, ephemeral=True)
