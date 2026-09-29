@@ -19,6 +19,7 @@ def utcnow() -> datetime:
 def sanitize_channel_name(region: str, issue: str, username: str, ticket_id: str) -> str:
     raw = f"{region.lower()}-{issue}-{username}-{ticket_id}"
     value = re.sub(r"[^a-z0-9-]+", "-", raw.lower()).strip("-")
+    value = re.sub(r"-+", "-", value).strip("-")
     return (value or f"ticket-{ticket_id}")[:90]
 
 def ticket_topic(ticket_id: str, owner_id: int, issue: str, region: str) -> str:
