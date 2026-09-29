@@ -5,7 +5,7 @@ import discord
 import json
 from discord import app_commands
 from discord.ext import commands, tasks
-from .config import Settings, configure_logging
+from .config import Settings, configure_logging, validate_runtime
 from .database import Database
 from .embeds import embed, support_panel, inactivity_indicator
 from .tickets import TicketService, claim
@@ -27,7 +27,14 @@ class GridA1Bot(commands.Bot):
         register_commands(self)
     async def setup_hook(self):
         log.info("Starting Grid A1: database=%s prefix=%s owner_configured=%s", self.database.path, settings.prefix, bool(settings.owner_id))
-        self.database.migrate(); self.add_view(TicketPanel(self.tickets)); self.add_view(TicketControls(self.tickets)); self.add_view(VerifyPanel(self.database))
+        for problem in validate_runtime(settings):
+            log.warning("Startup configuration: %s", problem)
+        self.database.migrate()
+        store = self.database.startup_check()
+        if not store["ok"]:
+            raise RuntimeError(f"SQLite startup check failed: {store}")
+        log.info("SQLite ready: schema=%s WAL=enabled indexes=verified", store["schema_version"])
+        self.add_view(TicketPanel(self.tickets)); self.add_view(TicketControls(self.tickets)); self.add_view(VerifyPanel(self.database))
         for row in self.database.open_tickets_all(): self.add_view(OwnerInactivityView(self.tickets, row['ticket_id']))
         self.refresh_panels.start(); self.inactivity_loop.start()
         # Clear stale guild registrations, then publish exactly one global tree.
