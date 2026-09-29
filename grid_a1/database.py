@@ -27,12 +27,13 @@ class Database:
             existing={r[1] for r in db.execute('PRAGMA table_info(tickets)')}
             for n,d in {'inactivity_notice_at':'TEXT','owner_left':'INTEGER NOT NULL DEFAULT 0','auto_close_at':'TEXT','auto_close_reason':'TEXT','urgent_at':'TEXT','urgent_by':'INTEGER'}.items():
                 if n not in existing: db.execute(f'ALTER TABLE tickets ADD COLUMN {n} {d}')
+            # Create audit_log before any index that references it.
+            db.execute('''CREATE TABLE IF NOT EXISTS audit_log (id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id INTEGER NOT NULL, ticket_id TEXT, actor_id INTEGER NOT NULL, action TEXT NOT NULL, metadata TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL)''')
             db.execute("CREATE UNIQUE INDEX IF NOT EXISTS only_one_open_ticket ON tickets(guild_id, owner_id) WHERE status IN ('open','close_requested')")
             db.execute("CREATE INDEX IF NOT EXISTS idx_tickets_guild_status_activity ON tickets(guild_id, status, last_activity_at)")
             db.execute("CREATE INDEX IF NOT EXISTS idx_tickets_channel_status ON tickets(channel_id, status)")
             db.execute("CREATE INDEX IF NOT EXISTS idx_tickets_owner_status ON tickets(guild_id, owner_id, status)")
             db.execute("CREATE INDEX IF NOT EXISTS idx_config_panel ON guild_config(panel_channel, panel_message)")
-            db.execute('''CREATE TABLE IF NOT EXISTS audit_log (id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id INTEGER NOT NULL, ticket_id TEXT, actor_id INTEGER NOT NULL, action TEXT NOT NULL, metadata TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL)''')
             db.execute("CREATE INDEX IF NOT EXISTS idx_audit_guild_created ON audit_log(guild_id, created_at)")
             db.execute('''CREATE TABLE IF NOT EXISTS closed_tickets (id INTEGER PRIMARY KEY AUTOINCREMENT, guild INTEGER NOT NULL, region TEXT NOT NULL, issue TEXT NOT NULL, closed_by INTEGER NOT NULL, reason TEXT NOT NULL, closed_at TEXT NOT NULL)''')
             db.execute("UPDATE guild_config SET anti_links_enabled=COALESCE(anti_links_enabled,0), anti_links_action=COALESCE(NULLIF(anti_links_action,''),'delete_warn'), anti_links_whitelist_domains=COALESCE(NULLIF(anti_links_whitelist_domains,''),'[]'), anti_links_bypass_roles=COALESCE(NULLIF(anti_links_bypass_roles,''),'[]'), anti_links_allowed_roles=COALESCE(NULLIF(anti_links_allowed_roles,''),'[]')")
@@ -71,6 +72,11 @@ class Database:
         with self.connect() as db:db.execute(f"UPDATE tickets SET {', '.join(k+'=?' for k in values)} WHERE ticket_id=?",(*values.values(),ticket_id))
     def audit(self,guild_id,ticket_id,actor_id,action,metadata='{}'):
         with self.connect() as db:db.execute('INSERT INTO audit_log(guild_id,ticket_id,actor_id,action,metadata,created_at) VALUES(?,?,?,?,?,?)',(guild_id,ticket_id,actor_id,action,metadata,utcnow().isoformat()))
+    def add_closed_ticket(self, *, guild_id, region, issue, closed_by, reason, closed_at):
+        with self.connect() as db:
+            db.execute('INSERT INTO closed_tickets(guild,region,issue,closed_by,reason,closed_at) VALUES(?,?,?,?,?,?)', (guild_id, region, issue, closed_by, reason[:1000], closed_at))
+            db.execute('INSERT INTO audit_log(guild_id,actor_id,action,metadata,created_at) VALUES(?,?,?,?,?)', (guild_id, closed_by, 'closed', json.dumps({'region': region, 'issue': issue}), closed_at))
+
     def closed_count(self,guild_id,region=None):
         with self.connect() as db:
             q='SELECT COUNT(*) FROM closed_tickets WHERE guild=?'+(' AND region=?' if region else '');return int(db.execute(q,(guild_id,region) if region else (guild_id,)).fetchone()[0])
