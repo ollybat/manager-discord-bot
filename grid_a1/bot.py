@@ -175,20 +175,12 @@ def server_owner_only():
 
 @bot.tree.command(name="anti-links", description="Configure external link protection")
 @app_commands.checks.has_permissions(manage_guild=True)
-@app_commands.describe(enabled="Enable protection", action="delete, delete_warn, or delete_log", log_channel="Optional moderation log channel", whitelist_domains="Comma-separated domains to allow", bypass_roles="Optional comma-separated role IDs")
-@app_commands.choices(action=[app_commands.Choice(name="Delete", value="delete"), app_commands.Choice(name="Delete and warn", value="delete_warn"), app_commands.Choice(name="Delete and log", value="delete_log")])
-async def anti_links(i: discord.Interaction, enabled: bool, action: app_commands.Choice[str] = None, log_channel: discord.TextChannel = None, whitelist_domains: str = "", bypass_roles: str = ""):
-    domains=[normalize_domain(x) for x in whitelist_domains.split(',') if x.strip()]
-    if any(not x for x in domains) or len(domains)>25 or sum(len(x) for x in domains if x)>1500: return await i.response.send_message("Invalid whitelist domains.", ephemeral=True)
-    roles=[]
-    for raw in bypass_roles.split(',') if bypass_roles.strip() else []:
-        try: role=i.guild.get_role(int(raw.strip().strip('<@&>')))
-        except ValueError: role=None
-        if not role or role.is_default() or role.managed: return await i.response.send_message("Bypass roles must be normal roles from this server.", ephemeral=True)
-        roles.append(role.id)
-    mode=action.value if action else 'delete_warn'; bot.database.upsert_config(i.guild.id, anti_links_enabled=int(enabled), anti_links_action=mode, anti_links_log_channel=log_channel.id if log_channel else None, anti_links_whitelist_domains=json.dumps(domains), anti_links_bypass_roles=json.dumps(roles))
-    await i.response.send_message(embed=embed("Anti-links settings saved", f"Protection: {'enabled' if enabled else 'disabled'}\nAction: {mode}\nWhitelist domains: {len(domains)}\nBypass roles: {len(roles)}"), ephemeral=True)
-
+@app_commands.describe(enabled="Enable protection", action="delete, delete_warn, or delete_log", log_channel="Optional moderation log channel")
+@app_commands.choices(action=[app_commands.Choice(name="Delete", value="delete"),app_commands.Choice(name="Delete and warn", value="delete_warn"),app_commands.Choice(name="Delete and log", value="delete_log")])
+async def anti_links(i: discord.Interaction, enabled: bool, action: app_commands.Choice[str] = None, log_channel: discord.TextChannel = None):
+    mode = action.value if action else "delete_warn"
+    bot.database.upsert_config(i.guild.id, anti_links_enabled=int(enabled), anti_links_action=mode, anti_links_log_channel=log_channel.id if log_channel else None)
+    await i.response.send_message(embed=embed("Anti-links settings saved", f"Protection: {'enabled' if enabled else 'disabled'}\nAction: {mode}"), ephemeral=True)
 @bot.tree.command(name="dashboard", description="Open the private owner master dashboard")
 async def dashboard(i: discord.Interaction):
     if not _dashboard_access(i):
