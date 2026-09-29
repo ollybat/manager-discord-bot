@@ -285,15 +285,6 @@ async def ticket_remove(i: discord.Interaction, user: discord.Member):
     except discord.Forbidden: return await i.response.send_message("❌ I cannot remove that user from this ticket.", ephemeral=True)
     await i.response.send_message(f"✅ Removed {user.mention} from this ticket.", ephemeral=True)
 
-@bot.tree.command(name="staff", description="List configured ticket staff roles")
-@app_commands.checks.has_permissions(manage_guild=True)
-async def staff_list(i: discord.Interaction):
-    roles = [i.guild.get_role(role_id) for role_id in bot.database.staff_role_ids(i.guild.id)]
-    roles = [role for role in roles if role]
-    e = embed("💜 Grid A1 • Staff notification roles", "Roles that receive ticket alerts.", discord.Colour.from_rgb(177, 77, 255))
-    e.add_field(name="Configured roles", value="\n".join(f"{n}. {role.mention}" for n, role in enumerate(roles, 1)) if roles else "No staff notification roles configured.", inline=False)
-    await i.response.send_message(embed=e, ephemeral=True)
-
 wipefeed_group = app_commands.Group(name="wipefeed", description="Manage EU 6X wipe announcements")
 bot.tree.add_command(wipefeed_group)
 
