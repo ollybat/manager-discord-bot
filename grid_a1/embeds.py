@@ -19,8 +19,6 @@ def support_panel(guild: discord.Guild, database: Database) -> discord.Embed:
     closed_eu = database.closed_count(guild.id, "EU")
     result = embed("💜 Grid A1 • Support Center", "✨ Choose the type of help you need, select the EU region, and complete the short ticket form.", NEON_PURPLE)
     result.add_field(name="📊 Live queue", value=f"🟢 Open: **{sum(counts.values())}**\n🇪🇺 EU: **{counts.get('EU', 0)}**\n📁 Closed: **{closed}** ({closed_eu} EU)", inline=True)
-    result.add_field(name="🧭 How it works", value="1️⃣ Choose a category\n2️⃣ Select EU\n3️⃣ Add your in-game name\n4️⃣ Answer the questions\n5️⃣ Staff will help you", inline=True)
-    result.add_field(name="🗂️ Support categories", value="📄 General • 🏠 Base • 👥 Clan\n💎 Shop • ⚠️ Raid • 🐛 Bug", inline=False)
     result.add_field(name="📌 Before opening", value="Please include clear details, screenshots when useful, and keep replies inside your ticket.", inline=False)
     result.set_footer(text="Grid A1 • EU Support • Manager")
     return result
