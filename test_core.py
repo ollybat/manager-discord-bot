@@ -1,0 +1,80 @@
+"""Stdlib regression tests for the SQLite core and source safety checks."""
+from __future__ import annotations
+
+import ast
+import json
+import sqlite3
+import tempfile
+import unittest
+from pathlib import Path
+
+from grid_a1.database import Database
+from grid_a1.utils import detected_external_links, safe_json_list, sanitize_channel_name
+
+
+ROOT = Path(__file__).parent
+
+
+class CoreTests(unittest.TestCase):
+    def test_sanitize_channel_name_collapses_dashes(self):
+        self.assertEqual(sanitize_channel_name("EU", "Bug / Links", "A--User", "ABC123"), "eu-bug-links-a-user-abc123")
+
+    def test_safe_json_list_malformed_and_typed_data(self):
+        self.assertEqual(safe_json_list("not-json", int), [])
+        self.assertEqual(safe_json_list('{"not": "a list"}', int), [])
+        self.assertEqual(safe_json_list('[1, true, "2", null, "bad"]', int), [1, 2])
+
+    def test_fresh_and_repeat_migration_preserve_ticket_and_config(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(Path(directory) / "manager.sqlite3")
+            database.migrate()
+            database.upsert_config(42, owner_role=101, co_owner_role=102, head_admin_role=103, admin_role=104, moderator_role=105)
+            database.create_ticket(ticket_id="ABC123", guild_id=42, channel_id=9001, owner_id=7001,
+                                   issue="links", region="EU", opened_at="2024-01-01T00:00:00+00:00",
+                                   last_activity_at="2024-01-01T00:00:00+00:00")
+            database.migrate()
+            self.assertEqual(database.ticket("ABC123")["issue"], "links")
+            self.assertEqual(database.config(42)["owner_role"], 101)
+            self.assertEqual(database.startup_check()["schema_version"], 16)
+
+    def test_one_open_ticket_constraint(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(Path(directory) / "manager.sqlite3")
+            database.migrate()
+            values = dict(guild_id=42, owner_id=7001, issue="first", region="EU", opened_at="now", last_activity_at="now")
+            database.create_ticket(ticket_id="ONE", channel_id=1, **values)
+            with self.assertRaises(sqlite3.IntegrityError):
+                database.create_ticket(ticket_id="TWO", channel_id=2, **values)
+            database.update_ticket("ONE", status="closed")
+            database.create_ticket(ticket_id="TWO", channel_id=2, **values)
+
+    def test_schema_urgent_columns_and_configured_permission_roles(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(Path(directory) / "manager.sqlite3")
+            database.migrate()
+            database.upsert_config(42, owner_role=11, co_owner_role=12, head_admin_role=13, admin_role=14, moderator_role=15)
+            database.create_ticket(ticket_id="URGENT", guild_id=42, channel_id=3, owner_id=9, issue="x", region="EU", opened_at="now", last_activity_at="now")
+            database.update_ticket("URGENT", urgent_at="now", urgent_by=99)
+            config_columns = {row[1] for row in database.connect().execute("PRAGMA table_info(guild_config)")}
+            ticket_columns = {row[1] for row in database.connect().execute("PRAGMA table_info(tickets)")}
+            self.assertTrue({"urgent_at", "urgent_by"} <= config_columns)
+            self.assertTrue({"urgent_at", "urgent_by"} <= ticket_columns)
+            self.assertEqual(database.configured_permission_role_ids(42), [11, 12, 13, 14, 15])
+
+    def test_anti_links_source_checks(self):
+        self.assertTrue(detected_external_links("visit https://example.com or discord.gg/example"))
+        self.assertEqual(detected_external_links("example.com is okay", ("example.com",)), [])
+        for path in sorted((ROOT / "grid_a1").glob("*.py")):
+            source = path.read_text(encoding="utf-8")
+            tree = ast.parse(source, filename=str(path))
+            self.assertNotIn("[more lines in file", source.lower(), str(path))
+            self.assertNotIn("todo: implement", source.lower(), str(path))
+            self.assertIsNotNone(tree)
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+def _json_smoke(value):
+    return json.loads(value)
