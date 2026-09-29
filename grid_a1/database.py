@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from typing import Any
 from .utils import utcnow, safe_json_list
-SCHEMA_VERSION = 15
+SCHEMA_VERSION = 16
 class Database:
     def __init__(self, path: Path): self.path = path
     def connect(self):
@@ -39,6 +39,24 @@ class Database:
             db.execute('''CREATE TABLE IF NOT EXISTS closed_tickets (id INTEGER PRIMARY KEY AUTOINCREMENT, guild INTEGER NOT NULL, region TEXT NOT NULL, issue TEXT NOT NULL, closed_by INTEGER NOT NULL, reason TEXT NOT NULL, closed_at TEXT NOT NULL)''')
             db.execute("UPDATE guild_config SET anti_links_enabled=COALESCE(anti_links_enabled,0), anti_links_action=COALESCE(NULLIF(anti_links_action,''),'delete_warn'), anti_links_whitelist_domains=COALESCE(NULLIF(anti_links_whitelist_domains,''),'[]'), anti_links_bypass_roles=COALESCE(NULLIF(anti_links_bypass_roles,''),'[]'), anti_links_allowed_roles=COALESCE(NULLIF(anti_links_allowed_roles,''),'[]')")
             db.execute('INSERT OR IGNORE INTO schema_migrations VALUES (?,?)',(SCHEMA_VERSION,utcnow().isoformat()))
+    def backup(self, destination: Path) -> Path:
+        """Create a consistent SQLite backup without altering the live database."""
+        destination = Path(destination)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        source = self.connect()
+        try:
+            target = sqlite3.connect(destination)
+            try:
+                source.backup(target)
+            finally:
+                target.close()
+        finally:
+            source.close()
+        return destination
+
+    def schema_check(self) -> dict[str, object]:
+        return self.startup_check()
+
     def startup_check(self) -> dict[str, object]:
         with self.connect() as db:
             required = {"guild_config", "tickets", "audit_log", "closed_tickets", "schema_migrations"}
@@ -97,6 +115,33 @@ class Database:
             db.execute("UPDATE tickets SET status='closed', closed_at=?, close_reason=? WHERE ticket_id=?",(now,reason,row['ticket_id']))
             db.execute("INSERT INTO audit_log(guild_id,ticket_id,actor_id,action,metadata,created_at) VALUES(?,?,?,?,?,?)",(row['guild_id'],row['ticket_id'],0,'channel_missing',json.dumps({'channel_id':channel_id}),now))
             return row['ticket_id']
+    def close_orphaned_ticket(self, ticket_id):
+        """Close an open ticket whose Discord channel was confirmed missing."""
+        now = utcnow().isoformat()
+        with self.connect() as db:
+            db.execute('BEGIN IMMEDIATE')
+            try:
+                row = db.execute("SELECT guild_id, channel_id, status FROM tickets WHERE ticket_id=?", (ticket_id,)).fetchone()
+                if not row or row['status'] not in ('open', 'close_requested'):
+                    db.execute('COMMIT')
+                    return False
+                changed = db.execute(
+                    "UPDATE tickets SET status='closed', closed_at=?, close_reason=? "
+                    "WHERE ticket_id=? AND status IN ('open','close_requested')",
+                    (now, 'Channel missing (auto-cleaned)', ticket_id),
+                ).rowcount
+                if changed:
+                    db.execute(
+                        'INSERT INTO audit_log(guild_id,ticket_id,actor_id,action,metadata,created_at) VALUES(?,?,?,?,?,?)',
+                        (row['guild_id'], ticket_id, 0, 'channel_missing_cleanup',
+                         json.dumps({'channel_id': row['channel_id']}), now),
+                    )
+                db.execute('COMMIT')
+                return bool(changed)
+            except Exception:
+                db.execute('ROLLBACK')
+                raise
+
     def set_claim(self,ticket_id,claimed_by):self.update_ticket(ticket_id,claimed_by=claimed_by)
     def staff_role_ids(self,guild_id):
         row=self.config(guild_id);return [int(row[f'staff_role_{n}']) for n in range(1,11) if row and row[f'staff_role_{n}']]
@@ -122,3 +167,7 @@ class Database:
     def configured_permission_role_ids(self,guild_id):
         row=self.config(guild_id)
         return [int(row[n]) for n in ('owner_role','co_owner_role','head_admin_role','admin_role','moderator_role') if row and row[n]]
+
+    def ticket_access_role_ids(self, guild_id):
+        """Role IDs allowed to view tickets, deduplicated in permission-first order."""
+        return list(dict.fromkeys(self.configured_permission_role_ids(guild_id) + self.staff_role_ids(guild_id)))
