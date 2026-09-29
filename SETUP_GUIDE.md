@@ -10,7 +10,7 @@ The parameter names and order are exactly `owner_role`, `co_owner_role`, `head_a
 
 Only the configured owner and co-owner roles can run `/dashboard`. The server owner, bot owner, head admin, admin, moderator, and other staff do not receive dashboard access unless they also hold one of those two configured roles. All five configured roles are nevertheless included in staff permission checks.
 
-Use `/setup roles owner_role: ... co_owner_role: ... head_admin_role: ... admin_role: ... moderator_role: ...` for the five staff roles. Use `/setup staff` only for optional ticket notification roles.
+Use `/setup roles owner_role: ... co_owner_role: ... head_admin_role: ... admin_role: ... moderator_role: ...` for the five staff roles. Use `/setup roles` to configure the five staff roles; those roles are also pinged for new tickets.
 
 ## Other commands
 
