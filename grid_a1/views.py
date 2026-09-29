@@ -43,7 +43,7 @@ class DetailsModal(discord.ui.Modal, title="Open a support ticket"):
 class DashboardSelect(discord.ui.Select):
     OPTIONS = [
         ("ticket", "Ticket setup", "Review ticket panel, category, logs, and inactivity", "🎫"),
-        ("staff", "Staff roles", "Review ticket notification roles", "🛡️"),
+        ("staff", "Extra ticket access", "Optional extra roles that can view ticket channels", "🛡️"),
         ("permission", "Permission roles", "Review owner and co-owner access roles", "🔐"),
         ("verification", "Verification panel", "Review verification channel and role", "✅"),
         ("welcome", "Welcome system", "Review welcome and community channels", "👋"),
@@ -51,6 +51,7 @@ class DashboardSelect(discord.ui.Select):
         ("server", "Server information", "View live server details", "🌐"),
         ("announcement", "Announcement channels", "Review wipefeed announcement settings", "📣"),
         ("status", "Bot status", "View runtime and connectivity status", "💜"),
+        ("reports", "Report routing", "Choose the staff channel for member reports", "🚩"),
     ]
 
     def __init__(self, view: "DashboardView"):
@@ -70,8 +71,8 @@ class DashboardSelect(discord.ui.Select):
 class DashboardView(discord.ui.View):
     """Private, owner-level configuration dashboard; never grants moderator access."""
 
-    MODULE_LABELS = {"ticket": "Ticket setup", "staff": "Staff roles", "permission": "Permission roles", "verification": "Verification panel", "welcome": "Welcome system", "moderation": "Moderation settings", "server": "Server information", "announcement": "Announcement channels", "status": "Bot status"}
-    NEXT_ACTIONS = {"ticket": "Next action: configure the panel, logs, category, and inactivity hours.", "staff": "Next action: add at least one notification role if staff alerts are needed.", "permission": "Next action: configure all owner/co-owner and staff permission roles.", "verification": "Next action: configure the panel channel and a manageable verification role.", "welcome": "Next action: configure every community channel used by the welcome system.", "moderation": "Next action: moderation commands are ready; review command permissions if needed.", "server": "Next action: no configuration is required; use this page for live server details.", "announcement": "Next action: configure a channel here, then use `/wipefeed enable enabled:true` and `/wipefeed send`.", "status": "Next action: no configuration is required; investigate only if gateway latency is unavailable."}
+    MODULE_LABELS = {"ticket": "Ticket setup", "staff": "Extra ticket access", "permission": "Permission roles", "verification": "Verification panel", "welcome": "Welcome system", "moderation": "Moderation settings", "server": "Server information", "announcement": "Announcement channels", "status": "Bot status", "reports": "Report routing"}
+    NEXT_ACTIONS = {"ticket": "Next action: choose the panel, logs, category, and inactivity period from dropdowns.", "staff": "Optional: add extra roles that may view ticket channels. The five Permission roles receive ticket pings.", "permission": "Next action: select the five distinct roles that grant staff access and receive ticket pings.", "verification": "Next action: select a panel channel and a role the bot can assign, then publish when ready.", "welcome": "Next action: select the channels used by the welcome system.", "moderation": "Next action: moderation commands are ready; review command permissions if needed.", "server": "Next action: no configuration is required; use this page for live server details.", "announcement": "Next action: choose a channel and setting here, then use `/wipefeed send` to post.", "status": "Next action: no configuration is required; investigate only if gateway latency is unavailable.", "reports": "Next action: choose a staff-only text channel. Members can then use /report."}
     def __init__(self, database, bot_owner_id: int | None):
         # Five explicit rows: drawer, three config actions, navigation/actions.
         # Discord rejects component layouts that spill beyond row 4.
@@ -114,7 +115,7 @@ class DashboardView(discord.ui.View):
         return e
 
     def module_statuses(self, guild: discord.Guild):
-        """Return all nine modules using persisted configuration and live runtime state."""
+        """Return all ten modules using persisted configuration and live runtime state."""
         config = self.database.config(guild.id)
         def state(required=(), partial=()):
             if not config: return "🔴 Disabled / Not Setup"
@@ -124,7 +125,7 @@ class DashboardView(discord.ui.View):
             return "🔴 Disabled / Not Setup"
         return [
             ("Ticket setup", state(("panel_channel", "logs_channel", "ticket_category", "panel_message"))),
-            ("Staff roles", state(("staff_role_1",), tuple(f"staff_role_{n}" for n in range(2, 11)))),
+            ("Extra ticket access", state(("staff_role_1",), tuple(f"staff_role_{n}" for n in range(2, 11)))),
             ("Permission roles", state(("owner_role", "co_owner_role"), ("moderator_role", "admin_role", "head_admin_role"))),
             ("Verification panel", state(("verify_panel_channel", "verify_role", "verify_panel_message"))),
             ("Welcome system", state(("welcome_channel", "link_channel", "bot_commands_channel", "shop_channel", "verify_channel"))),
@@ -132,6 +133,7 @@ class DashboardView(discord.ui.View):
             ("Server information", "🟢 Active"),
             ("Announcement channels", state(("wipefeed_enabled", "wipefeed_channel"))),
             ("Bot status", "🟢 Active" if guild.me else "🟡 Partial"),
+            ("Report routing", state(("report_channel",))),
         ]
 
     async def show_module(self, interaction: discord.Interaction, module: str):
@@ -152,12 +154,13 @@ class DashboardView(discord.ui.View):
         else:
             fields = {
                 "ticket": (("Panel", "panel_channel"), ("Logs", "logs_channel"), ("Category", "ticket_category"), ("Inactivity hours", "inactivity_hours")),
-                "staff": (("Notification roles", "staff_role_1"),),
+                "staff": (("Extra ticket access role", "staff_role_1"),),
                 "permission": (("Owner role", "owner_role"), ("Co-owner role", "co_owner_role"), ("Moderator/Admin roles", "moderator_role")),
                 "verification": (("Panel channel", "verify_panel_channel"), ("Verification role", "verify_role")),
                 "welcome": (("Welcome channel", "welcome_channel"), ("Link channel", "link_channel"), ("Verify channel", "verify_channel")),
                 "moderation": (("Policy", None),),
                 "announcement": (("Enabled", "wipefeed_enabled"), ("Channel", "wipefeed_channel")),
+                "reports": (("Report channel", "report_channel"),),
             }.get(module, ())
             lines = []
             for label, key in fields:
@@ -167,7 +170,7 @@ class DashboardView(discord.ui.View):
                 lines.append(f"**{label}:** {raw if raw not in (None, 0, '') else '`Not configured`'}")
             if module == "staff":
                 roles = [config[f"staff_role_{n}"] for n in range(1, 11) if config and config[f"staff_role_{n}"]]
-                lines = [f"**Notification roles:** {', '.join(f'<@&{role}>' for role in roles) if roles else '`Not configured`'}"]
+                lines = [f"**Extra ticket access:** {', '.join(f'<@&{role}>' for role in roles) if roles else '`None (permission roles still receive pings)`'}"]
             value = "\n".join(lines)
         value = f"**Status:** {status}\n{self.NEXT_ACTIONS.get(module, 'Next action: return to the overview and refresh configuration.')}\n\n{value}"
         e = embed(f"💜 Dashboard • {labels.get(module, module.title())}", value, discord.Colour.from_rgb(177, 77, 255))
@@ -177,24 +180,29 @@ class DashboardView(discord.ui.View):
         else:
             await interaction.response.edit_message(embed=e, view=self)
 
-    async def _configure(self, interaction, modal_cls):
+    async def _configure(self, interaction, wizard_name):
         if not self.authorized(interaction): return await interaction.response.send_message("🔒 Your dashboard access is no longer valid.", ephemeral=True)
-        await interaction.response.send_modal(modal_cls(self.database, self.bot_owner_id))
+        from . import dashboard_setup
+        wizard_cls = getattr(dashboard_setup, wizard_name)
+        if getattr(wizard_cls, "server_owner_only", False) and interaction.user.id != interaction.guild.owner_id:
+            return await interaction.response.send_message("🔒 Only the server owner can change the five Permission roles.", ephemeral=True)
+        wizard = wizard_cls(self, interaction.guild)
+        await interaction.response.edit_message(embed=wizard.progress_embed(), view=wizard)
 
     @discord.ui.button(label="Permission roles", style=discord.ButtonStyle.secondary, emoji="🔐", row=1, custom_id="grid-a1:dashboard:permission-config")
-    async def permission_config(self, interaction, button): await self._configure(interaction, PermissionRolesModal)
+    async def permission_config(self, interaction, button): await self._configure(interaction, "PermissionRolesStepOneView")
 
-    @discord.ui.button(label="Staff roles", style=discord.ButtonStyle.secondary, emoji="🛡️", row=1, custom_id="grid-a1:dashboard:staff-config")
-    async def staff_config(self, interaction, button): await self._configure(interaction, StaffRolesModal)
+    @discord.ui.button(label="Extra ticket access", style=discord.ButtonStyle.secondary, emoji="🛡️", row=1, custom_id="grid-a1:dashboard:staff-config")
+    async def staff_config(self, interaction, button): await self._configure(interaction, "ExtraTicketAccessWizardView")
 
     @discord.ui.button(label="Ticket setup", style=discord.ButtonStyle.secondary, emoji="🎫", row=2, custom_id="grid-a1:dashboard:ticket-config")
-    async def ticket_config(self, interaction, button): await self._configure(interaction, TicketSetupModal)
+    async def ticket_config(self, interaction, button): await self._configure(interaction, "TicketSetupWizardView")
 
     @discord.ui.button(label="Welcome system", style=discord.ButtonStyle.secondary, emoji="👋", row=2, custom_id="grid-a1:dashboard:welcome-config")
-    async def welcome_config(self, interaction, button): await self._configure(interaction, WelcomeSystemModal)
+    async def welcome_config(self, interaction, button): await self._configure(interaction, "WelcomeStepOneView")
 
     @discord.ui.button(label="Verification panel", style=discord.ButtonStyle.secondary, emoji="✅", row=2, custom_id="grid-a1:dashboard:verification-config")
-    async def verification_config(self, interaction, button): await self._configure(interaction, VerificationPanelModal)
+    async def verification_config(self, interaction, button): await self._configure(interaction, "VerificationWizardView")
 
     @discord.ui.button(label="Back", style=discord.ButtonStyle.secondary, emoji="↩️", row=3, custom_id="grid-a1:dashboard:back")
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -206,111 +214,15 @@ class DashboardView(discord.ui.View):
 
     @discord.ui.button(label="Announcement config", style=discord.ButtonStyle.secondary, emoji="📣", row=3, custom_id="grid-a1:dashboard:announcement-config")
     async def announcement_config(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self._configure(interaction, AnnouncementSettingsModal)
+        await self._configure(interaction, "AnnouncementSettingsWizardView")
+
+    @discord.ui.button(label="Report channel", style=discord.ButtonStyle.secondary, emoji="🚩", row=4, custom_id="grid-a1:dashboard:report-config")
+    async def report_config(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await self._configure(interaction, "ReportChannelWizardView")
 
     @discord.ui.button(label="Close", style=discord.ButtonStyle.secondary, emoji="✖️", row=4, custom_id="grid-a1:dashboard:close")
     async def close(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.edit_message(content="💜 Dashboard closed.", embed=None, view=None)
-
-
-class _ConfigModal(discord.ui.Modal):
-    def __init__(self, database, owner_id, title): super().__init__(title=title); self.database=database; self.owner_id=owner_id
-    def allowed(self, i):
-        g=i.guild; m=i.user
-        if not g or not isinstance(m, discord.Member): return False
-        c=self.database.config(g.id)
-        return bool(c and c['owner_role'] and c['co_owner_role'] and {r.id for r in m.roles}&{int(c['owner_role']),int(c['co_owner_role'])})
-    async def deny(self,i):
-        if self.allowed(i): return False
-        await i.response.send_message('🔒 Dashboard access is no longer valid. Nothing was saved.',ephemeral=True); return True
-
-def _snowflake(v):
-    import re
-    m=re.search(r'\d{15,25}',str(v)); return int(m.group()) if m else None
-
-def _valid_role(g,v):
-    r=g.get_role(_snowflake(v) or 0); return r if r and not r.is_default() and not r.managed else None
-
-def _valid_text(g,v):
-    c=g.get_channel(_snowflake(v) or 0); return c if isinstance(c,discord.TextChannel) else None
-
-def _valid_category(g,v):
-    c=g.get_channel(_snowflake(v) or 0); return c if isinstance(c,discord.CategoryChannel) else None
-
-class PermissionRolesModal(_ConfigModal):
-    def allowed(self, i):
-        return bool(i.guild and isinstance(i.user, discord.Member) and i.user.id == i.guild.owner_id)
-    def __init__(self,d,o):
-        super().__init__(d,o,'Configure permission roles')
-        for n,l in [('owner','Owner role'),('co_owner','Co-owner role'),('moderator','Moderator role'),('admin','Admin role'),('head_admin','Head admin role')]: self.add_item(discord.ui.TextInput(label=f'{l} ID or mention',custom_id=n,max_length=30))
-    async def on_submit(self,i):
-        if await self.deny(i): return
-        vals={x.custom_id:_valid_role(i.guild,x.value) for x in self.children}
-        if any(not r for r in vals.values()) or len({r.id for r in vals.values()})<5: return await i.response.send_message('❌ Use five different normal roles from this server. Nothing was saved.',ephemeral=True)
-        self.database.upsert_config(i.guild.id,**{f'{k}_role':r.id for k,r in vals.items()}); await i.response.send_message('✅ Permission roles saved to SQLite.',ephemeral=True)
-
-class StaffRolesModal(_ConfigModal):
-    def __init__(self,d,o):
-        super().__init__(d,o,'Configure staff roles'); self.add_item(discord.ui.TextInput(label='Add role ID/mention (optional)',custom_id='add',required=False)); self.add_item(discord.ui.TextInput(label='Remove role ID/mention (optional)',custom_id='remove',required=False))
-    async def on_submit(self,i):
-        if await self.deny(i): return
-        a,r=[x.value.strip() for x in self.children]
-        if bool(a)==bool(r): return await i.response.send_message('❌ Fill exactly one field: add or remove.',ephemeral=True)
-        role=_valid_role(i.guild,a or r)
-        if not role: return await i.response.send_message('❌ Role must be a normal role in this server.',ephemeral=True)
-        try: changed=self.database.add_staff_role(i.guild.id,role.id) if a else self.database.remove_staff_role(i.guild.id,role.id)
-        except ValueError as e: return await i.response.send_message(f'❌ {e}',ephemeral=True)
-        await i.response.send_message('✅ Staff roles updated.' if changed else 'ℹ️ No change was needed.',ephemeral=True)
-
-class TicketSetupModal(_ConfigModal):
-    def __init__(self,d,o):
-        super().__init__(d,o,'Configure ticket setup')
-        for n,l in [('panel','Panel text channel'),('logs','Logs text channel'),('category','Ticket category')]: self.add_item(discord.ui.TextInput(label=f'{l} ID or mention',custom_id=n,max_length=30))
-        self.add_item(discord.ui.TextInput(label='Inactivity hours (1-720)',custom_id='hours',default='24',max_length=3))
-    async def on_submit(self,i):
-        if await self.deny(i): return
-        c={x.custom_id:x.value for x in self.children}; panel,logs,cat=_valid_text(i.guild,c['panel']),_valid_text(i.guild,c['logs']),_valid_category(i.guild,c['category'])
-        try: hours=int(c['hours'])
-        except ValueError: hours=0
-        if not panel or not logs or not cat or not 1<=hours<=720: return await i.response.send_message('❌ Invalid guild channels/category or hours. Nothing was saved.',ephemeral=True)
-        self.database.upsert_config(i.guild.id,panel_channel=panel.id,logs_channel=logs.id,ticket_category=cat.id,inactivity_hours=hours); await i.response.send_message('✅ Ticket setup saved. No public panel was deployed; use /setup tickets explicitly to deploy one.',ephemeral=True)
-
-class WelcomeSystemModal(_ConfigModal):
-    def __init__(self,d,o):
-        super().__init__(d,o,'Configure welcome system')
-        for n in ['welcome','link','commands','shop','verify']: self.add_item(discord.ui.TextInput(label=f'{n.title()} text channel ID or mention',custom_id=n,max_length=30))
-    async def on_submit(self,i):
-        if await self.deny(i): return
-        vals={x.custom_id:_valid_text(i.guild,x.value) for x in self.children}
-        if any(not v for v in vals.values()): return await i.response.send_message('❌ Every value must be a text channel in this server.',ephemeral=True)
-        self.database.upsert_config(i.guild.id,welcome_channel=vals['welcome'].id,link_channel=vals['link'].id,bot_commands_channel=vals['commands'].id,shop_channel=vals['shop'].id,verify_channel=vals['verify'].id); await i.response.send_message('✅ Welcome system channels saved to SQLite.',ephemeral=True)
-
-class VerificationPanelModal(_ConfigModal):
-    def __init__(self,d,o):
-        super().__init__(d,o,'Configure verification panel'); self.add_item(discord.ui.TextInput(label='Panel text channel ID or mention',custom_id='channel',max_length=30)); self.add_item(discord.ui.TextInput(label='Verification role ID or mention',custom_id='role',max_length=30))
-    async def on_submit(self,i):
-        if await self.deny(i): return
-        c=_valid_text(i.guild,self.children[0].value); r=_valid_role(i.guild,self.children[1].value)
-        if not c or not r or not i.guild.me or r>=i.guild.me.top_role: return await i.response.send_message('❌ Use a valid text channel and manageable role. Nothing was saved.',ephemeral=True)
-        self.database.upsert_config(i.guild.id,verify_panel_channel=c.id,verify_role=r.id); await i.response.send_message('✅ Verification config saved. No public panel was posted; use /verifypanel explicitly to deploy one.',ephemeral=True)
-
-
-class AnnouncementSettingsModal(_ConfigModal):
-    def __init__(self, d, o):
-        super().__init__(d, o, "Configure announcement settings")
-        self.add_item(discord.ui.TextInput(label="Announcement text channel ID or mention", custom_id="channel", max_length=30))
-        self.add_item(discord.ui.TextInput(label="Enable wipefeed? (yes/no)", custom_id="enabled", required=False, max_length=3, placeholder="yes or no"))
-
-    async def on_submit(self, i):
-        if await self.deny(i): return
-        channel = _valid_text(i.guild, self.children[0].value)
-        enabled = self.children[1].value.strip().lower()
-        if not channel or enabled not in ("", "yes", "no"):
-            return await i.response.send_message("❌ Use a valid text channel and enter yes or no. Nothing was saved.", ephemeral=True)
-        updates = {"wipefeed_channel": channel.id}
-        if enabled: updates["wipefeed_enabled"] = int(enabled == "yes")
-        self.database.upsert_config(i.guild.id, **updates)
-        await i.response.send_message("✅ Announcement settings saved. To post: /wipefeed enable enabled:true, then /wipefeed send.", ephemeral=True)
 
 
 class RegionSelect(discord.ui.Select):
@@ -452,6 +364,7 @@ class TicketControls(discord.ui.View):
         row=self.service.db.ticket(data.get('id',''))
         if not row or row['status'] not in ('open','close_requested'): return await interaction.response.send_message('This ticket is no longer active.', ephemeral=True)
         await interaction.response.defer(ephemeral=True)
+
         self.service.db.set_claim(row['ticket_id'], None)
         self.service.db.mark_activity(row['ticket_id'])
         self.service.db.audit(interaction.guild.id,row['ticket_id'],interaction.user.id,'staff_requested')
