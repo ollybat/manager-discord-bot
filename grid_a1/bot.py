@@ -80,30 +80,39 @@ class GridA1Bot(commands.Bot):
     @tasks.loop(seconds=60)
     async def refresh_panels(self):
         for guild in self.guilds:
-            config = self.database.config(guild.id)
-            if not config or not config['panel_channel'] or not config['panel_message']: continue
-            channel = guild.get_channel(config['panel_channel'])
-            if not isinstance(channel, discord.TextChannel): continue
             try:
-                message = await channel.fetch_message(config['panel_message'])
+                await self.refresh_guild_panel(guild)
+            except Exception:
+                log.exception("Panel refresh failed for guild %s; continuing with other guilds", guild.id)
+
+    async def refresh_guild_panel(self, guild):
+        """Refresh one guild independently so one bad config never stops the loop."""
+        config = self.database.config(guild.id)
+        if not config or not config['panel_channel'] or not config['panel_message']: return
+        channel = guild.get_channel(config['panel_channel'])
+        if not isinstance(channel, discord.TextChannel): return
+        try:
+            message = await channel.fetch_message(config['panel_message'])
+            panel = support_panel(guild, self.database)
+            fingerprint = hashlib.sha256(json.dumps(panel.to_dict(), sort_keys=True).encode()).hexdigest()
+            if config['panel_fingerprint'] != fingerprint:
+                await message.edit(embed=panel, view=TicketPanel(self.tickets))
+                self.database.upsert_config(guild.id, panel_fingerprint=fingerprint)
+        except discord.NotFound:
+            try:
                 panel = support_panel(guild, self.database)
+                message = await channel.send(embed=panel, view=TicketPanel(self.tickets))
                 fingerprint = hashlib.sha256(json.dumps(panel.to_dict(), sort_keys=True).encode()).hexdigest()
-                if config['panel_fingerprint'] != fingerprint:
-                    await message.edit(embed=panel, view=TicketPanel(self.tickets))
-                    self.database.upsert_config(guild.id, panel_fingerprint=fingerprint)
-            except discord.NotFound:
-                try:
-                    panel = support_panel(guild, self.database)
-                    message = await channel.send(embed=panel, view=TicketPanel(self.tickets))
-                    fingerprint = hashlib.sha256(json.dumps(panel.to_dict(), sort_keys=True).encode()).hexdigest()
-                    self.database.upsert_config(guild.id, panel_message=message.id, panel_fingerprint=fingerprint)
-                except discord.DiscordException: log.exception("Panel recovery failed")
-            except discord.DiscordServerError as error:
-                log.warning("Panel refresh temporarily unavailable (HTTP %s); will retry next cycle", getattr(error, "status", "unknown"))
-            except discord.HTTPException as error:
-                log.warning("Panel refresh request failed (HTTP %s); will retry next cycle", getattr(error, "status", "unknown"))
+                self.database.upsert_config(guild.id, panel_message=message.id, panel_fingerprint=fingerprint)
             except discord.DiscordException:
-                log.warning("Panel refresh encountered a Discord error; will retry next cycle")
+                log.exception("Panel recovery failed for guild %s", guild.id)
+        except discord.DiscordServerError as error:
+            log.warning("Panel refresh temporarily unavailable for guild %s (HTTP %s); will retry next cycle", guild.id, getattr(error, "status", "unknown"))
+        except discord.HTTPException as error:
+            log.warning("Panel refresh request failed for guild %s (HTTP %s); will retry next cycle", guild.id, getattr(error, "status", "unknown"))
+        except discord.DiscordException:
+            log.warning("Panel refresh encountered a Discord error for guild %s; will retry next cycle", guild.id)
+
     @tasks.loop(minutes=5)
     async def inactivity_loop(self):
         from datetime import datetime, timezone, timedelta
