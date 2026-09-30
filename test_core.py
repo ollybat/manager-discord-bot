@@ -255,7 +255,7 @@ class CoreTests(unittest.TestCase):
         }
         result = poll_embed(poll, ["Island", "Ragnarok"], {0: 2, 1: 1})
         self.assertEqual(result.title, "📊 Which map?")
-        self.assertIn("voting has ended", result.description)
+        self.assertIn("Voting has ended", result.description)
         self.assertEqual(result.fields[2].name, "🗳️ Total votes")
         self.assertEqual(result.fields[2].value, "**3**")
         self.assertEqual(result.fields[3].name, "🕒 Closed at")
