@@ -8,12 +8,15 @@ import sqlite3
 import tempfile
 import unittest
 from unittest.mock import patch
+
+import discord
 from pathlib import Path
 
 from grid_a1.config import Settings, validate_runtime
 from grid_a1.database import Database
 from grid_a1.embeds import inactivity_indicator
 from grid_a1.utils import detected_external_links, inactivity_custom_id, is_http_url, safe_json_list, sanitize_channel_name, ticket_status_title
+from grid_a1.views import DashboardView
 
 
 ROOT = Path(__file__).parent
@@ -193,6 +196,43 @@ class CoreTests(unittest.TestCase):
         self.assertIn("proof_file: discord.Attachment | None", command)
         self.assertNotIn("has_permissions", command)
         self.assertIn("report_channel", command)
+
+    def test_dashboard_server_owner_can_initialize_before_roles_are_configured(self):
+        bot_source = (ROOT / "grid_a1" / "bot.py").read_text(encoding="utf-8")
+        views = (ROOT / "grid_a1" / "views.py").read_text(encoding="utf-8")
+        command_access = bot_source.split("def _dashboard_access", 1)[1].split("def dashboard_access", 1)[0]
+        view_access = views.split("def authorized", 1)[1].split("async def interaction_check", 1)[0]
+        self.assertLess(command_access.index("interaction.user.id == interaction.guild.owner_id"), command_access.index("config = bot.database.config"))
+        self.assertLess(view_access.index("member.id == guild.owner_id"), view_access.index("config = self.database.config"))
+
+    def test_dashboard_is_simple_and_configure_button_follows_selection(self):
+        view = DashboardView(object(), None)
+        selectors = [item for item in view.children if isinstance(item, discord.ui.Select)]
+        buttons = [item for item in view.children if isinstance(item, discord.ui.Button)]
+        self.assertEqual(len(selectors), 1)
+        self.assertEqual({item.custom_id for item in buttons}, {"grid-a1:dashboard:configure", "grid-a1:dashboard:home", "grid-a1:dashboard:close"})
+        configure = next(item for item in buttons if item.custom_id == "grid-a1:dashboard:configure")
+        self.assertTrue(configure.disabled)
+        self.assertEqual(configure.label, "Choose an area")
+        view.selected_module = "ticket"
+        view._sync_configure_button()
+        self.assertFalse(configure.disabled)
+        self.assertEqual(configure.label, "Set up section")
+        view.selected_module = "status"
+        view._sync_configure_button()
+        self.assertTrue(configure.disabled)
+        self.assertEqual(configure.label, "View only")
+        view.selected_module = "permission"
+        view.viewer_id = 200
+        view.guild_owner_id = 100
+        view._sync_configure_button()
+        self.assertTrue(configure.disabled)
+        view.viewer_id = 100
+        view._sync_configure_button()
+        self.assertFalse(configure.disabled)
+        setup_source = (ROOT / "grid_a1" / "dashboard_setup.py").read_text(encoding="utf-8")
+        for wizard in view.CONFIG_WIZARDS.values():
+            self.assertIn(f"class {wizard}(", setup_source)
 
     def test_dashboard_configuration_uses_native_dropdowns(self):
         source = (ROOT / "grid_a1" / "dashboard_setup.py").read_text(encoding="utf-8")
