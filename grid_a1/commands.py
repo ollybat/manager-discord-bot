@@ -25,13 +25,13 @@ def register_commands(bot)->None:
             e.set_footer(text="Use commands inside a server to see the sections available to your roles."); return await i.response.send_message(embed=e,ephemeral=True)
         m=i.user; c=bot.database.config(i.guild.id); server_owner=m.id==i.guild.owner_id; bot_owner=m.id==bot.settings_owner_id
         owner=server_owner or bot_owner
-        access={int(c[k]) for k in ("owner_role","co_owner_role") if c and c[k]}; dashboard=bool({r.id for r in m.roles}&access)
+        access={int(c[k]) for k in ("owner_role","co_owner_role") if c and c[k]}; dashboard=server_owner or bool({r.id for r in m.roles}&access)
         manage_guild=server_owner or m.guild_permissions.administrator or m.guild_permissions.manage_guild
         admin=owner or manage_guild
         staff=admin or m.guild_permissions.manage_channels or bool({r.id for r in m.roles}&set(bot.database.configured_permission_role_ids(i.guild.id)))
         can_manage_messages=server_owner or m.guild_permissions.administrator or m.guild_permissions.manage_messages
-        if dashboard:e.add_field(name="🎛️ Private dashboard",value="`/dashboard` — Open the button-and-dropdown setup center for ticket, welcome, verification, announcement, and report settings. Access requires your server’s configured Owner or Co-owner role.",inline=False)
-        if server_owner:e.add_field(name="👑 Server owner setup",value="`/setup roles owner_role co_owner_role head_admin_role admin_role moderator_role` — Choose five distinct roles to initialize staff access. The Owner and Co-owner roles also unlock `/dashboard`.",inline=False)
+        if dashboard:e.add_field(name="🎛️ Easy private dashboard",value="`/dashboard` — Select an area, review its status, then choose **Set up section**. The server owner can always open it; configured Owner/Co-owner roles can also use it.",inline=False)
+        if server_owner:e.add_field(name="👑 Server owner setup",value="`/setup roles owner_role co_owner_role head_admin_role admin_role moderator_role` — Choose five distinct roles to initialize staff access. The server owner can always open `/dashboard`; configured Owner/Co-owner roles can open it too.",inline=False)
         if admin:
             setup_help="`/setup tickets panel_channel logs_channel category inactivity_hours` — Save ticket locations and publish the support panel.\n`/setup welcomer welcome_channel link_channel bot_commands_channel shop_channel verify_channel` — Save community channels.\n`/welcomer preview` / `/welcomer test` — Preview privately or send a test greeting."
             if manage_guild:

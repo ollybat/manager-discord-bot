@@ -42,50 +42,69 @@ class DetailsModal(discord.ui.Modal, title="Open a support ticket"):
 
 class DashboardSelect(discord.ui.Select):
     OPTIONS = [
-        ("ticket", "Ticket setup", "Review ticket panel, category, logs, and inactivity", "🎫"),
-        ("staff", "Extra ticket access", "Optional extra roles that can view ticket channels", "🛡️"),
-        ("permission", "Permission roles", "Review owner and co-owner access roles", "🔐"),
-        ("verification", "Verification panel", "Review verification channel and role", "✅"),
-        ("welcome", "Welcome system", "Review welcome and community channels", "👋"),
-        ("moderation", "Moderation settings", "Review the bot's moderation command policy", "🧰"),
-        ("server", "Server information", "View live server details", "🌐"),
-        ("announcement", "Announcement channels", "Review wipefeed announcement settings", "📣"),
-        ("status", "Bot status", "View runtime and connectivity status", "💜"),
-        ("reports", "Report routing", "Choose the staff channel for member reports", "🚩"),
+        ("ticket", "Support tickets", "Set the support panel, ticket channels, and reminders", "🎫"),
+        ("staff", "Extra ticket access", "Let extra roles view tickets; staff ping roles stay the same", "🛡️"),
+        ("permission", "Staff roles", "Set Owner, Co-owner, Head Admin, Admin, and Moderator", "🔐"),
+        ("verification", "Verification", "Choose the panel channel and verified role", "✅"),
+        ("welcome", "Welcome messages", "Choose the five community message channels", "👋"),
+        ("moderation", "Moderation commands", "Learn about moderation and link protection", "🧰"),
+        ("server", "Server overview", "See member, role, and channel counts", "🌐"),
+        ("announcement", "Wipe announcements", "Choose the channel and enable or disable announcements", "📣"),
+        ("status", "Bot health", "See latency, uptime, and connected servers", "💜"),
+        ("reports", "Member reports", "Choose a private staff report destination", "🚩"),
     ]
 
     def __init__(self, view: "DashboardView"):
         self.dashboard = view
         super().__init__(
-            placeholder="📱 Open the App Drawer to Configure…",
+            placeholder="Choose an area to view or set up…",
             options=[discord.SelectOption(label=label, value=value, description=description, emoji=emoji) for value, label, description, emoji in self.OPTIONS],
             custom_id="grid-a1:dashboard:module",
             row=0,
         )
 
     async def callback(self, interaction: discord.Interaction):
-        await interaction.response.defer()
+        self.dashboard.selected_module = self.values[0]
+        self.dashboard._sync_configure_button()
         await self.dashboard.show_module(interaction, self.values[0])
 
 
 class DashboardView(discord.ui.View):
     """Private, owner-level configuration dashboard; never grants moderator access."""
 
-    MODULE_LABELS = {"ticket": "Ticket setup", "staff": "Extra ticket access", "permission": "Permission roles", "verification": "Verification panel", "welcome": "Welcome system", "moderation": "Moderation settings", "server": "Server information", "announcement": "Announcement channels", "status": "Bot status", "reports": "Report routing"}
-    NEXT_ACTIONS = {"ticket": "Next action: choose the panel, logs, category, and inactivity period from dropdowns.", "staff": "Optional: add extra roles that may view ticket channels. The five Permission roles receive ticket pings.", "permission": "Next action: select the five distinct roles that grant staff access and receive ticket pings.", "verification": "Next action: select a panel channel and a role the bot can assign, then publish when ready.", "welcome": "Next action: select the channels used by the welcome system.", "moderation": "Next action: moderation commands are ready; review command permissions if needed.", "server": "Next action: no configuration is required; use this page for live server details.", "announcement": "Next action: choose a channel and setting here, then use `/wipefeed send` to post.", "status": "Next action: no configuration is required; investigate only if gateway latency is unavailable.", "reports": "Next action: choose a staff-only text channel. Members can then use /report."}
+    MODULE_LABELS = {"ticket": "Support tickets", "staff": "Extra ticket access", "permission": "Staff roles", "verification": "Verification", "welcome": "Welcome messages", "moderation": "Moderation commands", "server": "Server overview", "announcement": "Wipe announcements", "status": "Bot health", "reports": "Member reports"}
+    NEXT_ACTIONS = {"ticket": "Choose **Set up section** to select the panel, logs, category, and reminder time. Save before publishing.", "staff": "Optional: add roles that may view tickets. Your configured staff roles still receive ticket pings.", "permission": "As the server owner, choose five different roles. This unlocks the dashboard for Owner and Co-owner roles.", "verification": "Choose a panel channel and manageable role, then save or publish.", "welcome": "Choose five text channels for welcome and community messages, then save.", "moderation": "The moderation commands are ready. Use `/help` to see who can run each one.", "server": "This section is view-only. Server details update when you reopen it.", "announcement": "Choose the wipe announcement channel and enable/disable its posting switch.", "status": "This section is view-only. Reopen it to refresh latency and uptime.", "reports": "Choose a private staff-only text channel. Members can then use `/report`."}
+    CONFIG_WIZARDS = {"ticket": "TicketSetupWizardView", "staff": "ExtraTicketAccessWizardView", "permission": "PermissionRolesStepOneView", "verification": "VerificationWizardView", "welcome": "WelcomeStepOneView", "announcement": "AnnouncementSettingsWizardView", "reports": "ReportChannelWizardView"}
+
     def __init__(self, database, bot_owner_id: int | None):
-        # Five explicit rows: drawer, three config actions, navigation/actions.
-        # Discord rejects component layouts that spill beyond row 4.
         super().__init__(timeout=600)
         self.database = database
         self.bot_owner_id = bot_owner_id
+        self.selected_module = None
+        self.viewer_id = None
+        self.guild_owner_id = None
         self.add_item(DashboardSelect(self))
+        self._sync_configure_button()
+
+    def _sync_configure_button(self):
+        enabled = self.selected_module in self.CONFIG_WIZARDS
+        label = "Set up section" if enabled else "View only" if self.selected_module else "Choose an area"
+        if self.selected_module == "permission" and self.viewer_id is not None and self.guild_owner_id is not None and self.viewer_id != self.guild_owner_id:
+            enabled = False
+            label = "Server owner only"
+        for item in self.children:
+            if isinstance(item, discord.ui.Button) and item.custom_id == "grid-a1:dashboard:configure":
+                item.label = label
+                item.disabled = not enabled
 
     def authorized(self, interaction: discord.Interaction) -> bool:
         guild = interaction.guild
         member = interaction.user
         if not guild or not isinstance(member, discord.Member):
             return False
+        # Always let the server owner enter to perform first-time setup.
+        if member.id == guild.owner_id:
+            return True
         config = self.database.config(guild.id)
         if not config or not config["owner_role"] or not config["co_owner_role"]:
             return False
@@ -94,24 +113,32 @@ class DashboardView(discord.ui.View):
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if not self.authorized(interaction):
-            await interaction.response.send_message("🔒 This dashboard is restricted to members holding the configured owner or co-owner role.", ephemeral=True)
+            await interaction.response.send_message("🔒 This dashboard is restricted to the server owner and configured Owner/Co-owner roles.", ephemeral=True)
             return False
+        self.viewer_id = interaction.user.id
+        self.guild_owner_id = interaction.guild.owner_id
         return True
 
     def dashboard_embed(self, guild: discord.Guild) -> discord.Embed:
         config = self.database.config(guild.id)
-        e = embed(f"🎛️ Master Dashboard — {guild.name}", "✨ Private control center\nUse the app drawer to inspect and configure each Grid A1 module.", discord.Colour.from_rgb(177, 77, 255))
-        e.add_field(name="🔐 Access", value="Owner-level access verified", inline=True)
-        e.add_field(name="⚙️ Configuration", value="`Ready`" if config else "`Not initialized`", inline=True)
-        e.add_field(name="📡 Session", value="Private • ephemeral", inline=True)
+        roles_ready = bool(config and config["owner_role"] and config["co_owner_role"])
+        intro = "🧭 Choose an area from the dropdown. Review the next step, then press **Set up section**. Changes apply only when you press Save or Publish."
+        if not roles_ready:
+            intro += "\n\n✨ First time here? Select **Staff roles** first. The server owner can always open this dashboard to finish setup."
+        e = embed(f"🎛️ Easy Setup — {guild.name}", intro, discord.Colour.from_rgb(177, 77, 255))
+        access = "Server owner can always enter; configured Owner/Co-owner roles can also enter." if roles_ready else "Server owner access • first-time setup is ready."
+        configuration = "✅ Owner and Co-owner roles configured" if roles_ready else "🆕 Start with Staff roles"
+        e.add_field(name="🔐 Who can use this?", value=access, inline=True)
+        e.add_field(name="⚙️ Setup", value=configuration, inline=True)
+        e.add_field(name="📡 Visibility", value="Private to you", inline=True)
         statuses = self.module_statuses(guild)
         counts = {"🟢 Active": 0, "🟡 Partial": 0, "🔴 Disabled / Not Setup": 0}
         for _, state in statuses: counts[state] = counts.get(state, 0) + 1
-        e.add_field(name="📊 Status summary", value=f"🟢 Active: **{counts['🟢 Active']}** • 🟡 Partial: **{counts['🟡 Partial']}** • 🔴 Disabled: **{counts['🔴 Disabled / Not Setup']}**", inline=False)
-        e.add_field(name="📊 Live module status", value="\n".join(f"{state} **{label}**" for label, state in statuses), inline=False)
+        e.add_field(name="📊 Overview", value=f"🟢 Ready: **{counts['🟢 Active']}** • 🟡 Needs attention: **{counts['🟡 Partial']}** • ⚪ Not set up: **{counts['🔴 Disabled / Not Setup']}**", inline=False)
+        e.add_field(name="🧩 Sections", value="\n".join(f"{state} **{label}**" for label, state in statuses), inline=False)
         if guild.icon:
             e.set_thumbnail(url=guild.icon.url)
-        e.set_footer(text="Grid A1 • Refresh configuration to reload live values")
+        e.set_footer(text="Select a section • Save or Publish to apply changes")
         return e
 
     def module_statuses(self, guild: discord.Guild):
@@ -124,16 +151,16 @@ class DashboardView(discord.ui.View):
             if present or any(config[key] not in (None, "", 0) for key in partial): return "🟡 Partial"
             return "🔴 Disabled / Not Setup"
         return [
-            ("Ticket setup", state(("panel_channel", "logs_channel", "ticket_category", "panel_message"))),
+            ("Support tickets", state(("panel_channel", "logs_channel", "ticket_category", "panel_message"))),
             ("Extra ticket access", state(("staff_role_1",), tuple(f"staff_role_{n}" for n in range(2, 11)))),
-            ("Permission roles", state(("owner_role", "co_owner_role"), ("moderator_role", "admin_role", "head_admin_role"))),
-            ("Verification panel", state(("verify_panel_channel", "verify_role", "verify_panel_message"))),
-            ("Welcome system", state(("welcome_channel", "link_channel", "bot_commands_channel", "shop_channel", "verify_channel"))),
-            ("Moderation settings", "🟢 Active" if config else "🔴 Disabled / Not Setup"),
-            ("Server information", "🟢 Active"),
-            ("Announcement channels", state(("wipefeed_enabled", "wipefeed_channel"))),
-            ("Bot status", "🟢 Active" if guild.me else "🟡 Partial"),
-            ("Report routing", state(("report_channel",))),
+            ("Staff roles", state(("owner_role", "co_owner_role"), ("moderator_role", "admin_role", "head_admin_role"))),
+            ("Verification", state(("verify_panel_channel", "verify_role", "verify_panel_message"))),
+            ("Welcome messages", state(("welcome_channel", "link_channel", "bot_commands_channel", "shop_channel", "verify_channel"))),
+            ("Moderation commands", "🟢 Active" if config else "🔴 Disabled / Not Setup"),
+            ("Server overview", "🟢 Active"),
+            ("Wipe announcements", state(("wipefeed_enabled", "wipefeed_channel"))),
+            ("Bot health", "🟢 Active" if guild.me else "🟡 Partial"),
+            ("Member reports", state(("report_channel",))),
         ]
 
     async def show_module(self, interaction: discord.Interaction, module: str):
@@ -191,38 +218,20 @@ class DashboardView(discord.ui.View):
         wizard = wizard_cls(self, interaction.guild)
         await interaction.response.edit_message(embed=wizard.progress_embed(), view=wizard)
 
-    @discord.ui.button(label="Permission roles", style=discord.ButtonStyle.secondary, emoji="🔐", row=1, custom_id="grid-a1:dashboard:permission-config")
-    async def permission_config(self, interaction, button): await self._configure(interaction, "PermissionRolesStepOneView")
+    @discord.ui.button(label="Set up section", style=discord.ButtonStyle.primary, emoji="⚙️", row=1, custom_id="grid-a1:dashboard:configure", disabled=True)
+    async def configure_selected(self, interaction: discord.Interaction, button: discord.ui.Button):
+        wizard_name = self.CONFIG_WIZARDS.get(self.selected_module)
+        if not wizard_name:
+            return await interaction.response.send_message("👆 Choose a setup area from the dropdown first.", ephemeral=True)
+        await self._configure(interaction, wizard_name)
 
-    @discord.ui.button(label="Extra ticket access", style=discord.ButtonStyle.secondary, emoji="🛡️", row=1, custom_id="grid-a1:dashboard:staff-config")
-    async def staff_config(self, interaction, button): await self._configure(interaction, "ExtraTicketAccessWizardView")
-
-    @discord.ui.button(label="Ticket setup", style=discord.ButtonStyle.secondary, emoji="🎫", row=2, custom_id="grid-a1:dashboard:ticket-config")
-    async def ticket_config(self, interaction, button): await self._configure(interaction, "TicketSetupWizardView")
-
-    @discord.ui.button(label="Welcome system", style=discord.ButtonStyle.secondary, emoji="👋", row=2, custom_id="grid-a1:dashboard:welcome-config")
-    async def welcome_config(self, interaction, button): await self._configure(interaction, "WelcomeStepOneView")
-
-    @discord.ui.button(label="Verification panel", style=discord.ButtonStyle.secondary, emoji="✅", row=2, custom_id="grid-a1:dashboard:verification-config")
-    async def verification_config(self, interaction, button): await self._configure(interaction, "VerificationWizardView")
-
-    @discord.ui.button(label="Back", style=discord.ButtonStyle.secondary, emoji="↩️", row=3, custom_id="grid-a1:dashboard:back")
-    async def back(self, interaction: discord.Interaction, button: discord.ui.Button):
+    @discord.ui.button(label="Home / refresh", style=discord.ButtonStyle.secondary, emoji="🏠", row=1, custom_id="grid-a1:dashboard:home")
+    async def home(self, interaction: discord.Interaction, button: discord.ui.Button):
+        self.selected_module = None
+        self._sync_configure_button()
         await interaction.response.edit_message(embed=self.dashboard_embed(interaction.guild), view=self)
 
-    @discord.ui.button(label="Refresh configuration", style=discord.ButtonStyle.primary, emoji="🔄", row=3, custom_id="grid-a1:dashboard:refresh")
-    async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.edit_message(embed=self.dashboard_embed(interaction.guild), view=self)
-
-    @discord.ui.button(label="Announcement config", style=discord.ButtonStyle.secondary, emoji="📣", row=3, custom_id="grid-a1:dashboard:announcement-config")
-    async def announcement_config(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self._configure(interaction, "AnnouncementSettingsWizardView")
-
-    @discord.ui.button(label="Report channel", style=discord.ButtonStyle.secondary, emoji="🚩", row=4, custom_id="grid-a1:dashboard:report-config")
-    async def report_config(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await self._configure(interaction, "ReportChannelWizardView")
-
-    @discord.ui.button(label="Close", style=discord.ButtonStyle.secondary, emoji="✖️", row=4, custom_id="grid-a1:dashboard:close")
+    @discord.ui.button(label="Close", style=discord.ButtonStyle.secondary, emoji="✖️", row=1, custom_id="grid-a1:dashboard:close")
     async def close(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.edit_message(content="💜 Dashboard closed.", embed=None, view=None)
 

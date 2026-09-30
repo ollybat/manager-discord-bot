@@ -43,9 +43,11 @@ class _DashboardWizard(discord.ui.View):
         return str(value)
 
     def progress_embed(self, title, instructions, rows):
+        if instructions and ord(instructions[0]) < 128:
+            instructions = f"💡 {instructions}"
         e = embed(f"🧭 Quick setup • {title}", instructions, discord.Colour.from_rgb(177, 77, 255))
-        e.add_field(name="Selections", value="\n".join(f"**{label}:** {self.display(self.values.get(key))}" for key, label in rows), inline=False)
-        e.set_footer(text="Use the dropdowns below. Settings are saved only when you press a Save button.")
+        e.add_field(name="📋 Current choices", value="\n".join(f"**{label}:** {self.display(self.values.get(key))}" for key, label in rows), inline=False)
+        e.set_footer(text="Nothing changes until you choose Save or Publish • Cancel keeps current settings")
         return e
 
     def fresh_dashboard(self):
