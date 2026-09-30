@@ -290,6 +290,26 @@ class CoreTests(unittest.TestCase):
         self.assertIn("Select your issue type ...", views)
         self.assertNotIn('label="How it works"', views)
 
+    def test_ticket_modal_passes_all_required_details_and_region(self):
+        source = (ROOT / "grid_a1" / "views.py").read_text(encoding="utf-8")
+        region_select = source.split("class RegionSelect", 1)[1].split("class RegionView", 1)[0]
+        ticket_select = source.split("class TicketTypeSelect", 1)[1].split("class TicketPanel", 1)[0]
+        self.assertIn("DetailsModal(self.service, self.issue, self.label, self.values[0])", region_select)
+        self.assertIn("RegionView(self.service, option.value, option.label)", ticket_select)
+
+    def test_refresh_panels_isolates_failures_per_guild(self):
+        source = (ROOT / "grid_a1" / "bot.py").read_text(encoding="utf-8")
+        loop = source.split("@tasks.loop(seconds=60)", 1)[1].split("@tasks.loop(minutes=5)", 1)[0]
+        self.assertIn("await self.refresh_guild_panel(guild)", loop)
+        self.assertIn("except Exception:", loop)
+        self.assertIn("continuing with other guilds", loop)
+
+    def test_postgres_baseline_includes_closed_ticket_archive_table(self):
+        source = (ROOT / "grid_a1" / "postgres.py").read_text(encoding="utf-8")
+        self.assertIn("CREATE TABLE IF NOT EXISTS closed_tickets", source)
+        for column in ("guild BIGINT", "region TEXT", "issue TEXT", "closed_by BIGINT", "reason TEXT", "closed_at TEXT"):
+            self.assertIn(column, source)
+
     def test_ticket_controls_require_active_records_and_offer_owner_closure_request(self):
         controls = TicketControls(object())
         ids = [item.custom_id for item in controls.children if isinstance(item, discord.ui.Button)]
