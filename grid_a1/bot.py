@@ -13,6 +13,7 @@ from .tickets import TicketService, claim
 from .polls import (
     DEFAULT_POLL_DURATION_HOURS,
     MAX_POLL_DURATION_HOURS,
+    MAX_POLL_QUESTION_LENGTH,
     PollService,
     PollVoteView,
     parse_poll_options,
