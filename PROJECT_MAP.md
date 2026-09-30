@@ -4,7 +4,7 @@ This repository is a standalone Python Discord bot. `bot.py` is the supported en
 
 ## Runtime flow
 
-Startup loads `.env`, validates settings, configures logging, runs SQLite migrations, registers persistent views, starts resilient panel/inactivity loops, removes stale guild command copies, and publishes the global application command tree. The bot is Discord-only and has no unrelated network transport layer. SQLite schema version is 17; migrations are additive and preserve DATABASE_PATH and existing records.
+Startup loads `.env`, validates settings, configures logging, runs SQLite migrations, registers persistent views, starts resilient panel/inactivity/poll-expiry loops and restores published poll views, removes stale guild command copies, and publishes the global application command tree. The bot is Discord-only and has no unrelated network transport layer. SQLite schema version is 18; migrations are additive and preserve DATABASE_PATH and existing records.
 
 ## Modules
 
@@ -16,6 +16,7 @@ Startup loads `.env`, validates settings, configures logging, runs SQLite migrat
 - `grid_a1/views.py`: dashboard shell and persistent ticket/verification views.
 - `grid_a1/dashboard_setup.py`: role/channel dropdown setup wizards, explicit panel publishing, and report routing.
 - `grid_a1/tickets.py`: ticket creation, permissions, defer/followup closure, transcripts, and archive.
+- `grid_a1/polls.py`: persistent poll creation, result embeds, vote controls, and message refresh service.
 - `grid_a1/utils.py`: topic parsing, staff checks, link normalization, and safe JSON parsing.
 - `grid_a1/embeds.py`, `welcomer.py`, `transcript.py`: user-facing presentation and welcome/transcript rendering.
 

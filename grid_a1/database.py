@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from typing import Any
 from .utils import utcnow, safe_json_list
-SCHEMA_VERSION = 17
+SCHEMA_VERSION = 18
 class Database:
     def __init__(self, path: Path) -> None:
         self.path = path
@@ -40,6 +40,40 @@ class Database:
             db.execute("CREATE INDEX IF NOT EXISTS idx_config_panel ON guild_config(panel_channel, panel_message)")
             db.execute("CREATE INDEX IF NOT EXISTS idx_audit_guild_created ON audit_log(guild_id, created_at)")
             db.execute('''CREATE TABLE IF NOT EXISTS closed_tickets (id INTEGER PRIMARY KEY AUTOINCREMENT, guild INTEGER NOT NULL, region TEXT NOT NULL, issue TEXT NOT NULL, closed_by INTEGER NOT NULL, reason TEXT NOT NULL, closed_at TEXT NOT NULL)''')
+            db.execute("""
+                CREATE TABLE IF NOT EXISTS poll_settings (
+                    guild_id INTEGER PRIMARY KEY,
+                    channel_id INTEGER,
+                    default_duration_hours INTEGER NOT NULL DEFAULT 24
+                )
+            """)
+            db.execute("""
+                CREATE TABLE IF NOT EXISTS polls (
+                    poll_id TEXT PRIMARY KEY,
+                    guild_id INTEGER NOT NULL,
+                    channel_id INTEGER NOT NULL,
+                    message_id INTEGER,
+                    creator_id INTEGER NOT NULL,
+                    question TEXT NOT NULL,
+                    options_json TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'open',
+                    created_at TEXT NOT NULL,
+                    ends_at TEXT NOT NULL,
+                    ended_at TEXT
+                )
+            """)
+            db.execute("""
+                CREATE TABLE IF NOT EXISTS poll_votes (
+                    poll_id TEXT NOT NULL REFERENCES polls(poll_id) ON DELETE CASCADE,
+                    voter_id INTEGER NOT NULL,
+                    option_index INTEGER NOT NULL,
+                    voted_at TEXT NOT NULL,
+                    PRIMARY KEY (poll_id, voter_id)
+                )
+            """)
+            db.execute("CREATE INDEX IF NOT EXISTS idx_polls_guild_status ON polls(guild_id, status)")
+            db.execute("CREATE INDEX IF NOT EXISTS idx_polls_due ON polls(status, ends_at)")
+            db.execute("CREATE INDEX IF NOT EXISTS idx_poll_votes_poll_option ON poll_votes(poll_id, option_index)")
             db.execute("UPDATE guild_config SET anti_links_enabled=COALESCE(anti_links_enabled,0), anti_links_action=COALESCE(NULLIF(anti_links_action,''),'delete_warn'), anti_links_whitelist_domains=COALESCE(NULLIF(anti_links_whitelist_domains,''),'[]'), anti_links_bypass_roles=COALESCE(NULLIF(anti_links_bypass_roles,''),'[]'), anti_links_allowed_roles=COALESCE(NULLIF(anti_links_allowed_roles,''),'[]')")
             db.execute('INSERT OR IGNORE INTO schema_migrations VALUES (?,?)',(SCHEMA_VERSION,utcnow().isoformat()))
     def backup(self, destination: Path) -> Path:
@@ -62,7 +96,7 @@ class Database:
 
     def startup_check(self) -> dict[str, object]:
         with self.connect() as db:
-            required = {"guild_config", "tickets", "audit_log", "closed_tickets", "schema_migrations"}
+            required = {"guild_config", "tickets", "audit_log", "closed_tickets", "poll_settings", "polls", "poll_votes", "schema_migrations"}
             tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
             missing = sorted(required - tables)
             integrity = db.execute("PRAGMA integrity_check").fetchone()[0]
@@ -239,6 +273,240 @@ class Database:
         with self.connect() as db:
             rows = db.execute(query, (guild_id,)).fetchall()
         return {row["region"]: int(row["ticket_count"]) for row in rows}
+
+    def poll_settings(self, guild_id: int) -> sqlite3.Row | None:
+        """Return the configured poll channel and default duration for a guild."""
+        with self.connect() as db:
+            return db.execute(
+                "SELECT * FROM poll_settings WHERE guild_id=?",
+                (guild_id,),
+            ).fetchone()
+
+    def upsert_poll_settings(
+        self,
+        guild_id: int,
+        *,
+        channel_id: int | None = None,
+        default_duration_hours: int | None = None,
+    ) -> None:
+        """Atomically save the supplied poll settings while preserving omitted values."""
+        if default_duration_hours is not None and not 1 <= default_duration_hours <= 168:
+            raise ValueError("default poll duration must be between 1 and 168 hours")
+
+        updates: dict[str, Any] = {}
+        if channel_id is not None:
+            updates["channel_id"] = channel_id
+        if default_duration_hours is not None:
+            updates["default_duration_hours"] = default_duration_hours
+
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            try:
+                db.execute(
+                    "INSERT INTO poll_settings(guild_id) VALUES(?) ON CONFLICT DO NOTHING",
+                    (guild_id,),
+                )
+                for field, value in updates.items():
+                    db.execute(
+                        f"UPDATE poll_settings SET {field}=? WHERE guild_id=?",
+                        (value, guild_id),
+                    )
+                db.execute("COMMIT")
+            except Exception:
+                db.execute("ROLLBACK")
+                raise
+
+    def create_poll(
+        self,
+        *,
+        poll_id: str,
+        guild_id: int,
+        channel_id: int,
+        creator_id: int,
+        question: str,
+        options_json: str,
+        created_at: str,
+        ends_at: str,
+    ) -> None:
+        """Persist a poll and its audit event atomically before publishing it."""
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            try:
+                db.execute(
+                    "INSERT INTO polls "
+                    "(poll_id, guild_id, channel_id, creator_id, question, options_json, created_at, ends_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (poll_id, guild_id, channel_id, creator_id, question, options_json, created_at, ends_at),
+                )
+                db.execute(
+                    "INSERT INTO audit_log(guild_id, actor_id, action, metadata, created_at) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (guild_id, creator_id, "poll_created", json.dumps({"poll_id": poll_id}), created_at),
+                )
+                db.execute("COMMIT")
+            except Exception:
+                db.execute("ROLLBACK")
+                raise
+
+    def set_poll_message_id(self, poll_id: str, message_id: int) -> bool:
+        """Attach the published Discord message to its database poll row."""
+        with self.connect() as db:
+            changed = db.execute(
+                "UPDATE polls SET message_id=? WHERE poll_id=? AND status='open'",
+                (message_id, poll_id),
+            ).rowcount
+        return bool(changed)
+
+    def poll_for_guild(self, guild_id: int, poll_id: str) -> sqlite3.Row | None:
+        """Look up a poll while enforcing its guild boundary."""
+        with self.connect() as db:
+            return db.execute(
+                "SELECT * FROM polls WHERE guild_id=? AND poll_id=?",
+                (guild_id, poll_id),
+            ).fetchone()
+
+    def polls_with_messages_all(self) -> list[sqlite3.Row]:
+        """Return every published poll so ended stale controls can still be refreshed."""
+        with self.connect() as db:
+            return db.execute(
+                "SELECT * FROM polls WHERE message_id IS NOT NULL ORDER BY created_at"
+            ).fetchall()
+
+    def polls_due(self, now: str) -> list[sqlite3.Row]:
+        """Return open polls whose stored end time has passed."""
+        with self.connect() as db:
+            return db.execute(
+                "SELECT * FROM polls WHERE status='open' AND ends_at<=? ORDER BY ends_at",
+                (now,),
+            ).fetchall()
+
+    def poll_options(self, poll_id: str) -> list[str]:
+        """Read persisted poll choices safely, tolerating malformed legacy JSON."""
+        with self.connect() as db:
+            row = db.execute(
+                "SELECT options_json FROM polls WHERE poll_id=?",
+                (poll_id,),
+            ).fetchone()
+        return safe_json_list(row["options_json"] if row else "[]", str)
+
+    def poll_results(self, poll_id: str) -> dict[int, int]:
+        """Return vote counts keyed by the stored option index."""
+        with self.connect() as db:
+            rows = db.execute(
+                "SELECT option_index, COUNT(*) AS vote_count FROM poll_votes "
+                "WHERE poll_id=? GROUP BY option_index",
+                (poll_id,),
+            ).fetchall()
+        return {int(row["option_index"]): int(row["vote_count"]) for row in rows}
+
+    def cast_poll_vote(
+        self,
+        poll_id: str,
+        voter_id: int,
+        option_index: int,
+        voted_at: str,
+    ) -> str:
+        """Insert or change one member's vote, rejecting invalid or ended polls."""
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            try:
+                row = db.execute(
+                    "SELECT guild_id, status, ends_at, options_json FROM polls WHERE poll_id=?",
+                    (poll_id,),
+                ).fetchone()
+                if not row:
+                    db.execute("COMMIT")
+                    return "missing"
+                if row["status"] != "open":
+                    db.execute("COMMIT")
+                    return "closed"
+
+                if row["ends_at"] <= voted_at:
+                    db.execute(
+                        "UPDATE polls SET status='ended', ended_at=? WHERE poll_id=? AND status='open'",
+                        (voted_at, poll_id),
+                    )
+                    db.execute(
+                        "INSERT INTO audit_log(guild_id, actor_id, action, metadata, created_at) "
+                        "VALUES (?, ?, ?, ?, ?)",
+                        (row["guild_id"], 0, "poll_auto_ended", json.dumps({"poll_id": poll_id}), voted_at),
+                    )
+                    db.execute("COMMIT")
+                    return "expired"
+
+                choices = safe_json_list(row["options_json"], str)
+                if not 0 <= option_index < len(choices):
+                    db.execute("COMMIT")
+                    return "invalid_option"
+
+                db.execute(
+                    "INSERT INTO poll_votes(poll_id, voter_id, option_index, voted_at) "
+                    "VALUES (?, ?, ?, ?) "
+                    "ON CONFLICT(poll_id, voter_id) DO UPDATE SET "
+                    "option_index=excluded.option_index, voted_at=excluded.voted_at",
+                    (poll_id, voter_id, option_index, voted_at),
+                )
+                db.execute("COMMIT")
+                return "recorded"
+            except Exception:
+                db.execute("ROLLBACK")
+                raise
+
+    def end_poll(self, poll_id: str, ended_by: int, ended_at: str) -> bool:
+        """Mark a poll ended once and record the action in the audit log."""
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            try:
+                row = db.execute(
+                    "SELECT guild_id FROM polls WHERE poll_id=? AND status='open'",
+                    (poll_id,),
+                ).fetchone()
+                if not row:
+                    db.execute("COMMIT")
+                    return False
+                changed = db.execute(
+                    "UPDATE polls SET status='ended', ended_at=? "
+                    "WHERE poll_id=? AND status='open'",
+                    (ended_at, poll_id),
+                ).rowcount
+                if changed:
+                    action = "poll_auto_ended" if ended_by == 0 else "poll_ended"
+                    db.execute(
+                        "INSERT INTO audit_log(guild_id, actor_id, action, metadata, created_at) "
+                        "VALUES (?, ?, ?, ?, ?)",
+                        (row["guild_id"], ended_by, action, json.dumps({"poll_id": poll_id}), ended_at),
+                    )
+                db.execute("COMMIT")
+                return bool(changed)
+            except Exception:
+                db.execute("ROLLBACK")
+                raise
+
+    def remove_poll(self, poll_id: str, removed_by: int | None = None) -> sqlite3.Row | None:
+        """Delete a poll and cascade votes; optionally leave an audit record."""
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            try:
+                row = db.execute(
+                    "SELECT * FROM polls WHERE poll_id=?",
+                    (poll_id,),
+                ).fetchone()
+                if not row:
+                    db.execute("COMMIT")
+                    return None
+                db.execute("DELETE FROM polls WHERE poll_id=?", (poll_id,))
+                if removed_by is not None:
+                    db.execute(
+                        "INSERT INTO audit_log(guild_id, actor_id, action, metadata, created_at) "
+                        "VALUES (?, ?, ?, ?, ?)",
+                        (row["guild_id"], removed_by, "poll_removed", json.dumps({"poll_id": poll_id}), utcnow().isoformat()),
+                    )
+                db.execute("COMMIT")
+                return row
+            except Exception:
+                db.execute("ROLLBACK")
+                raise
+
     def mark_owner_left(self,guild_id,owner_id):
         with self.connect() as db:
             rows=db.execute("SELECT ticket_id FROM tickets WHERE guild_id=? AND owner_id=? AND status IN ('open','close_requested')",(guild_id,owner_id)).fetchall();db.execute("UPDATE tickets SET owner_left=1,auto_close_reason='owner_left' WHERE guild_id=? AND owner_id=? AND status IN ('open','close_requested')",(guild_id,owner_id));return [r['ticket_id'] for r in rows]

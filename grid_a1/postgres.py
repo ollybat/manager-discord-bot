@@ -35,6 +35,9 @@ CREATE TABLE IF NOT EXISTS guild_config (guild_id BIGINT PRIMARY KEY, panel_chan
 CREATE TABLE IF NOT EXISTS tickets (ticket_id TEXT PRIMARY KEY, guild_id BIGINT NOT NULL, channel_id BIGINT UNIQUE NOT NULL, owner_id BIGINT NOT NULL, issue TEXT NOT NULL, region TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'open', opened_at TEXT NOT NULL, last_activity_at TEXT NOT NULL, closed_at TEXT, closed_by BIGINT, close_reason TEXT);
 CREATE TABLE IF NOT EXISTS audit_log (id BIGSERIAL PRIMARY KEY, guild_id BIGINT NOT NULL, ticket_id TEXT, actor_id BIGINT NOT NULL, action TEXT NOT NULL, metadata TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS closed_tickets (id BIGSERIAL PRIMARY KEY, guild BIGINT NOT NULL, region TEXT NOT NULL, issue TEXT NOT NULL, closed_by BIGINT NOT NULL, reason TEXT NOT NULL, closed_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS poll_settings (guild_id BIGINT PRIMARY KEY, channel_id BIGINT, default_duration_hours INTEGER NOT NULL DEFAULT 24);
+CREATE TABLE IF NOT EXISTS polls (poll_id TEXT PRIMARY KEY, guild_id BIGINT NOT NULL, channel_id BIGINT NOT NULL, message_id BIGINT, creator_id BIGINT NOT NULL, question TEXT NOT NULL, options_json TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'open', created_at TEXT NOT NULL, ends_at TEXT NOT NULL, ended_at TEXT);
+CREATE TABLE IF NOT EXISTS poll_votes (poll_id TEXT NOT NULL REFERENCES polls(poll_id) ON DELETE CASCADE, voter_id BIGINT NOT NULL, option_index INTEGER NOT NULL, voted_at TEXT NOT NULL, PRIMARY KEY (poll_id, voter_id));
 """
 
 

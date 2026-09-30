@@ -18,6 +18,7 @@ from grid_a1.database import Database
 from grid_a1.embeds import inactivity_indicator
 from grid_a1.utils import active_ticket_owner, detected_external_links, inactivity_custom_id, is_http_url, safe_json_list, sanitize_channel_name, ticket_status_title
 from grid_a1.commands import _validate_image
+from grid_a1.polls import PollVoteView, parse_poll_options, poll_embed
 from grid_a1.views import DashboardView, TicketControls
 
 
@@ -77,7 +78,7 @@ class CoreTests(unittest.TestCase):
             self.assertEqual(database.ticket("ABC123")["issue"], "links")
             self.assertEqual(database.config(42)["owner_role"], 101)
             self.assertEqual(database.config(42)["report_channel"], 9900)
-            self.assertEqual(database.startup_check()["schema_version"], 17)
+            self.assertEqual(database.startup_check()["schema_version"], 18)
 
     def test_ticket_create_rolls_back_when_audit_insert_fails(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -169,6 +170,108 @@ class CoreTests(unittest.TestCase):
             with database.connect() as db:
                 audit_count = db.execute("SELECT COUNT(*) FROM audit_log WHERE ticket_id='CLOSE1' AND action='closed'").fetchone()[0]
             self.assertEqual(audit_count, 1)
+
+    def test_poll_storage_configuration_votes_and_removal(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(Path(directory) / "manager.sqlite3")
+            database.migrate()
+            self.assertIsNone(database.poll_settings(42))
+            database.upsert_poll_settings(42, channel_id=9200, default_duration_hours=12)
+            settings = database.poll_settings(42)
+            self.assertEqual(settings["channel_id"], 9200)
+            self.assertEqual(settings["default_duration_hours"], 12)
+            with self.assertRaises(ValueError):
+                database.upsert_poll_settings(42, default_duration_hours=0)
+
+            database.create_poll(poll_id="POLL1234", guild_id=42, channel_id=9200, creator_id=7001, question="Which map?", options_json='["Island", "Ragnarok"]', created_at="2026-01-01T00:00:00+00:00", ends_at="2026-01-02T00:00:00+00:00")
+            self.assertIsNone(database.poll_for_guild(99, "POLL1234"))
+            self.assertEqual(database.poll_options("POLL1234"), ["Island", "Ragnarok"])
+            self.assertTrue(database.set_poll_message_id("POLL1234", 98765))
+            self.assertEqual(database.polls_with_messages_all()[0]["message_id"], 98765)
+            self.assertEqual(database.cast_poll_vote("POLL1234", 7002, 0, "2026-01-01T01:00:00+00:00"), "recorded")
+            self.assertEqual(database.cast_poll_vote("POLL1234", 7002, 1, "2026-01-01T02:00:00+00:00"), "recorded")
+            self.assertEqual(database.poll_results("POLL1234"), {1: 1})
+            self.assertEqual(database.cast_poll_vote("POLL1234", 7003, 4, "2026-01-01T03:00:00+00:00"), "invalid_option")
+            self.assertTrue(database.end_poll("POLL1234", 7001, "2026-01-01T04:00:00+00:00"))
+            self.assertEqual(database.cast_poll_vote("POLL1234", 7003, 0, "2026-01-01T05:00:00+00:00"), "closed")
+            self.assertEqual(database.polls_with_messages_all()[0]["status"], "ended")
+            removed = database.remove_poll("POLL1234", removed_by=7001)
+            self.assertEqual(removed["question"], "Which map?")
+            self.assertEqual(database.poll_results("POLL1234"), {})
+            self.assertIsNone(database.poll_for_guild(42, "POLL1234"))
+
+            database.create_poll(poll_id="EXPIRED1", guild_id=42, channel_id=9200, creator_id=7001, question="Expired?", options_json='["Yes", "No"]', created_at="2026-01-01T00:00:00+00:00", ends_at="2026-01-01T01:00:00+00:00")
+            self.assertEqual(database.cast_poll_vote("EXPIRED1", 7002, 0, "2026-01-01T01:00:00+00:00"), "expired")
+            self.assertEqual(database.poll_for_guild(42, "EXPIRED1")["status"], "ended")
+
+    def test_poll_management_commands_are_registered(self):
+        tree = ast.parse((ROOT / "grid_a1" / "bot.py").read_text(encoding="utf-8"))
+        registered = set()
+        for node in tree.body:
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            for decorator in node.decorator_list:
+                if not isinstance(decorator, ast.Call):
+                    continue
+                command_factory = decorator.func
+                if not (
+                    isinstance(command_factory, ast.Attribute)
+                    and command_factory.attr == "command"
+                    and isinstance(command_factory.value, ast.Name)
+                    and command_factory.value.id == "poll_group"
+                ):
+                    continue
+                name = next(
+                    (keyword.value.value for keyword in decorator.keywords if keyword.arg == "name"),
+                    None,
+                )
+                if name:
+                    registered.add(name)
+        self.assertEqual(registered, {"config", "create", "end", "remove"})
+
+    def test_optional_postgres_baseline_lists_poll_tables(self):
+        source = (ROOT / "grid_a1" / "postgres.py").read_text(encoding="utf-8")
+        for table in ("poll_settings", "polls", "poll_votes"):
+            self.assertIn(f"CREATE TABLE IF NOT EXISTS {table}", source)
+
+    def test_poll_options_are_parsed_and_bounded(self):
+        self.assertEqual(parse_poll_options(" Island | Ragnarok "), ["Island", "Ragnarok"])
+        with self.assertRaises(ValueError):
+            parse_poll_options("Only one")
+        with self.assertRaises(ValueError):
+            parse_poll_options("Yes|Yes")
+        with self.assertRaises(ValueError):
+            parse_poll_options("|".join(f"Option {i}" for i in range(11)))
+        with self.assertRaises(ValueError):
+            parse_poll_options("x" * 101 + "|No")
+
+    def test_poll_embed_shows_results_and_actual_end_time(self):
+        poll = {
+            "poll_id": "POLL1234",
+            "question": "Which map?",
+            "status": "ended",
+            "ends_at": "2026-01-02T00:00:00+00:00",
+            "ended_at": "2026-01-01T00:00:00+00:00",
+        }
+        result = poll_embed(poll, ["Island", "Ragnarok"], {0: 2, 1: 1})
+        self.assertEqual(result.title, "📊 Which map?")
+        self.assertIn("Voting has ended", result.description)
+        self.assertEqual(result.fields[2].name, "🗳️ Total votes")
+        self.assertEqual(result.fields[2].value, "**3**")
+        self.assertEqual(result.fields[3].name, "🕒 Closed at")
+        self.assertEqual(result.fields[3].value, "<t:1767225600:R>")
+        self.assertIn("Poll ID: POLL1234", result.footer.text)
+        self.assertNotIn("Change vote anytime", result.footer.text)
+
+    def test_poll_vote_view_has_a_persistent_per_poll_component_id(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(Path(directory) / "manager.sqlite3")
+            database.migrate()
+            view = PollVoteView(database, "POLL1234", ["Yes", "No"])
+            self.assertIsNone(view.timeout)
+            selectors = [item for item in view.children if isinstance(item, discord.ui.Select)]
+            self.assertEqual(len(selectors), 1)
+            self.assertEqual(selectors[0].custom_id, "grid-a1:poll:POLL1234:vote")
 
     def test_extra_ticket_roles_enforce_the_ten_role_limit(self):
         with tempfile.TemporaryDirectory() as directory:
