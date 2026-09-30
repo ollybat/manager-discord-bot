@@ -7,6 +7,7 @@ import os
 import sqlite3
 import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import discord
@@ -16,6 +17,7 @@ from grid_a1.config import Settings, validate_runtime
 from grid_a1.database import Database
 from grid_a1.embeds import inactivity_indicator
 from grid_a1.utils import active_ticket_owner, detected_external_links, inactivity_custom_id, is_http_url, safe_json_list, sanitize_channel_name, ticket_status_title
+from grid_a1.commands import _validate_image
 from grid_a1.views import DashboardView, TicketControls
 
 
@@ -25,6 +27,15 @@ ROOT = Path(__file__).parent
 class CoreTests(unittest.TestCase):
     def test_sanitize_channel_name_collapses_dashes(self):
         self.assertEqual(sanitize_channel_name("EU", "Bug / Links", "A--User", "ABC123"), "eu-bug-links-a-user-abc123")
+
+    def test_custom_embed_image_validation_checks_type_and_extension(self):
+        self.assertIsNone(_validate_image(None))
+        supported = SimpleNamespace(content_type="image/png", filename="image.PNG")
+        self.assertIsNone(_validate_image(supported))
+        wrong_content = SimpleNamespace(content_type="text/plain", filename="image.png")
+        self.assertIn("not an image", _validate_image(wrong_content))
+        wrong_extension = SimpleNamespace(content_type="image/png", filename="image.svg")
+        self.assertIn("extension", _validate_image(wrong_extension))
 
     def test_ticket_owner_buttons_reject_staff_and_closed_tickets(self):
         open_row = {"status": "open", "owner_id": 42}
