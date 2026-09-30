@@ -68,6 +68,27 @@ class CoreTests(unittest.TestCase):
             self.assertEqual(database.config(42)["report_channel"], 9900)
             self.assertEqual(database.startup_check()["schema_version"], 17)
 
+    def test_ticket_create_rolls_back_when_audit_insert_fails(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(Path(directory) / "manager.sqlite3")
+            database.migrate()
+            with database.connect() as db:
+                db.execute("CREATE TRIGGER fail_audit_insert BEFORE INSERT ON audit_log BEGIN SELECT RAISE(ABORT, 'synthetic audit failure'); END")
+            with self.assertRaises(sqlite3.IntegrityError):
+                database.create_ticket(ticket_id="AUDITFAIL", guild_id=42, channel_id=9012, owner_id=7005, issue="general", region="EU", opened_at="now", last_activity_at="now")
+            self.assertIsNone(database.ticket("AUDITFAIL"))
+
+    def test_config_upsert_rolls_back_partial_changes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(Path(directory) / "manager.sqlite3")
+            database.migrate()
+            database.upsert_config(42)
+            with database.connect() as db:
+                db.execute("CREATE TRIGGER fail_co_owner BEFORE UPDATE OF co_owner_role ON guild_config BEGIN SELECT RAISE(ABORT, 'synthetic config failure'); END")
+            with self.assertRaises(sqlite3.IntegrityError):
+                database.upsert_config(42, owner_role=101, co_owner_role=102)
+            self.assertIsNone(database.config(42)["owner_role"])
+
     def test_ticket_close_request_is_atomic_and_idempotent(self):
         with tempfile.TemporaryDirectory() as directory:
             database = Database(Path(directory) / "manager.sqlite3")
@@ -137,6 +158,17 @@ class CoreTests(unittest.TestCase):
             with database.connect() as db:
                 audit_count = db.execute("SELECT COUNT(*) FROM audit_log WHERE ticket_id='CLOSE1' AND action='closed'").fetchone()[0]
             self.assertEqual(audit_count, 1)
+
+    def test_extra_ticket_roles_enforce_the_ten_role_limit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(Path(directory) / "manager.sqlite3")
+            database.migrate()
+            for role_id in range(1, 11):
+                self.assertTrue(database.add_staff_role(42, role_id))
+            self.assertFalse(database.add_staff_role(42, 10))
+            with self.assertRaises(ValueError):
+                database.add_staff_role(42, 11)
+            self.assertEqual(database.staff_role_ids(42), list(range(1, 11)))
 
     def test_ticket_access_roles_deduplicate_and_keep_permission_roles_first(self):
         with tempfile.TemporaryDirectory() as directory:
