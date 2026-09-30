@@ -142,7 +142,13 @@ def register_commands(bot: discord.Client) -> None:
                 "`/setup welcomer welcome_channel link_channel bot_commands_channel "
                 "shop_channel verify_channel` — Save community channels.\n"
                 "`/welcomer preview` / `/welcomer test` — Preview privately or send a "
-                "test greeting."
+                "test greeting.\n"
+                "`/poll config` — View the default poll channel and duration. Add "
+                "`channel` or `default_duration_hours` to change them.\n"
+                "`/poll create question options duration_hours` — Create a live poll; "
+                "separate choices with `|`.\n"
+                "`/poll end poll_id` / `/poll remove poll_id` — Close or remove your poll "
+                "(or any poll if you manage the server)."
             )
             if manage_guild:
                 setup_help += (
