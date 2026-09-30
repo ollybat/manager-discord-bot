@@ -148,7 +148,7 @@ def register_commands(bot: discord.Client) -> None:
                 setup_help += (
                     "\n`/verifypanel channel role` — Publish a verification panel; the bot "
                     "role must be above the assigned role.\n"
-                    "`/anti-links enabled action log_channel` — Configure enabled, action, "
+                    "`/anti-links enabled action log_channel` — configure enabled, action, "
                     "and log channel. The bot needs Message Content Intent and Manage Messages.\n"
                     "`/wipefeed enable enabled` / `/wipefeed send timestamp channel` — "
                     "Configure and post wipe announcements.\n"
