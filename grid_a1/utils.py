@@ -53,6 +53,14 @@ def parse_ticket_topic(channel: discord.abc.GuildChannel | None) -> dict[str, st
 def is_ticket(channel: discord.abc.GuildChannel | None) -> bool:
     return bool(parse_ticket_topic(channel))
 
+def active_ticket_owner(row, user_id: int) -> bool:
+    """Return whether user_id owns a ticket that is still open to activity."""
+    if not row: return False
+    try:
+        return row["status"] in ("open", "close_requested") and int(row["owner_id"]) == int(user_id)
+    except (KeyError, IndexError, TypeError, ValueError):
+        return False
+
 def staff_member(member: discord.Member, database=None) -> bool:
     """Return whether *member* has ticket-staff access."""
     if not isinstance(member, discord.Member): return False

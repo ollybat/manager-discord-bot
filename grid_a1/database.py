@@ -105,6 +105,14 @@ class Database:
         with self.connect() as db:
             rows=db.execute("SELECT ticket_id FROM tickets WHERE guild_id=? AND owner_id=? AND status IN ('open','close_requested')",(guild_id,owner_id)).fetchall();db.execute("UPDATE tickets SET owner_left=1,auto_close_reason='owner_left' WHERE guild_id=? AND owner_id=? AND status IN ('open','close_requested')",(guild_id,owner_id));return [r['ticket_id'] for r in rows]
     def mark_activity(self,ticket_id):self.update_ticket(ticket_id,last_activity_at=utcnow().isoformat(),inactivity_notice_at=None,auto_close_at=None,auto_close_reason=None)
+    def keep_ticket_open(self, ticket_id):
+        """Restore a live ticket after its owner explicitly checks in."""
+        with self.connect() as db:
+            changed = db.execute(
+                "UPDATE tickets SET status='open', close_requested_by=NULL, last_activity_at=?, inactivity_notice_at=NULL, auto_close_at=NULL, auto_close_reason=NULL WHERE ticket_id=? AND status IN ('open','close_requested')",
+                (utcnow().isoformat(), ticket_id),
+            ).rowcount
+            return bool(changed)
     def ticket_by_channel(self,channel_id):
         with self.connect() as db:return db.execute("SELECT * FROM tickets WHERE channel_id=? AND status IN ('open','close_requested')",(channel_id,)).fetchone()
     def mark_channel_missing(self, channel_id, reason='channel_missing'):
@@ -171,6 +179,12 @@ class Database:
             except Exception:
                 db.execute('ROLLBACK')
                 raise
+
+    def request_ticket_close(self, ticket_id, requested_by):
+        """Set a close request only if the ticket is still open (idempotent under races)."""
+        with self.connect() as db:
+            changed = db.execute("UPDATE tickets SET status='close_requested', close_requested_by=? WHERE ticket_id=? AND status='open'", (requested_by, ticket_id)).rowcount
+            return bool(changed)
 
     def set_claim(self,ticket_id,claimed_by):self.update_ticket(ticket_id,claimed_by=claimed_by)
     def staff_role_ids(self,guild_id):

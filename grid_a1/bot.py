@@ -376,12 +376,14 @@ async def verifypanel(i: discord.Interaction, channel: discord.TextChannel, role
 @staff()
 @app_commands.describe(user="Member who should lose access to this ticket")
 async def ticket_remove(i: discord.Interaction, user: discord.Member):
-    if not isinstance(i.channel, discord.TextChannel) or not is_ticket(i.channel): return await i.response.send_message("❌ This only works inside a ticket.", ephemeral=True)
-    data = parse_ticket_topic(i.channel)
-    if user.id == int(data.get("owner", "0")): return await i.response.send_message("❌ You cannot remove the ticket owner.", ephemeral=True)
+    if not isinstance(i.channel, discord.TextChannel) or not is_ticket(i.channel): return await i.response.send_message("❌ This only works inside an active ticket.", ephemeral=True)
+    row = bot.database.ticket_by_channel(i.channel.id)
+    if not row: return await i.response.send_message("⚠️ This ticket is already closed or unavailable.", ephemeral=True)
+    if user.id == row["owner_id"]: return await i.response.send_message("❌ You cannot remove the ticket owner.", ephemeral=True)
     await i.response.defer(ephemeral=True)
-    try: await i.channel.set_permissions(user, overwrite=None, reason=f"Removed from ticket by {i.user}")
-    except discord.Forbidden: return await i.followup.send("❌ I cannot remove that user from this ticket.", ephemeral=True)
+    try: await i.channel.set_permissions(user, overwrite=discord.PermissionOverwrite(view_channel=False, send_messages=False, read_message_history=False), reason=f"Removed from ticket by {i.user}")
+    except discord.Forbidden: return await i.followup.send("❌ I cannot remove that user from this ticket. Check Manage Channels/Permissions.", ephemeral=True)
+    bot.database.audit(i.guild.id, row["ticket_id"], i.user.id, "member_removed", json.dumps({"member_id": user.id}))
     await i.followup.send(f"✅ Removed {user.mention} from this ticket.", ephemeral=True)
 
 wipefeed_group = app_commands.Group(name="wipefeed", description="📣 Configure and post wipe announcements")
@@ -479,7 +481,13 @@ async def setup_tickets(i, panel_channel: discord.TextChannel, logs_channel: dis
         except discord.DiscordException:
             return await i.followup.send("❌ I could not update the existing panel. Check Manage Messages and Embed Links permissions.", ephemeral=True)
     if message is None:
-        message = await panel_channel.send(embed=support_panel(g, bot.database), view=TicketPanel(bot.tickets))
+        try:
+            message = await panel_channel.send(embed=support_panel(g, bot.database), view=TicketPanel(bot.tickets))
+        except discord.Forbidden:
+            return await i.followup.send("⚠️ Settings were saved, but I could not post the support panel. Grant the bot View Channel, Send Messages, and Embed Links in the panel channel, then retry `/setup tickets`.", ephemeral=True)
+        except discord.HTTPException as error:
+            log.exception("Could not publish the support panel in guild %s: %s", g.id, error)
+            return await i.followup.send("⚠️ Settings were saved, but Discord could not post the panel. Please retry in a moment or ask an admin to check bot permissions.", ephemeral=True)
     bot.database.upsert_config(g.id, panel_message=message.id)
     await i.followup.send(f"✅ Grid A1 support panel updated in {panel_channel.mention}; logs go to {logs_channel.mention}.", ephemeral=True)
 
@@ -512,9 +520,14 @@ async def ticket_transfer(i,target_member:discord.Member): await claim(i,bot.tic
 @ticket_group.command(name="requestclose", description="🔒 Request closure of the current ticket with a reason")
 @app_commands.describe(reason="Why the ticket should be closed")
 async def ticket_requestclose(i,reason:str):
-    if not is_ticket(i.channel): return await i.response.send_message("❌ This command only works inside an active ticket.",ephemeral=True)
+    if not isinstance(i.channel, discord.TextChannel) or not is_ticket(i.channel): return await i.response.send_message("❌ This command only works inside an active ticket.",ephemeral=True)
     if not staff_member(i.user, bot.database): return await i.response.send_message("🔒 Only ticket staff can request closure.",ephemeral=True)
-    data=parse_ticket_topic(i.channel); bot.database.update_ticket(data.get('id',''),status='close_requested',close_requested_by=i.user.id); bot.database.audit(guild(i).id,data.get('id',''),i.user.id,'close_requested'); await i.response.send_message(embed=embed("🔒 Ticket closure requested", f"A staff member requested closure.\n\n**Reason:** {discord.utils.escape_markdown(reason)[:500]}"))
+    row = bot.database.ticket_by_channel(i.channel.id)
+    if not row: return await i.response.send_message("⚠️ This ticket is already closed or unavailable.",ephemeral=True)
+    if row['status'] == 'close_requested': return await i.response.send_message("⏳ A closure request is already recorded for this ticket.",ephemeral=True)
+    if not bot.database.request_ticket_close(row['ticket_id'],i.user.id): return await i.response.send_message("⚠️ This ticket closed while the request was being submitted.",ephemeral=True)
+    bot.database.audit(guild(i).id,row['ticket_id'],i.user.id,'close_requested',json.dumps({'reason':discord.utils.escape_markdown(reason)[:500]}))
+    await i.response.send_message(embed=embed("🔒 Ticket closure requested", f"A staff member requested closure.\n\n**Reason:** {discord.utils.escape_markdown(reason)[:500]}"))
 @ticket_group.command(name="close", description="📦 Save the transcript and close the current ticket")
 @staff()
 @app_commands.describe(reason="Resolution or closure reason saved with the transcript")

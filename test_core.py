@@ -15,8 +15,8 @@ from pathlib import Path
 from grid_a1.config import Settings, validate_runtime
 from grid_a1.database import Database
 from grid_a1.embeds import inactivity_indicator
-from grid_a1.utils import detected_external_links, inactivity_custom_id, is_http_url, safe_json_list, sanitize_channel_name, ticket_status_title
-from grid_a1.views import DashboardView
+from grid_a1.utils import active_ticket_owner, detected_external_links, inactivity_custom_id, is_http_url, safe_json_list, sanitize_channel_name, ticket_status_title
+from grid_a1.views import DashboardView, TicketControls
 
 
 ROOT = Path(__file__).parent
@@ -25,6 +25,16 @@ ROOT = Path(__file__).parent
 class CoreTests(unittest.TestCase):
     def test_sanitize_channel_name_collapses_dashes(self):
         self.assertEqual(sanitize_channel_name("EU", "Bug / Links", "A--User", "ABC123"), "eu-bug-links-a-user-abc123")
+
+    def test_ticket_owner_buttons_reject_staff_and_closed_tickets(self):
+        open_row = {"status": "open", "owner_id": 42}
+        close_requested = {"status": "close_requested", "owner_id": 42}
+        closed = {"status": "closed", "owner_id": 42}
+        self.assertTrue(active_ticket_owner(open_row, 42))
+        self.assertTrue(active_ticket_owner(close_requested, 42))
+        self.assertFalse(active_ticket_owner(open_row, 99))
+        self.assertFalse(active_ticket_owner(closed, 42))
+        self.assertFalse(active_ticket_owner(None, 42))
 
     def test_safe_json_list_malformed_and_typed_data(self):
         self.assertEqual(safe_json_list("not-json", int), [])
@@ -57,6 +67,32 @@ class CoreTests(unittest.TestCase):
             self.assertEqual(database.config(42)["owner_role"], 101)
             self.assertEqual(database.config(42)["report_channel"], 9900)
             self.assertEqual(database.startup_check()["schema_version"], 17)
+
+    def test_ticket_close_request_is_atomic_and_idempotent(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(Path(directory) / "manager.sqlite3")
+            database.migrate()
+            database.create_ticket(ticket_id="REQCLOSE", guild_id=42, channel_id=9011, owner_id=7004, issue="general", region="EU", opened_at="now", last_activity_at="now")
+            self.assertTrue(database.request_ticket_close("REQCLOSE", 7004))
+            self.assertFalse(database.request_ticket_close("REQCLOSE", 7004))
+            self.assertEqual(database.ticket("REQCLOSE")["status"], "close_requested")
+            database.update_ticket("REQCLOSE", status="closed")
+            self.assertFalse(database.request_ticket_close("REQCLOSE", 7004))
+
+    def test_owner_keep_open_clears_close_request_and_auto_close(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(Path(directory) / "manager.sqlite3")
+            database.migrate()
+            database.create_ticket(ticket_id="KEEP", guild_id=42, channel_id=9010, owner_id=7003, issue="general", region="EU", opened_at="now", last_activity_at="old")
+            database.update_ticket("KEEP", status="close_requested", close_requested_by=7003, inactivity_notice_at="old", auto_close_at="later", auto_close_reason="owner_left")
+            self.assertTrue(database.keep_ticket_open("KEEP"))
+            row = database.ticket("KEEP")
+            self.assertEqual(row["status"], "open")
+            self.assertIsNone(row["close_requested_by"])
+            self.assertIsNone(row["inactivity_notice_at"])
+            self.assertIsNone(row["auto_close_at"])
+            self.assertIsNone(row["auto_close_reason"])
+            self.assertFalse(database.keep_ticket_open("missing"))
 
     def test_one_open_ticket_constraint(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -246,11 +282,29 @@ class CoreTests(unittest.TestCase):
         embeds = (ROOT / "grid_a1" / "embeds.py").read_text(encoding="utf-8")
         views = (ROOT / "grid_a1" / "views.py").read_text(encoding="utf-8")
         panel = embeds.split("def support_panel", 1)[1].split("def inactivity_indicator", 1)[0]
-        for label in ("Ticket General", "Ticket Base", "Ticket Clan", "Ticket Shop", "Ticket Raid", "Ticket Bug", "Support Status", "Estimated Help Time: 12 mins"):
+        for label in ("Ticket General", "Ticket Base", "Ticket Clan", "Ticket Shop", "Ticket Raid", "Ticket Bug", "Support Status", "Estimated Help Time:", "12 mins"):
             self.assertIn(label, panel)
+        self.assertIn("inline=True", panel)
+        self.assertIn("sum(counts.values())", panel)
         self.assertIn("class TicketTypeSelect", views)
         self.assertIn("Select your issue type ...", views)
         self.assertNotIn('label="How it works"', views)
+
+    def test_ticket_controls_require_active_records_and_offer_owner_closure_request(self):
+        controls = TicketControls(object())
+        ids = [item.custom_id for item in controls.children if isinstance(item, discord.ui.Button)]
+        self.assertEqual(len(ids), len(set(ids)))
+        self.assertIn("grid-a1:ticket:request-close", ids)
+        buttons = [item for item in controls.children if isinstance(item, discord.ui.Button)]
+        self.assertIn("Staff close", [item.label for item in buttons])
+        self.assertTrue(all(sum(button.row == row for button in buttons) <= 5 for row in (0, 1)))
+        source = (ROOT / "grid_a1" / "views.py").read_text(encoding="utf-8")
+        controls = source.split("class TicketControls", 1)[1].split("class CloseModal", 1)[0]
+        self.assertIn("ticket_by_channel(interaction.channel.id)", controls)
+        self.assertIn("active_ticket_owner(row, interaction.user.id)", controls)
+        self.assertIn('custom_id="grid-a1:ticket:request-close"', controls)
+        self.assertIn("owner_close_requested", controls)
+        self.assertIn("ticket_kept_open", source)
 
     def test_commands_have_emoji_descriptions_and_slash_options_have_hints(self):
         files = (ROOT / "grid_a1" / "bot.py", ROOT / "grid_a1" / "commands.py")
