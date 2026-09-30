@@ -18,18 +18,26 @@ def support_panel(guild: discord.Guild, database: Database) -> discord.Embed:
     bot_name = guild.me.display_name if guild.me else "Grid A1"
     year = utcnow().year
     description = (
-        "For any issue you encounter or questions you have, please select one of the following choices.\n\n"
-        "If you need the command list or instructions, use `/help`. It provides the full list of commands and helps staff respond more quickly.\n\n"
-        "📄 **Ticket General**\nFor any request or question that is not covered by the categories below.\n\n"
-        "🏠 **Ticket Base**\nQuestions or problems related to your base or your area.\n\n"
-        "👥 **Ticket Clan**\nClan requests or specific clan-related problems.\n\n"
-        "💎 **Ticket Shop**\nInformation about our online store or any product.\n\n"
-        "⚠️ **Ticket Raid**\nBounty raids or other raid-related problems.\n\n"
-        "🐛 **Ticket Bug**\nBugs or glitches found in-game or with our bots."
+        "✨ Need help? Pick the closest category below to open a private ticket. Choose EU, add your in-game name, and answer the short form so staff can help faster.\n\n"
+        "🤖 Looking for bot commands? Use `/help` for the complete command guide."
     )
-    result = embed(f"📩 {bot_name} - Support", description, NEON_PURPLE)
-    result.add_field(name="Support Status", value=f"Open Tickets: **{sum(counts.values())}**\nResponse Speed: Fast\nEstimated Help Time: 12 mins", inline=False)
-    result.set_footer(text=f"Support - {bot_name} • {year}")
+    result = embed(f"📩 {bot_name} • Support", description, NEON_PURPLE)
+    categories = (
+        ("📄 Ticket General", "Requests or questions not covered by another category."),
+        ("🏠 Ticket Base", "Questions or problems about your base or area."),
+        ("👥 Ticket Clan", "Clan requests or specific clan-related problems."),
+        ("💎 Ticket Shop", "Questions about the online store, products, or purchases."),
+        ("⚠️ Ticket Raid", "Bounty raids and other raid-related issues."),
+        ("🐛 Ticket Bug", "Bugs or glitches found in-game or with our bots."),
+    )
+    for name, details in categories:
+        result.add_field(name=name, value=details, inline=True)
+    result.add_field(
+        name="📊 Support Status",
+        value=f"🟢 Open Tickets: **{sum(counts.values())}**\n⚡ Response Speed: **Fast**\n⏱️ Estimated Help Time: **12 mins**",
+        inline=False,
+    )
+    result.set_footer(text=f"Choose your issue type below • Support - {bot_name} • {year}")
     return result
 
 
@@ -50,10 +58,10 @@ def inactivity_indicator(last_activity_at: str, inactivity_hours: int, owner_lef
 
 def ticket_embed(issue: str, region: str, details: str, status: str = "🟢", inactive_for: str = "0m") -> discord.Embed:
     result = embed(f"{status} 🎫 Grid A1 • Support ticket opened", "Your request is now in the support queue. A moderator will review it shortly.", COLOURS.get(issue, discord.Colour.blurple()))
-    result.add_field(name="Issue", value=issue.title()[:1024], inline=True)
-    result.add_field(name="Region", value=f"🇪🇺 {region}", inline=True)
-    result.add_field(name="Initial report", value=discord.utils.escape_markdown(details)[:1024], inline=False)
-    result.add_field(name="Activity", value=(f"Active • **{inactive_for}**" if status == "🟢" and inactive_for == "0m" else f"Inactive for **{inactive_for}**"), inline=True)
+    result.add_field(name="🗂️ Category", value=issue.title()[:1024], inline=True)
+    result.add_field(name="🌍 Region", value=f"🇪🇺 {region}", inline=True)
+    result.add_field(name="📝 Initial report", value=discord.utils.escape_markdown(details)[:1024], inline=False)
+    result.add_field(name="🕒 Activity", value=(f"Active • **{inactive_for}**" if status == "🟢" and inactive_for == "0m" else f"Inactive for **{inactive_for}**"), inline=True)
     result.set_footer(text="Please keep replies in this channel • Times shown in UTC")
     return result
 
