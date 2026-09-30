@@ -290,7 +290,7 @@ class CoreTests(unittest.TestCase):
 
     def test_help_lists_all_command_groups(self):
         source = (ROOT / "grid_a1" / "commands.py").read_text(encoding="utf-8")
-        for section in ("🌐 Everyone", "🎛️ Private dashboard", "👑 Server owner setup", "⚙️ Server setup & safety", "🛡️ Staff tools", "🔧 Bot owner"):
+        for section in ("🌐 Everyone", "🎛️ Easy private dashboard", "👑 Server owner setup", "⚙️ Server setup & safety", "🛡️ Staff tools", "🔧 Bot owner"):
             self.assertIn(section, source)
         for command in ("/report", "/setup tickets", "/setup welcomer", "/ticket transfer", "/ticket close", "/anti-links", "/embed-edit", "/sync"):
             self.assertIn(command, source)
