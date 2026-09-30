@@ -204,6 +204,7 @@ def staff(): return _permission_check(True)
 
 def _dashboard_access(interaction: discord.Interaction) -> bool:
     if not interaction.guild or not isinstance(interaction.user, discord.Member): return False
+    if interaction.user.id == interaction.guild.owner_id: return True
     config = bot.database.config(interaction.guild.id)
     if not config or not config["owner_role"] or not config["co_owner_role"]: return False
     return bool({role.id for role in interaction.user.roles} & {int(config["owner_role"]), int(config["co_owner_role"])})
