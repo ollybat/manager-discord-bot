@@ -313,7 +313,14 @@ class OwnerInactivityView(discord.ui.View):
         self.service.db.audit(row['guild_id'], self.ticket_id, interaction.user.id, 'inactivity_kept_open')
         guild = interaction.client.get_guild(row['guild_id'])
         channel = await self.service.resolve_ticket_channel(guild, row['channel_id']) if guild else None
-        notified = bool(guild and isinstance(channel, discord.TextChannel) and await self.service.notify_staff(guild, channel, self.ticket_id, row['issue'], row['region'], row['owner_id'], notice='The ticket owner checked in and kept the ticket open'))
+        notified = False
+        if guild and isinstance(channel, discord.TextChannel):
+            notified = await self.service.notify_staff(
+                guild,
+                channel,
+                self.ticket_id,
+                notice="The ticket owner checked in and kept the ticket open",
+            )
         message = '✅ The ticket will stay open.' + (' Staff were notified.' if notified else ' I could not notify staff; please message them in the ticket if you need help.')
         await interaction.followup.send(message, ephemeral=True)
     @discord.ui.button(label="Request another staff member", style=discord.ButtonStyle.secondary, emoji="🙋", custom_id="grid-a1:inactive:staff")
@@ -328,7 +335,14 @@ class OwnerInactivityView(discord.ui.View):
         self.service.db.audit(row['guild_id'], self.ticket_id, interaction.user.id, 'staff_requested')
         guild = interaction.client.get_guild(row['guild_id'])
         channel = await self.service.resolve_ticket_channel(guild, row['channel_id']) if guild else None
-        notified = bool(guild and isinstance(channel, discord.TextChannel) and await self.service.notify_staff(guild, channel, self.ticket_id, row['issue'], row['region'], row['owner_id'], notice='The ticket owner requested another staff member'))
+        notified = False
+        if guild and isinstance(channel, discord.TextChannel):
+            notified = await self.service.notify_staff(
+                guild,
+                channel,
+                self.ticket_id,
+                notice="The ticket owner requested another staff member",
+            )
         message = '✅ Your request was recorded.' + (' Staff were notified in the ticket.' if notified else ' The request was recorded, but I could not notify staff; please try again or contact them directly.')
         await interaction.followup.send(message, ephemeral=True)
     @discord.ui.button(label="Close ticket", style=discord.ButtonStyle.danger, emoji="🔒", custom_id="grid-a1:inactive:close")
@@ -364,7 +378,12 @@ class TicketControls(discord.ui.View):
                 previous = None
             if previous and now - previous < timedelta(hours=1): return await interaction.response.send_message("🚨 This ticket was already marked urgent recently.", ephemeral=True)
         await interaction.response.defer(ephemeral=True)
-        notified = await self.service.notify_staff(interaction.guild, interaction.channel, row["ticket_id"], row["issue"], row["region"], row["owner_id"], notice="🚨 URGENT SUPPORT REQUEST — the ticket owner needs immediate staff attention")
+        notified = await self.service.notify_staff(
+            interaction.guild,
+            interaction.channel,
+            row["ticket_id"],
+            notice="🚨 URGENT SUPPORT REQUEST — the ticket owner needs immediate staff attention",
+        )
         if not notified:
             return await interaction.followup.send("⚠️ I could not notify the configured staff roles. Please contact staff directly.", ephemeral=True)
         self.service.db.update_ticket(row["ticket_id"], urgent_at=now.isoformat(), urgent_by=interaction.user.id)
@@ -390,7 +409,12 @@ class TicketControls(discord.ui.View):
         self.service.db.set_claim(row['ticket_id'], None)
         self.service.db.mark_activity(row['ticket_id'])
         self.service.db.audit(interaction.guild.id,row['ticket_id'],interaction.user.id,'staff_requested')
-        notified=await self.service.notify_staff(interaction.guild,interaction.channel,row['ticket_id'],row['issue'],row['region'],row['owner_id'],notice='The ticket owner requested another staff member')
+        notified = await self.service.notify_staff(
+            interaction.guild,
+            interaction.channel,
+            row["ticket_id"],
+            notice="The ticket owner requested another staff member",
+        )
         message='✅ Your request was recorded and the current claim was cleared.' + (' Staff were alerted.' if notified else ' The staff ping could not be delivered; please contact staff directly.')
         await interaction.followup.send(message, ephemeral=True)
     @discord.ui.button(label="Request closure", style=discord.ButtonStyle.secondary, emoji="🔒", row=1, custom_id="grid-a1:ticket:request-close")
@@ -403,7 +427,12 @@ class TicketControls(discord.ui.View):
         if not self.service.db.request_ticket_close(row['ticket_id'], interaction.user.id):
             return await interaction.followup.send('⏳ Staff already have a closure request or this ticket has just closed.', ephemeral=True)
         self.service.db.audit(row['guild_id'], row['ticket_id'], interaction.user.id, 'owner_close_requested')
-        notified = await self.service.notify_staff(interaction.guild, interaction.channel, row['ticket_id'], row['issue'], row['region'], row['owner_id'], notice='The ticket owner requested closure')
+        notified = await self.service.notify_staff(
+            interaction.guild,
+            interaction.channel,
+            row["ticket_id"],
+            notice="The ticket owner requested closure",
+        )
         message = '✅ Your closure request was recorded.' + (' Staff were notified.' if notified else ' I could not ping staff; please message them in the ticket.')
         await interaction.followup.send(message, ephemeral=True)
     @discord.ui.button(label="Staff close", style=discord.ButtonStyle.danger, emoji="🔒", row=1, custom_id="grid-a1:ticket:close")
