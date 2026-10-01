@@ -398,6 +398,37 @@ class CoreTests(unittest.TestCase):
         self.assertNotIn("has_permissions", command)
         self.assertIn("report_channel", command)
 
+    def test_dashboard_save_callbacks_acknowledge_before_database_writes(self):
+        source = (ROOT / "grid_a1" / "dashboard_setup.py").read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        expected_writes = {
+            ("PermissionRolesStepTwoView", "save"): "self.database.upsert_config",
+            ("TicketSetupWizardView", "save"): "self.save_settings",
+            ("TicketSetupWizardView", "publish"): "self.save_settings",
+            ("ExtraTicketAccessWizardView", "apply"): "self.database.add_staff_role",
+            ("WelcomeStepTwoView", "save"): "self.database.upsert_config",
+            ("VerificationWizardView", "save"): "self.save_settings",
+            ("VerificationWizardView", "publish"): "self.save_settings",
+            ("AnnouncementSettingsWizardView", "save"): "self.database.upsert_config",
+            ("ReportChannelWizardView", "save"): "self.database.upsert_config",
+        }
+        for class_node in (node for node in tree.body if isinstance(node, ast.ClassDef)):
+            for method in class_node.body:
+                if not isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    continue
+                key = (class_node.name, method.name)
+                write_marker = expected_writes.get(key)
+                if not write_marker:
+                    continue
+                body = ast.get_source_segment(source, method)
+                defer = body.find("await interaction.response.defer()")
+                write = body.find(write_marker)
+                self.assertGreaterEqual(defer, 0, key)
+                self.assertGreaterEqual(write, 0, key)
+                self.assertLess(defer, write, key)
+                expected_writes.pop(key)
+        self.assertFalse(expected_writes, f"dashboard callbacks were not found: {expected_writes}")
+
     def test_dashboard_server_owner_can_initialize_before_roles_are_configured(self):
         bot_source = (ROOT / "grid_a1" / "bot.py").read_text(encoding="utf-8")
         views = (ROOT / "grid_a1" / "views.py").read_text(encoding="utf-8")
