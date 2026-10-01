@@ -1,10 +1,11 @@
 from __future__ import annotations
 import sqlite3
 import json
+import secrets
 from pathlib import Path
 from typing import Any
 from .utils import utcnow, safe_json_list
-SCHEMA_VERSION = 18
+SCHEMA_VERSION = 19
 class Database:
     def __init__(self, path: Path) -> None:
         self.path = path
@@ -55,6 +56,7 @@ class Database:
                     message_id INTEGER,
                     creator_id INTEGER NOT NULL,
                     question TEXT NOT NULL,
+                    description TEXT NOT NULL DEFAULT '',
                     options_json TEXT NOT NULL,
                     status TEXT NOT NULL DEFAULT 'open',
                     created_at TEXT NOT NULL,
@@ -71,6 +73,37 @@ class Database:
                     PRIMARY KEY (poll_id, voter_id)
                 )
             """)
+            poll_columns = {row[1] for row in db.execute("PRAGMA table_info(polls)")}
+            if "description" not in poll_columns:
+                db.execute("ALTER TABLE polls ADD COLUMN description TEXT NOT NULL DEFAULT ''")
+            db.execute("""
+                CREATE TABLE IF NOT EXISTS giveaways (
+                    giveaway_id TEXT PRIMARY KEY,
+                    guild_id INTEGER NOT NULL,
+                    channel_id INTEGER NOT NULL,
+                    message_id INTEGER,
+                    creator_id INTEGER NOT NULL,
+                    reward_type TEXT NOT NULL,
+                    ping_role_id INTEGER,
+                    winner_count INTEGER NOT NULL DEFAULT 1 CHECK (winner_count BETWEEN 1 AND 50),
+                    status TEXT NOT NULL DEFAULT 'open',
+                    created_at TEXT NOT NULL,
+                    ends_at TEXT NOT NULL,
+                    ended_at TEXT,
+                    winners_json TEXT NOT NULL DEFAULT '[]'
+                )
+            """)
+            db.execute("""
+                CREATE TABLE IF NOT EXISTS giveaway_entries (
+                    giveaway_id TEXT NOT NULL REFERENCES giveaways(giveaway_id) ON DELETE CASCADE,
+                    user_id INTEGER NOT NULL,
+                    entered_at TEXT NOT NULL,
+                    PRIMARY KEY (giveaway_id, user_id)
+                )
+            """)
+            db.execute("CREATE INDEX IF NOT EXISTS idx_giveaways_guild_status ON giveaways(guild_id, status)")
+            db.execute("CREATE INDEX IF NOT EXISTS idx_giveaways_due ON giveaways(status, ends_at)")
+            db.execute("CREATE INDEX IF NOT EXISTS idx_giveaway_entries_user ON giveaway_entries(giveaway_id, user_id)")
             db.execute("CREATE INDEX IF NOT EXISTS idx_polls_guild_status ON polls(guild_id, status)")
             db.execute("CREATE INDEX IF NOT EXISTS idx_polls_due ON polls(status, ends_at)")
             db.execute("CREATE INDEX IF NOT EXISTS idx_poll_votes_poll_option ON poll_votes(poll_id, option_index)")
@@ -96,7 +129,7 @@ class Database:
 
     def startup_check(self) -> dict[str, object]:
         with self.connect() as db:
-            required = {"guild_config", "tickets", "audit_log", "closed_tickets", "poll_settings", "polls", "poll_votes", "schema_migrations"}
+            required = {"guild_config", "tickets", "audit_log", "closed_tickets", "poll_settings", "polls", "poll_votes", "giveaways", "giveaway_entries", "schema_migrations"}
             tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
             missing = sorted(required - tables)
             integrity = db.execute("PRAGMA integrity_check").fetchone()[0]
@@ -327,6 +360,7 @@ class Database:
         options_json: str,
         created_at: str,
         ends_at: str,
+        description: str = "",
     ) -> None:
         """Persist a poll and its audit event atomically before publishing it."""
         with self.connect() as db:
@@ -334,9 +368,9 @@ class Database:
             try:
                 db.execute(
                     "INSERT INTO polls "
-                    "(poll_id, guild_id, channel_id, creator_id, question, options_json, created_at, ends_at) "
-                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                    (poll_id, guild_id, channel_id, creator_id, question, options_json, created_at, ends_at),
+                    "(poll_id, guild_id, channel_id, creator_id, question, description, options_json, created_at, ends_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (poll_id, guild_id, channel_id, creator_id, question, description, options_json, created_at, ends_at),
                 )
                 db.execute(
                     "INSERT INTO audit_log(guild_id, actor_id, action, metadata, created_at) "
@@ -370,6 +404,15 @@ class Database:
         with self.connect() as db:
             return db.execute(
                 "SELECT * FROM polls WHERE message_id IS NOT NULL ORDER BY created_at"
+            ).fetchall()
+
+    def active_polls(self, guild_id: int, limit: int = 25) -> list[sqlite3.Row]:
+        """Return the newest active polls for a guild dashboard."""
+        with self.connect() as db:
+            return db.execute(
+                "SELECT * FROM polls WHERE guild_id=? AND status='open' "
+                "ORDER BY created_at DESC LIMIT ?",
+                (guild_id, max(1, min(int(limit), 25))),
             ).fetchall()
 
     def polls_due(self, now: str) -> list[sqlite3.Row]:
@@ -503,6 +546,199 @@ class Database:
                     )
                 db.execute("COMMIT")
                 return row
+            except Exception:
+                db.execute("ROLLBACK")
+                raise
+
+    def create_giveaway(
+        self,
+        *,
+        giveaway_id: str,
+        guild_id: int,
+        channel_id: int,
+        creator_id: int,
+        reward_type: str,
+        ping_role_id: int | None,
+        winner_count: int,
+        created_at: str,
+        ends_at: str,
+    ) -> None:
+        """Persist a giveaway and its audit event before publishing the entry panel."""
+        if not 1 <= int(winner_count) <= 50:
+            raise ValueError("Giveaways must have between 1 and 50 winners.")
+        reward_type = reward_type.strip()
+        if not reward_type or len(reward_type) > 200:
+            raise ValueError("Reward type must contain 1–200 characters.")
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            try:
+                db.execute(
+                    "INSERT INTO giveaways "
+                    "(giveaway_id, guild_id, channel_id, creator_id, reward_type, ping_role_id, winner_count, created_at, ends_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (giveaway_id, guild_id, channel_id, creator_id, reward_type, ping_role_id, int(winner_count), created_at, ends_at),
+                )
+                db.execute(
+                    "INSERT INTO audit_log(guild_id, actor_id, action, metadata, created_at) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (guild_id, creator_id, "giveaway_created", json.dumps({"giveaway_id": giveaway_id, "winner_count": int(winner_count)}), created_at),
+                )
+                db.execute("COMMIT")
+            except Exception:
+                db.execute("ROLLBACK")
+                raise
+
+    def discard_unpublished_giveaway(self, giveaway_id: str) -> bool:
+        """Remove a draft if no public giveaway message was successfully linked."""
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            try:
+                row = db.execute(
+                    "SELECT message_id FROM giveaways WHERE giveaway_id=? AND status='open'",
+                    (giveaway_id,),
+                ).fetchone()
+                if not row or row["message_id"] is not None:
+                    db.execute("COMMIT")
+                    return False
+                db.execute("DELETE FROM giveaways WHERE giveaway_id=?", (giveaway_id,))
+                db.execute("COMMIT")
+                return True
+            except Exception:
+                db.execute("ROLLBACK")
+                raise
+
+    def set_giveaway_message_id(self, giveaway_id: str, message_id: int) -> bool:
+        with self.connect() as db:
+            changed = db.execute(
+                "UPDATE giveaways SET message_id=? WHERE giveaway_id=? AND status='open'",
+                (message_id, giveaway_id),
+            ).rowcount
+        return bool(changed)
+
+    def giveaway_for_guild(self, guild_id: int, giveaway_id: str) -> sqlite3.Row | None:
+        with self.connect() as db:
+            return db.execute(
+                "SELECT * FROM giveaways WHERE guild_id=? AND giveaway_id=?",
+                (guild_id, giveaway_id),
+            ).fetchone()
+
+    def open_giveaways_all(self) -> list[sqlite3.Row]:
+        with self.connect() as db:
+            return db.execute(
+                "SELECT * FROM giveaways WHERE status='open' AND message_id IS NOT NULL"
+            ).fetchall()
+
+    def active_giveaways(self, guild_id: int, limit: int = 25) -> list[sqlite3.Row]:
+        with self.connect() as db:
+            return db.execute(
+                "SELECT * FROM giveaways WHERE guild_id=? AND status='open' "
+                "ORDER BY created_at DESC LIMIT ?",
+                (guild_id, max(1, min(int(limit), 25))),
+            ).fetchall()
+
+    def giveaways_due(self, now: str) -> list[sqlite3.Row]:
+        with self.connect() as db:
+            return db.execute(
+                "SELECT * FROM giveaways WHERE status='open' AND ends_at<=? ORDER BY ends_at",
+                (now,),
+            ).fetchall()
+
+    def giveaway_entry_count(self, giveaway_id: str) -> int:
+        with self.connect() as db:
+            return int(
+                db.execute(
+                    "SELECT COUNT(*) FROM giveaway_entries WHERE giveaway_id=?",
+                    (giveaway_id,),
+                ).fetchone()[0]
+            )
+
+    def enter_giveaway(
+        self,
+        guild_id: int,
+        giveaway_id: str,
+        user_id: int,
+        entered_at: str,
+    ) -> str:
+        """Record at most one entry per member while the giveaway is open."""
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            try:
+                row = db.execute(
+                    "SELECT status, ends_at FROM giveaways WHERE guild_id=? AND giveaway_id=?",
+                    (guild_id, giveaway_id),
+                ).fetchone()
+                if not row:
+                    db.execute("COMMIT")
+                    return "missing"
+                if row["status"] != "open" or row["ends_at"] <= entered_at:
+                    db.execute("COMMIT")
+                    return "ended"
+                changed = db.execute(
+                    "INSERT OR IGNORE INTO giveaway_entries(giveaway_id, user_id, entered_at) VALUES(?, ?, ?)",
+                    (giveaway_id, user_id, entered_at),
+                ).rowcount
+                db.execute("COMMIT")
+                return "entered" if changed else "already_entered"
+            except Exception:
+                db.execute("ROLLBACK")
+                raise
+
+    def finalize_giveaway(
+        self,
+        guild_id: int,
+        giveaway_id: str,
+        ended_at: str,
+        *,
+        ended_by: int = 0,
+        force: bool = False,
+    ) -> tuple[dict[str, Any] | None, list[int], str]:
+        """Atomically stop entries and randomly choose winners exactly once."""
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            try:
+                row = db.execute(
+                    "SELECT * FROM giveaways WHERE guild_id=? AND giveaway_id=?",
+                    (guild_id, giveaway_id),
+                ).fetchone()
+                if not row:
+                    db.execute("COMMIT")
+                    return None, [], "missing"
+                if row["status"] != "open":
+                    winners = safe_json_list(row["winners_json"], int)
+                    db.execute("COMMIT")
+                    return dict(row), winners, "already_ended"
+                if not force and row["ends_at"] > ended_at:
+                    db.execute("COMMIT")
+                    return dict(row), [], "not_due"
+
+                entrants = [
+                    int(entry[0])
+                    for entry in db.execute(
+                        "SELECT user_id FROM giveaway_entries WHERE giveaway_id=? ORDER BY entered_at, user_id",
+                        (giveaway_id,),
+                    ).fetchall()
+                ]
+                winners = secrets.SystemRandom().sample(
+                    entrants,
+                    min(int(row["winner_count"]), len(entrants)),
+                ) if entrants else []
+                db.execute(
+                    "UPDATE giveaways SET status='ended', ended_at=?, winners_json=? "
+                    "WHERE giveaway_id=? AND status='open'",
+                    (ended_at, json.dumps(winners), giveaway_id),
+                )
+                action = "giveaway_auto_ended" if ended_by == 0 else "giveaway_ended"
+                db.execute(
+                    "INSERT INTO audit_log(guild_id, actor_id, action, metadata, created_at) "
+                    "VALUES (?, ?, ?, ?, ?)",
+                    (guild_id, ended_by, action, json.dumps({"giveaway_id": giveaway_id, "winners": winners}), ended_at),
+                )
+                final_row = db.execute(
+                    "SELECT * FROM giveaways WHERE giveaway_id=?",
+                    (giveaway_id,),
+                ).fetchone()
+                db.execute("COMMIT")
+                return dict(final_row), winners, "ended"
             except Exception:
                 db.execute("ROLLBACK")
                 raise
