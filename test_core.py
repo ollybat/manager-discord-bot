@@ -183,6 +183,65 @@ class CoreTests(unittest.TestCase):
             self.assertIsNone(row["auto_close_reason"])
             self.assertFalse(database.keep_ticket_open("missing"))
 
+    def test_ticket_claim_requires_explicit_transfer_and_is_audited(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(Path(directory) / "manager.sqlite3")
+            database.migrate()
+            database.create_ticket(
+                ticket_id="CLAIM1",
+                guild_id=42,
+                channel_id=9012,
+                owner_id=7001,
+                issue="general",
+                region="EU",
+                opened_at="now",
+                last_activity_at="now",
+            )
+            self.assertEqual(database.assign_ticket("CLAIM1", 7101), ("assigned", None))
+            self.assertEqual(database.assign_ticket("CLAIM1", 7101), ("already_assigned", 7101))
+            self.assertEqual(database.assign_ticket("CLAIM1", 7102), ("already_claimed", 7101))
+            self.assertEqual(
+                database.assign_ticket("CLAIM1", 7102, actor_id=7103, allow_reassign=True),
+                ("assigned", 7101),
+            )
+            self.assertEqual(database.ticket("CLAIM1")["claimed_by"], 7102)
+            with database.connect() as db:
+                audits = db.execute(
+                    "SELECT actor_id, action FROM audit_log WHERE ticket_id='CLAIM1' AND action LIKE 'ticket_%' ORDER BY id"
+                ).fetchall()
+            self.assertEqual([(row["actor_id"], row["action"]) for row in audits], [
+                (7101, "ticket_claimed"),
+                (7103, "ticket_reassigned"),
+            ])
+
+    def test_inactivity_dm_failure_is_recorded_once_without_auto_close(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(Path(directory) / "manager.sqlite3")
+            database.migrate()
+            database.create_ticket(
+                ticket_id="NODM1",
+                guild_id=42,
+                channel_id=9013,
+                owner_id=7002,
+                issue="general",
+                region="EU",
+                opened_at="now",
+                last_activity_at="old",
+            )
+            self.assertTrue(database.mark_inactivity_dm_unavailable("NODM1", "2026-01-01T00:00:00+00:00"))
+            row = database.ticket("NODM1")
+            self.assertIsNotNone(row["inactivity_notice_at"])
+            self.assertIsNone(row["auto_close_at"])
+            self.assertEqual(row["auto_close_reason"], "dm_unavailable")
+            self.assertFalse(database.mark_inactivity_dm_unavailable("NODM1", "2026-01-01T00:05:00+00:00"))
+            database.mark_activity("NODM1")
+            self.assertTrue(database.mark_inactivity_dm_unavailable("NODM1", "2026-01-01T01:00:00+00:00"))
+            with database.connect() as db:
+                count = db.execute(
+                    "SELECT COUNT(*) FROM audit_log WHERE ticket_id='NODM1' AND action='inactivity_notice_dm_unavailable'"
+                ).fetchone()[0]
+            self.assertEqual(count, 2)
+
     def test_one_open_ticket_constraint(self):
         with tempfile.TemporaryDirectory() as directory:
             database = Database(Path(directory) / "manager.sqlite3")
