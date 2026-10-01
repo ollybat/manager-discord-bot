@@ -414,6 +414,8 @@ class CoreTests(unittest.TestCase):
         }
         for class_node in (node for node in tree.body if isinstance(node, ast.ClassDef)):
             for method in class_node.body:
+                if not isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    continue
                 key = (class_node.name, method.name)
                 write_marker = expected_writes.get(key)
                 if not write_marker:
