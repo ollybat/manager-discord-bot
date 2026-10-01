@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import ast
+import asyncio
 import json
 import os
 import sqlite3
@@ -16,7 +17,7 @@ from pathlib import Path
 from grid_a1.config import Settings, validate_runtime
 from grid_a1.database import Database
 from grid_a1.embeds import inactivity_indicator
-from grid_a1.utils import active_ticket_owner, detected_external_links, inactivity_custom_id, is_http_url, safe_json_list, sanitize_channel_name, ticket_status_title
+from grid_a1.utils import anti_link_config_updates, active_ticket_owner, detected_external_links, inactivity_custom_id, is_http_url, safe_json_list, sanitize_channel_name, ticket_status_title
 from grid_a1.commands import (
     BASE_SERVER_SETUP_HELP,
     MANAGE_GUILD_HELP,
@@ -109,6 +110,46 @@ class CoreTests(unittest.TestCase):
             with self.assertRaises(sqlite3.IntegrityError):
                 database.upsert_config(42, owner_role=101, co_owner_role=102)
             self.assertIsNone(database.config(42)["owner_role"])
+
+    def test_transcript_can_omit_embedded_images_but_keep_attachment_links(self):
+        from grid_a1.transcript import render
+        from datetime import datetime, timezone
+
+        read_called = False
+
+        async def read_image():
+            nonlocal read_called
+            read_called = True
+            return b"image-bytes"
+
+        attachment = SimpleNamespace(
+            content_type="image/png",
+            size=12,
+            filename="screenshot.png",
+            url="https://cdn.example/screenshot.png",
+            read=read_image,
+        )
+        now = datetime.now(timezone.utc)
+        message = SimpleNamespace(
+            author=SimpleNamespace(display_name="Player"),
+            content="Here is the screenshot",
+            created_at=now,
+            attachments=[attachment],
+        )
+        guild = SimpleNamespace(get_member=lambda _member_id: None)
+        channel = SimpleNamespace(guild=guild, created_at=now, id=456)
+        html = asyncio.run(
+            render(
+                [message],
+                channel,
+                {"id": "TICKET1", "owner": ""},
+                include_images=False,
+                max_cached_image_bytes=0,
+            )
+        )
+        self.assertFalse(read_called)
+        self.assertIn("Image not embedded", html)
+        self.assertIn("https://cdn.example/screenshot.png", html)
 
     def test_ticket_close_request_is_atomic_and_idempotent(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -404,6 +445,44 @@ class CoreTests(unittest.TestCase):
         self.assertIn("await interaction.followup.send(embed=result_embed, ephemeral=True)", source)
         self.assertEqual(source.count("await interaction.edit_original_response("), 1)
 
+    def test_dashboard_channel_select_resolves_command_channel_values(self):
+        from grid_a1.dashboard_setup import _resolve_selected_channel
+
+        selected = SimpleNamespace(id=123)
+        cached_channel = object()
+
+        class CachedGuild:
+            id = 42
+
+            def get_channel(self, channel_id):
+                return cached_channel if channel_id == 123 else None
+
+            def get_thread(self, channel_id):
+                return None
+
+            async def fetch_channel(self, channel_id):
+                raise AssertionError("cached channel should not be fetched")
+
+        resolved = asyncio.run(_resolve_selected_channel(CachedGuild(), selected))
+        self.assertIs(resolved, cached_channel)
+
+        fetched_channel = object()
+
+        class UncachedGuild:
+            id = 42
+
+            def get_channel(self, channel_id):
+                return None
+
+            def get_thread(self, channel_id):
+                return None
+
+            async def fetch_channel(self, channel_id):
+                return fetched_channel
+
+        resolved = asyncio.run(_resolve_selected_channel(UncachedGuild(), selected))
+        self.assertIs(resolved, fetched_channel)
+
     def test_dashboard_save_callbacks_acknowledge_before_database_writes(self):
         source = (ROOT / "grid_a1" / "dashboard_setup.py").read_text(encoding="utf-8")
         tree = ast.parse(source)
@@ -434,6 +513,18 @@ class CoreTests(unittest.TestCase):
                 self.assertLess(defer, write, key)
                 expected_writes.pop(key)
         self.assertFalse(expected_writes, f"dashboard callbacks were not found: {expected_writes}")
+
+    def test_stale_guild_command_cleanup_runs_after_ready(self):
+        source = (ROOT / "grid_a1" / "bot.py").read_text(encoding="utf-8")
+        setup_hook = source.split("async def setup_hook", 1)[1].split("async def clear_stale_guild_command_copies", 1)[0]
+        self.assertNotIn("for existing_guild in self.guilds", setup_hook)
+        self.assertIn("async def clear_stale_guild_command_copies", source)
+        self.assertIn("async def on_ready():\n    await bot.clear_stale_guild_command_copies()", source)
+
+    def test_custom_embed_requires_manage_messages(self):
+        source = (ROOT / "grid_a1" / "commands.py").read_text(encoding="utf-8")
+        embed_command = source.split('name="embed"', 1)[1].split('name="sync"', 1)[0]
+        self.assertIn("has_permissions(manage_messages=True)", embed_command)
 
     def test_dashboard_server_owner_can_initialize_before_roles_are_configured(self):
         bot_source = (ROOT / "grid_a1" / "bot.py").read_text(encoding="utf-8")
@@ -576,6 +667,35 @@ class CoreTests(unittest.TestCase):
         for stale in ("`/staff`", "whitelist domains", "bypass roles", "allowed link roles"):
             self.assertNotIn(stale, source)
         self.assertIn("configure enabled, action, and log channel", source)
+
+    def test_anti_links_ignores_sentence_periods_and_numeric_versions(self):
+        for sentence in (
+            "Hello there. How are you?",
+            "Yes. Thanks",
+            "Version 1.2 is out",
+        ):
+            self.assertEqual(detected_external_links(sentence), [], sentence)
+        self.assertTrue(detected_external_links("Visit example . com"))
+        self.assertTrue(detected_external_links("Visit https : / / example . com"))
+        invite_links = detected_external_links("Join discord . gg / example")
+        self.assertEqual(len(invite_links), 1)
+        self.assertIn("discord.gg", invite_links[0].casefold())
+
+    def test_anti_link_partial_updates_preserve_omitted_settings(self):
+        self.assertEqual(
+            anti_link_config_updates(enabled=False),
+            {"anti_links_enabled": 0},
+        )
+        self.assertEqual(
+            anti_link_config_updates(action="delete_log"),
+            {"anti_links_action": "delete_log"},
+        )
+        self.assertEqual(
+            anti_link_config_updates(clear_log_channel=True),
+            {"anti_links_log_channel": None},
+        )
+        with self.assertRaises(ValueError):
+            anti_link_config_updates(action="invalid")
 
     def test_anti_links_source_checks(self):
         self.assertTrue(detected_external_links("visit https://example.com or discord.gg/example"))
