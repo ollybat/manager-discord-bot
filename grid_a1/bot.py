@@ -220,20 +220,21 @@ class GridA1Bot(commands.Bot):
                                         owner = None
                                     except discord.HTTPException as error:
                                         log.warning('Could not fetch ticket owner %s (HTTP %s); leaving ticket open', row['owner_id'], getattr(error, 'status', 'unknown'))
-                                        continue
                                 if owner is not None:
                                     view = OwnerInactivityView(self.tickets, row['ticket_id'])
-                                    self.add_view(view)
                                     try:
                                         await owner.send(f'🔴 Your Grid A1 ticket **{row["ticket_id"]}** has been inactive for **{duration}**. Please choose an option below within 24 hours.', view=view)
                                     except discord.Forbidden:
-                                        log.info('Ticket owner %s has DMs disabled; leaving the ticket open without an auto-close deadline', row['owner_id'])
-                                        continue
+                                        log.info('Ticket owner %s has DMs disabled; recording the failure and leaving the ticket open', row['owner_id'])
+                                        self.database.mark_inactivity_dm_unavailable(
+                                            row['ticket_id'],
+                                            now.isoformat(),
+                                        )
                                     except discord.HTTPException as error:
-                                        log.warning('Could not send inactivity notice to %s (HTTP %s); leaving ticket open', row['owner_id'], getattr(error, 'status', 'unknown'))
-                                        continue
-                                    self.database.update_ticket(row['ticket_id'], inactivity_notice_at=now.isoformat(), auto_close_at=deadline)
-                                    self.database.audit(guild.id,row['ticket_id'],0,'inactivity_notice', '{"indicator":"red"}')
+                                        log.warning('Could not send inactivity notice to %s (HTTP %s); ticket stays open and status will refresh', row['owner_id'], getattr(error, 'status', 'unknown'))
+                                    else:
+                                        self.database.update_ticket(row['ticket_id'], inactivity_notice_at=now.isoformat(), auto_close_at=deadline)
+                                        self.database.audit(guild.id,row['ticket_id'],0,'inactivity_notice', '{"indicator":"red"}')
                         elif red and row['auto_close_at'] and datetime.fromisoformat(row['auto_close_at']) <= datetime.now(timezone.utc):
                             await self.tickets.close_system(guild, channel, 'Auto-closed after inactivity grace period')
                             continue
