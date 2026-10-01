@@ -180,7 +180,7 @@ def register_commands(bot: discord.Client) -> None:
                 name="📝 Message management",
                 value=(
                     "`/embed title description image` — Post a custom bot-branded embed. "
-                    "Requires Manage Messages.\n"
+                    "Requires Manage Messages and Send Messages.\n"
                     "`/embed-edit message_id title description image` — Edit a bot-authored "
                     "embed. Requires Manage Messages; title, description, and image are optional."
                 ),
@@ -281,7 +281,7 @@ def register_commands(bot: discord.Client) -> None:
         name="embed",
         description="🎨 Post a custom embed with an optional image (Manage Messages)",
     )
-    @app_commands.checks.has_permissions(manage_messages=True)
+    @app_commands.checks.has_permissions(manage_messages=True, send_messages=True)
     @app_commands.describe(
         title="Embed title",
         description="Embed description",
