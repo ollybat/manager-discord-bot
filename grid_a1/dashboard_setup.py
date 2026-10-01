@@ -37,6 +37,27 @@ class _DashboardWizard(discord.ui.View):
             return False
         return True
 
+    async def on_error(self, interaction, error, item):
+        """Acknowledge dashboard failures instead of leaving the button spinning."""
+        log.error(
+            "Dashboard wizard %s failed on %s: %s",
+            type(self).__name__,
+            getattr(item, "custom_id", type(item).__name__),
+            error,
+            exc_info=(type(error), error, error.__traceback__),
+        )
+        try:
+            message = (
+                "❌ I couldn't complete that dashboard action. Check the bot's "
+                "permissions and try again. If this repeats, ask an admin to review the bot logs."
+            )
+            if interaction.response.is_done():
+                await interaction.followup.send(message, ephemeral=True)
+            else:
+                await interaction.response.send_message(message, ephemeral=True)
+        except discord.DiscordException:
+            log.exception("Could not send dashboard failure feedback")
+
     def display(self, value):
         if value is None: return "`Not selected`"
         if hasattr(value, "mention"): return value.mention
@@ -150,9 +171,10 @@ class PermissionRolesStepTwoView(_DashboardWizard):
         roles = [self.values.get(key) for key, _ in self.FIELDS]
         if not all(_role_valid(interaction.guild, role) for role in roles) or len({role.id for role in roles}) != 5:
             return await interaction.response.edit_message(embed=self.progress_embed("Choose five different normal roles before saving."), view=self)
+        await interaction.response.defer()
         self.database.upsert_config(interaction.guild.id, **{key: role.id for (key, _), role in zip(self.FIELDS, roles)})
         view = self.fresh_dashboard()
-        await interaction.response.edit_message(embed=embed("✅ Permission roles saved", "The five roles now grant staff permissions and receive ticket pings."), view=view)
+        await interaction.edit_original_response(embed=embed("✅ Permission roles saved", "The five roles now grant staff permissions and receive ticket pings."), view=view)
 
     @discord.ui.button(label="Back", style=discord.ButtonStyle.secondary, emoji="⬅️", row=4)
     async def previous(self, interaction, button):
@@ -200,17 +222,18 @@ class TicketSetupWizardView(_DashboardWizard):
     async def save(self, interaction, button):
         if not self.valid(interaction.guild):
             return await interaction.response.edit_message(embed=self.progress_embed("Select valid channels and an inactivity period before saving."), view=self)
+        await interaction.response.defer()
         self.save_settings(interaction.guild)
-        await interaction.response.edit_message(embed=self.progress_embed("✅ Settings saved. The public panel was not changed; use Publish support panel when ready."), view=self)
+        await interaction.edit_original_response(embed=self.progress_embed("✅ Settings saved. The public panel was not changed; use Publish support panel when ready."), view=self)
 
     @discord.ui.button(label="Publish support panel", style=discord.ButtonStyle.success, emoji="📣", row=4)
     async def publish(self, interaction, button):
         if not self.valid(interaction.guild):
             return await interaction.response.edit_message(embed=self.progress_embed("Select valid channels and an inactivity period before publishing."), view=self)
-        previous = self.database.config(interaction.guild.id)
-        self.save_settings(interaction.guild)
         await interaction.response.defer()
         try:
+            previous = self.database.config(interaction.guild.id)
+            self.save_settings(interaction.guild)
             panel = support_panel(interaction.guild, self.database)
             channel = self.values["panel"]
             message = None
@@ -258,12 +281,13 @@ class ExtraTicketAccessWizardView(_DashboardWizard):
         action = self.values.get("action")
         if not _role_valid(interaction.guild, role) or action not in ("add", "remove"):
             return await interaction.response.edit_message(embed=self.progress_embed("Choose a valid server role and Add or Remove."), view=self)
+        await interaction.response.defer()
         try:
             changed = self.database.add_staff_role(interaction.guild.id, role.id) if action == "add" else self.database.remove_staff_role(interaction.guild.id, role.id)
         except ValueError as error:
-            return await interaction.response.edit_message(embed=self.progress_embed(str(error)), view=self)
+            return await interaction.edit_original_response(embed=self.progress_embed(str(error)), view=self)
         result = "✅ Role added to ticket access." if action == "add" and changed else "✅ Role removed from ticket access." if action == "remove" and changed else "ℹ️ No change was needed."
-        await interaction.response.edit_message(embed=self.progress_embed(result), view=self)
+        await interaction.edit_original_response(embed=self.progress_embed(result), view=self)
 
     @discord.ui.button(label="Back", style=discord.ButtonStyle.secondary, emoji="↩️", row=4)
     async def cancel(self, interaction, button):
@@ -321,9 +345,10 @@ class WelcomeStepTwoView(_DashboardWizard):
         all_fields = WelcomeStepOneView.FIELDS + self.FIELDS
         if not all(_text_channel_valid(interaction.guild, self.values.get(key)) for key, _ in all_fields):
             return await interaction.response.edit_message(embed=self.progress_embed("Choose all five text channels before saving."), view=self)
+        await interaction.response.defer()
         self.database.upsert_config(interaction.guild.id, welcome_channel=self.values["welcome"].id, link_channel=self.values["link"].id, bot_commands_channel=self.values["commands"].id, shop_channel=self.values["shop"].id, verify_channel=self.values["verify"].id)
         view = self.fresh_dashboard()
-        await interaction.response.edit_message(embed=embed("✅ Welcome channels saved", "All five channel selections were saved to SQLite."), view=view)
+        await interaction.edit_original_response(embed=embed("✅ Welcome channels saved", "All five channel selections were saved to SQLite."), view=view)
 
     @discord.ui.button(label="Back", style=discord.ButtonStyle.secondary, emoji="⬅️", row=4)
     async def previous(self, interaction, button):
@@ -367,17 +392,18 @@ class VerificationWizardView(_DashboardWizard):
     async def save(self, interaction, button):
         if not self.valid(interaction.guild):
             return await interaction.response.edit_message(embed=self.progress_embed("Choose a valid channel and a role the bot can manage."), view=self)
+        await interaction.response.defer()
         self.save_settings(interaction.guild)
-        await interaction.response.edit_message(embed=self.progress_embed("✅ Settings saved. Use Publish panel when ready."), view=self)
+        await interaction.edit_original_response(embed=self.progress_embed("✅ Settings saved. Use Publish panel when ready."), view=self)
 
     @discord.ui.button(label="Save & publish", style=discord.ButtonStyle.success, emoji="📣", row=4)
     async def publish(self, interaction, button):
         if not self.valid(interaction.guild):
             return await interaction.response.edit_message(embed=self.progress_embed("Choose a valid channel and a role the bot can manage."), view=self)
-        previous = self.database.config(interaction.guild.id)
-        self.save_settings(interaction.guild)
         await interaction.response.defer()
         try:
+            previous = self.database.config(interaction.guild.id)
+            self.save_settings(interaction.guild)
             panel = embed("💜 Grid A1 • Secure Verification", "✨ Complete the short verification check to unlock the server.\n\n📜 Rules confirmation\n✅ Verified role for eligible members\n\nDiscord-wide moderation history is private and unavailable to bots.", discord.Colour.from_rgb(177, 77, 255))
             panel.add_field(name="🔐 Verification steps", value="1️⃣ Start verification\n2️⃣ Review your result\n3️⃣ Confirm the rules\n4️⃣ Receive access", inline=False)
             panel.add_field(name="💬 Need help?", value="If you need help, please open a support ticket.", inline=False)
@@ -422,9 +448,10 @@ class AnnouncementSettingsWizardView(_DashboardWizard):
     async def save(self, interaction, button):
         if not _text_channel_valid(interaction.guild, self.values.get("channel")) or self.values.get("enabled") not in ("yes", "no"):
             return await interaction.response.edit_message(embed=self.progress_embed("Choose a valid text channel and enabled/disabled."), view=self)
+        await interaction.response.defer()
         self.database.upsert_config(interaction.guild.id, wipefeed_channel=self.values["channel"].id, wipefeed_enabled=int(self.values["enabled"] == "yes"))
         view = self.fresh_dashboard()
-        await interaction.response.edit_message(embed=embed("✅ Announcement settings saved", "The wipefeed channel and enabled state were saved."), view=view)
+        await interaction.edit_original_response(embed=embed("✅ Announcement settings saved", "The wipefeed channel and enabled state were saved."), view=view)
 
     @discord.ui.button(label="Back", style=discord.ButtonStyle.secondary, emoji="↩️", row=4)
     async def cancel(self, interaction, button):
@@ -452,9 +479,10 @@ class ReportChannelWizardView(_DashboardWizard):
             return await interaction.response.edit_message(embed=self.progress_embed("This channel is visible to @everyone. Make it staff-only in Discord, then choose it again."), view=self)
         if not interaction.guild.me or not channel.permissions_for(interaction.guild.me).send_messages:
             return await interaction.response.edit_message(embed=self.progress_embed("The bot cannot send messages in this channel. Grant it View Channel and Send Messages, then retry."), view=self)
+        await interaction.response.defer()
         self.database.upsert_config(interaction.guild.id, report_channel=channel.id)
         view = self.fresh_dashboard()
-        await interaction.response.edit_message(embed=embed("✅ Report destination saved", f"Member reports will be sent to {channel.mention}. Restrict channel visibility to staff."), view=view)
+        await interaction.edit_original_response(embed=embed("✅ Report destination saved", f"Member reports will be sent to {channel.mention}. Restrict channel visibility to staff."), view=view)
 
     @discord.ui.button(label="Back", style=discord.ButtonStyle.secondary, emoji="↩️", row=4)
     async def cancel(self, interaction, button):
