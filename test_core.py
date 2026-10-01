@@ -524,7 +524,7 @@ class CoreTests(unittest.TestCase):
     def test_custom_embed_requires_manage_messages(self):
         source = (ROOT / "grid_a1" / "commands.py").read_text(encoding="utf-8")
         embed_command = source.split('name="embed"', 1)[1].split('name="sync"', 1)[0]
-        self.assertIn("has_permissions(manage_messages=True)", embed_command)
+        self.assertIn("has_permissions(manage_messages=True, send_messages=True)", embed_command)
 
     def test_dashboard_server_owner_can_initialize_before_roles_are_configured(self):
         bot_source = (ROOT / "grid_a1" / "bot.py").read_text(encoding="utf-8")
