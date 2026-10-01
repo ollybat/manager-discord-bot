@@ -91,6 +91,35 @@ class _DashboardWizard(discord.ui.View):
         await interaction.response.edit_message(embed=view.dashboard_embed(interaction.guild), view=view)
 
 
+async def _resolve_selected_channel(guild, selected):
+    """Resolve ChannelSelect's AppCommandChannel/Thread value to a real guild channel."""
+    if guild is None:
+        return None
+    try:
+        channel_id = int(selected.id)
+    except (AttributeError, TypeError, ValueError):
+        return None
+
+    channel = guild.get_channel(channel_id)
+    if channel is None:
+        get_thread = getattr(guild, "get_thread", None)
+        if get_thread is not None:
+            channel = get_thread(channel_id)
+    if channel is not None:
+        return channel
+
+    try:
+        return await guild.fetch_channel(channel_id)
+    except discord.NotFound:
+        return None
+    except discord.Forbidden:
+        log.warning("Cannot resolve dashboard channel selection %s in guild %s", channel_id, guild.id)
+        return None
+    except discord.HTTPException:
+        log.exception("Could not resolve dashboard channel selection %s in guild %s", channel_id, guild.id)
+        return None
+
+
 class _RoleDropdown(discord.ui.RoleSelect):
     def __init__(self, wizard, key, placeholder, row):
         self.wizard, self.key = wizard, key
@@ -107,7 +136,16 @@ class _ChannelDropdown(discord.ui.ChannelSelect):
         super().__init__(placeholder=placeholder, channel_types=channel_types, min_values=1, max_values=1, row=row)
 
     async def callback(self, interaction):
-        self.wizard.values[self.key] = self.values[0]
+        selected = self.values[0]
+        channel = await _resolve_selected_channel(interaction.guild, selected)
+        if channel is None:
+            return await interaction.response.edit_message(
+                embed=self.wizard.progress_embed(
+                    "I couldn't resolve that channel. Choose it again and retry."
+                ),
+                view=self.wizard,
+            )
+        self.wizard.values[self.key] = channel
         await interaction.response.edit_message(embed=self.wizard.progress_embed(), view=self.wizard)
 
 

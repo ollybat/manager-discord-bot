@@ -25,12 +25,28 @@ _LINK_TRANSLATION = str.maketrans(
         "：": ":",
     }
 )
+_DOMAIN_LABEL = r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
+_DOMAIN_TLD = r"(?:[a-z]{2,63}|xn--[a-z0-9-]{2,59})"
 _LINK_DOMAIN_RE = re.compile(
     r"(?<![\w@])"
     r"(?:https?://|www\.)?"
-    r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
-    r"(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+"
-    r"(?:[/:?#][^\s<>]*)?",
+    + _DOMAIN_LABEL
+    + r"(?:\."
+    + _DOMAIN_LABEL
+    + r")*\."
+    + _DOMAIN_TLD
+    + r"(?:[/:?#][^\s<>]*)?",
+    re.IGNORECASE,
+)
+_OBFUSCATED_DOMAIN_RE = re.compile(
+    r"(?<![\w@])"
+    r"(?:https?://|www\.)?"
+    + _DOMAIN_LABEL
+    + r"(?:\s+\.\s+"
+    + _DOMAIN_LABEL
+    + r")*\s+\.\s+"
+    + _DOMAIN_TLD
+    + r"(?:[/:?#][^\s<>]*)?",
     re.IGNORECASE,
 )
 _INVITE_RE = re.compile(
@@ -38,8 +54,11 @@ _INVITE_RE = re.compile(
     re.IGNORECASE,
 )
 _DOMAIN_RE = re.compile(
-    r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?"
-    r"(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+",
+    _DOMAIN_LABEL
+    + r"(?:\."
+    + _DOMAIN_LABEL
+    + r")*\."
+    + _DOMAIN_TLD,
     re.IGNORECASE,
 )
 
@@ -162,14 +181,18 @@ def mention_or_id(guild: discord.Guild, value: str) -> str:
 
 
 def normalize_link_text(text: str) -> str:
-    """Normalize Unicode punctuation and split-up URLs before scanning messages."""
+    """Normalize Unicode punctuation without joining ordinary sentence fragments."""
     normalized = unicodedata.normalize("NFKC", text)
     normalized = normalized.translate(_ZERO_WIDTH).translate(_LINK_TRANSLATION)
-    return re.sub(
-        r"(?<=[a-zA-Z0-9])\s+(?=[./:])|(?<=[./:])\s+(?=[a-zA-Z0-9])",
-        "",
+    # Only compact whitespace in explicit URL prefixes. General whitespace around
+    # periods is preserved so prose such as "Yes. Thanks" is not turned into a host.
+    normalized = re.sub(
+        r"\bhttps?\s*:\s*/\s*/\s*",
+        lambda match: re.sub(r"\s+", "", match.group(0)),
         normalized,
+        flags=re.IGNORECASE,
     )
+    return re.sub(r"\bwww\s*\.\s*", "www.", normalized, flags=re.IGNORECASE)
 
 
 def is_http_url(value: str) -> bool:
@@ -191,6 +214,31 @@ def normalize_domain(value: str) -> str | None:
     domain = re.sub(r"^https?://", "", domain)
     domain = domain.split("/", 1)[0].split(":", 1)[0].lstrip(".")
     return domain if _DOMAIN_RE.fullmatch(domain) else None
+
+
+def anti_link_config_updates(
+    enabled: bool | None = None,
+    action: str | None = None,
+    log_channel_id: int | None = None,
+    *,
+    clear_log_channel: bool = False,
+) -> dict[str, int | str | None]:
+    """Build a partial anti-link settings update without resetting omitted fields."""
+    if action is not None and action not in {"delete", "delete_warn", "delete_log"}:
+        raise ValueError("action must be delete, delete_warn, or delete_log")
+    if clear_log_channel and log_channel_id is not None:
+        raise ValueError("choose a log channel or clear it, not both")
+
+    updates: dict[str, int | str | None] = {}
+    if enabled is not None:
+        updates["anti_links_enabled"] = int(enabled)
+    if action is not None:
+        updates["anti_links_action"] = action
+    if log_channel_id is not None:
+        updates["anti_links_log_channel"] = int(log_channel_id)
+    elif clear_log_channel:
+        updates["anti_links_log_channel"] = None
+    return updates
 
 
 def safe_json_list(value: Any, item_type: type[T]) -> list[T]:
@@ -230,9 +278,21 @@ def detected_external_links(
         if domain
     }
     found_links: list[str] = []
+    seen_links: set[str] = set()
 
-    for match in _LINK_DOMAIN_RE.finditer(normalized_text):
-        raw_link = match.group(0).rstrip(".,!?;:)]}")
+    candidates = [
+        (match.group(0), False)
+        for match in _LINK_DOMAIN_RE.finditer(normalized_text)
+    ]
+    candidates.extend(
+        (match.group(0), True)
+        for match in _OBFUSCATED_DOMAIN_RE.finditer(normalized_text)
+    )
+
+    for matched_text, obfuscated in candidates:
+        raw_link = matched_text.rstrip(".,!?;:)]}")
+        if obfuscated:
+            raw_link = re.sub(r"\s*\.\s*", ".", raw_link)
         candidate = (
             raw_link
             if raw_link.startswith(("http://", "https://"))
@@ -247,12 +307,13 @@ def detected_external_links(
             host == allowed or host.endswith(f".{allowed}")
             for allowed in allowed_domains
         )
-        if host and not is_whitelisted:
+        if host and not is_whitelisted and raw_link not in seen_links:
             found_links.append(raw_link)
+            seen_links.add(raw_link)
 
     for match in _INVITE_RE.finditer(normalized_text):
-        invite = match.group(0)
-        if invite not in found_links:
+        invite = re.sub(r"\s*([./])\s*", r"\1", match.group(0))
+        if invite.casefold() not in {link.casefold() for link in found_links}:
             found_links.append(invite)
 
     return found_links
