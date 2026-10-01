@@ -1,21 +1,20 @@
 # Security Policy
 
-## Supported Versions
+## Supported versions
 
-Use this section to tell people about which versions of your project are
-currently being supported with security updates.
+The `main` branch is the actively maintained version. Security fixes are applied there. Historical ZIP snapshots, forks, and unreleased branches are not supported unless the maintainers explicitly say otherwise.
 
-| Version | Supported          |
-| ------- | ------------------ |
-| 5.1.x   | :white_check_mark: |
-| 5.0.x   | :x:                |
-| 4.0.x   | :white_check_mark: |
-| < 4.0   | :x:                |
+| Source | Supported |
+| --- | --- |
+| `main` | Yes |
+| Older snapshots / forks | No |
 
-## Reporting a Vulnerability
+## Reporting a vulnerability
 
-Use this section to tell people how to report a vulnerability.
+Please report suspected vulnerabilities privately through GitHub's **Report a vulnerability** form:
 
-Tell them where to go, how often they can expect to get an update on a
-reported vulnerability, what to expect if the vulnerability is accepted or
-declined, etc.
+<https://github.com/ollybat/manager-discord-bot/security/advisories/new>
+
+Do not post vulnerability details, bot tokens, database files, transcripts, or personal data in a public issue. Include the affected commit or version, impact, and a safe reproduction if possible. Maintainers will review reports as promptly as possible; no fixed response-time guarantee is made.
+
+If a Discord bot token may have been exposed, revoke and regenerate it in the Discord Developer Portal immediately, then update the deployment secret. Never paste the replacement token into an issue or chat.
