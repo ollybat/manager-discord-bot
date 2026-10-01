@@ -391,7 +391,8 @@ class TicketService:
                 if message.author != channel.guild.me or not message.embeds:
                     continue
 
-                ticket_embed = message.embeds[0].copy()
+                original_embed = message.embeds[0]
+                ticket_embed = original_embed.copy()
                 ticket_embed.title = ticket_status_title(ticket_embed.title, indicator)
                 for index, field in enumerate(ticket_embed.fields):
                     status_fields = {
@@ -409,6 +410,9 @@ class TicketService:
                             value=f"Inactive for **{duration}**",
                             inline=True,
                         )
+
+                if ticket_embed.to_dict() == original_embed.to_dict():
+                    return
 
                 from .views import TicketControls
 
@@ -696,7 +700,30 @@ async def claim(
         return
 
     target = member or interaction.user
-    service.db.update_ticket(row["ticket_id"], claimed_by=target.id)
+    state, previous_assignee = service.db.assign_ticket(
+        row["ticket_id"],
+        target.id,
+        actor_id=interaction.user.id,
+        allow_reassign=member is not None,
+    )
+    if state == "inactive":
+        return await interaction.followup.send(
+            "⚠️ This ticket is no longer active.",
+            ephemeral=True,
+        )
+    if state == "already_assigned":
+        return await interaction.followup.send(
+            f"ℹ️ This ticket is already assigned to {target.mention}.",
+            ephemeral=True,
+        )
+    if state == "already_claimed":
+        return await interaction.followup.send(
+            f"🔒 This ticket is already assigned to <@{previous_assignee}>. "
+            "Use an explicit staff transfer to reassign it.",
+            ephemeral=True,
+        )
+
+    title = "Ticket reassigned" if previous_assignee is not None else "Ticket claimed"
     await interaction.followup.send(
-        embed=embed("🙋 Ticket claimed", f"Assigned to {target.mention}."),
+        embed=embed(title, f"Assigned to {target.mention}."),
     )

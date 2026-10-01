@@ -520,6 +520,44 @@ class Database:
             auto_close_reason=None,
         )
 
+    def mark_inactivity_dm_unavailable(self, ticket_id: str, noticed_at: str) -> bool:
+        """Record a permanent DM failure once without scheduling an unannounced close."""
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            try:
+                row = db.execute(
+                    "SELECT guild_id, status, inactivity_notice_at FROM tickets WHERE ticket_id=?",
+                    (ticket_id,),
+                ).fetchone()
+                if (
+                    not row
+                    or row["status"] not in ("open", "close_requested")
+                    or row["inactivity_notice_at"] is not None
+                ):
+                    db.execute("COMMIT")
+                    return False
+                db.execute(
+                    "UPDATE tickets SET inactivity_notice_at=?, auto_close_at=NULL, "
+                    "auto_close_reason='dm_unavailable' WHERE ticket_id=?",
+                    (noticed_at, ticket_id),
+                )
+                db.execute(
+                    "INSERT INTO audit_log(guild_id, ticket_id, actor_id, action, metadata, created_at) "
+                    "VALUES (?, ?, 0, ?, ?, ?)",
+                    (
+                        row["guild_id"],
+                        ticket_id,
+                        "inactivity_notice_dm_unavailable",
+                        json.dumps({"auto_close": False}),
+                        noticed_at,
+                    ),
+                )
+                db.execute("COMMIT")
+                return True
+            except Exception:
+                db.execute("ROLLBACK")
+                raise
+
     def keep_ticket_open(self, ticket_id: str) -> bool:
         """Restore a live ticket after its owner explicitly checks in."""
         with self.connect() as db:
@@ -608,6 +646,62 @@ class Database:
     def set_claim(self, ticket_id: str, claimed_by: int | None) -> None:
         """Set or clear a ticket's current staff assignee."""
         self.update_ticket(ticket_id, claimed_by=claimed_by)
+
+    def assign_ticket(
+        self,
+        ticket_id: str,
+        assignee_id: int,
+        *,
+        actor_id: int | None = None,
+        allow_reassign: bool = False,
+    ) -> tuple[str, int | None]:
+        """Atomically claim or explicitly reassign an active ticket and audit it."""
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            try:
+                row = db.execute(
+                    "SELECT guild_id, status, claimed_by FROM tickets WHERE ticket_id=?",
+                    (ticket_id,),
+                ).fetchone()
+                if not row or row["status"] not in ("open", "close_requested"):
+                    db.execute("COMMIT")
+                    return "inactive", None
+
+                current_assignee = row["claimed_by"]
+                if current_assignee == assignee_id:
+                    db.execute("COMMIT")
+                    return "already_assigned", current_assignee
+                if current_assignee is not None and not allow_reassign:
+                    db.execute("COMMIT")
+                    return "already_claimed", current_assignee
+
+                changed = db.execute(
+                    "UPDATE tickets SET claimed_by=? WHERE ticket_id=? "
+                    "AND status IN ('open','close_requested')",
+                    (assignee_id, ticket_id),
+                ).rowcount
+                if not changed:
+                    db.execute("COMMIT")
+                    return "inactive", None
+
+                action = "ticket_reassigned" if current_assignee is not None else "ticket_claimed"
+                db.execute(
+                    "INSERT INTO audit_log(guild_id, ticket_id, actor_id, action, metadata, created_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (
+                        row["guild_id"],
+                        ticket_id,
+                        assignee_id if actor_id is None else actor_id,
+                        action,
+                        json.dumps({"previous_assignee": current_assignee, "new_assignee": assignee_id}),
+                        utcnow().isoformat(),
+                    ),
+                )
+                db.execute("COMMIT")
+                return "assigned", current_assignee
+            except Exception:
+                db.execute("ROLLBACK")
+                raise
 
     def staff_role_ids(self, guild_id: int) -> list[int]:
         """Return configured extra ticket-viewer roles in their saved order."""
