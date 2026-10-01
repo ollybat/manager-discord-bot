@@ -87,7 +87,6 @@ def register_commands(bot: discord.Client) -> None:
             value=(
                 "`/help` — Open this guide\n"
                 "`/info server` — View server details\n"
-                "`/embed title description image` — Post a custom embed (image optional)\n"
                 "`/report member reason proof_link proof_file` — Privately report a member; "
                 "reason and HTTP(S) link or upload are optional. Staff must configure a "
                 "report channel first.\n"
@@ -180,6 +179,8 @@ def register_commands(bot: discord.Client) -> None:
             guide.add_field(
                 name="📝 Message management",
                 value=(
+                    "`/embed title description image` — Post a custom bot-branded embed. "
+                    "Requires Manage Messages.\n"
                     "`/embed-edit message_id title description image` — Edit a bot-authored "
                     "embed. Requires Manage Messages; title, description, and image are optional."
                 ),
@@ -278,8 +279,9 @@ def register_commands(bot: discord.Client) -> None:
 
     @bot.tree.command(
         name="embed",
-        description="🎨 Post a custom embed with an optional image",
+        description="🎨 Post a custom embed with an optional image (Manage Messages)",
     )
+    @app_commands.checks.has_permissions(manage_messages=True)
     @app_commands.describe(
         title="Embed title",
         description="Embed description",

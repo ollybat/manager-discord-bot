@@ -19,7 +19,7 @@ from .polls import (
     parse_poll_options,
     poll_embed,
 )
-from .utils import is_http_url, is_ticket, parse_ticket_topic, staff_member, detected_external_links, normalize_domain, safe_json_list, utcnow
+from .utils import anti_link_config_updates, is_http_url, is_ticket, parse_ticket_topic, staff_member, detected_external_links, normalize_domain, safe_json_list, utcnow
 from .views import DashboardView, OwnerInactivityView, TicketControls, TicketPanel, VerifyPanel
 from .welcomer import missing, send_welcome, welcome_embed
 from .commands import OwnerConfigurationError, OwnerOnlyError, register_commands
@@ -34,6 +34,7 @@ class GridA1Bot(commands.Bot):
         self.settings_owner_id = settings.owner_id
         self.started_at = time.time()
         self._global_sync_in_progress = False
+        self._stale_guild_commands_cleared = False
         register_commands(self)
     async def setup_hook(self):
         log.info("Starting Grid A1: database=%s prefix=%s owner_configured=%s", self.database.path, settings.prefix, bool(settings.owner_id))
@@ -73,42 +74,54 @@ class GridA1Bot(commands.Bot):
             log.info("Poll command group ready for sync: /poll %s", poll_subcommands)
         else:
             log.error("Poll command group is missing from the runtime command tree")
-        # Clear stale guild registrations, then publish exactly one global tree.
-        # Do not copy global commands into guild trees.
-        cleared = 0
-        for existing_guild in self.guilds:
-            guild = discord.Object(id=existing_guild.id)
-            self.tree.clear_commands(guild=guild)
-            try:
-                await self.tree.sync(guild=guild)
-                cleared += 1
-            except discord.HTTPException as error:
-                if error.status == 429:
-                    log.warning("Command cleanup rate-limited for guild %s; continuing startup", existing_guild.id)
-                else:
-                    raise
+        # Publish the global command tree during setup. Guild-specific stale
+        # copies are cleared after the gateway is ready, when self.guilds is populated.
         try:
             synced = await self.tree.sync()
             synced_poll = next(
                 (command for command in synced if command.name == "poll"),
                 None,
             )
-            synced_poll_subcommands = (
-                ", ".join(sorted(command.name for command in synced_poll.commands))
-                if isinstance(synced_poll, app_commands.Group)
-                else "missing"
+            local_poll_subcommands = (
+                ", ".join(sorted(command.name for command in poll_command.commands))
+                if isinstance(poll_command, app_commands.Group)
+                else "missing from local tree"
             )
             log.info(
-                "Command startup sync complete: cleared %s guild(s), published %s global command(s), poll subcommands=%s",
-                cleared,
+                "Command startup sync complete: published %s global command(s), poll root=%s, local poll subcommands=%s",
                 len(synced),
-                synced_poll_subcommands,
+                "published" if synced_poll is not None else "missing from sync result",
+                local_poll_subcommands,
             )
         except discord.HTTPException as error:
             if error.status == 429:
                 log.warning("Global command startup sync rate-limited; continuing startup")
             else:
                 raise
+    async def clear_stale_guild_command_copies(self):
+        """Clear old guild-scoped command copies after the gateway populated guilds."""
+        if self._stale_guild_commands_cleared:
+            return
+        retry_needed = False
+        for existing_guild in list(self.guilds):
+            guild_scope = discord.Object(id=existing_guild.id)
+            self.tree.clear_commands(guild=guild_scope)
+            try:
+                await self.tree.sync(guild=guild_scope)
+            except discord.HTTPException as error:
+                retry_needed = True
+                log.warning(
+                    "Stale guild-command cleanup failed for guild %s (HTTP %s); will retry on reconnect",
+                    existing_guild.id,
+                    getattr(error, "status", "unknown"),
+                )
+            except Exception:
+                retry_needed = True
+                log.exception("Stale guild-command cleanup failed for guild %s", existing_guild.id)
+        self._stale_guild_commands_cleared = not retry_needed
+        if not retry_needed:
+            log.info("Stale guild-command cleanup complete for %s guild(s)", len(self.guilds))
+
     async def sync_commands_on_request(self):
         """Run an explicit owner-requested sync with an in-memory cooldown/guard."""
         now = time.monotonic(); cooldown = 60.0
@@ -311,14 +324,49 @@ def server_owner_only():
     return app_commands.check(predicate)
 
 @bot.tree.command(name="anti-links", description="🛡️ Configure protection against outside links and invites")
+@app_commands.guild_only()
 @app_commands.checks.has_permissions(manage_guild=True)
-@app_commands.describe(enabled="Enable protection", action="delete, delete_warn, or delete_log", log_channel="Optional moderation log channel")
+@app_commands.describe(
+    enabled="Enable or disable protection; omit to keep the current value",
+    action="Action to take; omit to keep the current value",
+    log_channel="Optional moderation log channel; omit to keep the current value",
+    clear_log_channel="Clear the configured moderation log channel",
+)
 @app_commands.choices(action=[app_commands.Choice(name="🗑️ Delete", value="delete"),app_commands.Choice(name="⚠️ Delete and warn", value="delete_warn"),app_commands.Choice(name="📋 Delete and log", value="delete_log")])
-async def anti_links(i: discord.Interaction, enabled: bool, action: app_commands.Choice[str] = None, log_channel: discord.TextChannel = None):
+async def anti_links(
+    i: discord.Interaction,
+    enabled: bool | None = None,
+    action: app_commands.Choice[str] | None = None,
+    log_channel: discord.TextChannel | None = None,
+    clear_log_channel: bool = False,
+):
     await i.response.defer(ephemeral=True)
-    mode = action.value if action else "delete_warn"
-    bot.database.upsert_config(i.guild.id, anti_links_enabled=int(enabled), anti_links_action=mode, anti_links_log_channel=log_channel.id if log_channel else None)
-    await i.followup.send(embed=embed("🛡️ Anti-links settings saved", f"Protection: {'enabled' if enabled else 'disabled'}\nAction: {mode}"), ephemeral=True)
+    if not i.guild:
+        return await i.followup.send("❌ Use this command inside a server.", ephemeral=True)
+    try:
+        updates = anti_link_config_updates(
+            enabled,
+            action.value if action else None,
+            log_channel.id if log_channel else None,
+            clear_log_channel=clear_log_channel,
+        )
+    except ValueError as error:
+        return await i.followup.send(f"❌ {error}", ephemeral=True)
+    if updates:
+        bot.database.upsert_config(i.guild.id, **updates)
+    config = bot.database.config(i.guild.id)
+    active = bool(config and config["anti_links_enabled"])
+    mode = config["anti_links_action"] if config else "delete_warn"
+    channel_id = config["anti_links_log_channel"] if config else None
+    log_text = f"<#{channel_id}>" if channel_id else "not configured"
+    await i.followup.send(
+        embed=embed(
+            "🛡️ Anti-links settings",
+            f"Protection: {'enabled' if active else 'disabled'}\nAction: {mode}\nLog channel: {log_text}"
+            + ("\n\n✅ Supplied settings were saved; omitted settings were left unchanged." if updates else "\n\nNo changes requested; showing current settings."),
+        ),
+        ephemeral=True,
+    )
 
 @bot.tree.command(name="report", description="🚩 Privately report a server member to staff")
 @app_commands.guild_only()
@@ -1026,6 +1074,12 @@ async def on_command_error(ctx, error):
     if isinstance(error, commands.CommandNotFound):
         return
     log.exception("Prefix command failed", exc_info=error)
+
+
+@bot.event
+async def on_ready():
+    await bot.clear_stale_guild_command_copies()
+
 
 _anti_link_warning_cooldown = {}
 _ANTI_LINK_COOLDOWN_SECONDS = 30
