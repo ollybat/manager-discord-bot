@@ -229,6 +229,16 @@ class CoreTests(unittest.TestCase):
                     registered.add(name)
         self.assertEqual(registered, {"config", "create", "end", "remove"})
 
+    def test_poll_subcommands_are_registered_on_the_runtime_tree(self):
+        from grid_a1.bot import bot as runtime_bot
+
+        poll_group = runtime_bot.tree.get_command("poll")
+        self.assertIsNotNone(poll_group)
+        self.assertEqual(
+            {command.name for command in poll_group.commands},
+            {"config", "create", "end", "remove"},
+        )
+
     def test_optional_postgres_baseline_lists_poll_tables(self):
         source = (ROOT / "grid_a1" / "postgres.py").read_text(encoding="utf-8")
         for table in ("poll_settings", "polls", "poll_votes"):
