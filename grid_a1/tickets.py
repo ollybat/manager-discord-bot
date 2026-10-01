@@ -323,7 +323,13 @@ class TicketService:
             log.warning("Staff notification failed for ticket %s: %s", ticket_id, error)
             return False
 
-    async def transcript(self, channel: discord.TextChannel) -> str:
+    async def transcript(
+        self,
+        channel: discord.TextChannel,
+        *,
+        include_images: bool = True,
+        max_cached_image_bytes: int = 20_000_000,
+    ) -> str:
         """Render a complete, oldest-first transcript for an active ticket."""
         from .transcript import render
 
@@ -333,7 +339,14 @@ class TicketService:
 
         data = parse_ticket_topic(channel)
         ticket = self.db.ticket(data.get("id", str(channel.id)))
-        return await render(messages, channel, data, ticket)
+        return await render(
+            messages,
+            channel,
+            data,
+            ticket,
+            include_images=include_images,
+            max_cached_image_bytes=max_cached_image_bytes,
+        )
 
     async def close_system(
         self,
@@ -352,7 +365,12 @@ class TicketService:
             user=guild.me,
             response=SimpleNamespace(is_done=lambda: True),
         )
-        await self.close(interaction_proxy, reason, allow_owner=True)
+        await self.close(
+            interaction_proxy,
+            reason,
+            allow_owner=True,
+            include_images=False,
+        )
 
     async def refresh_status(self, channel: discord.TextChannel, row=None) -> None:
         """Refresh the inactivity indicator and controls on one active ticket."""
@@ -461,6 +479,7 @@ class TicketService:
         interaction,
         reason: str,
         allow_owner: bool = False,
+        include_images: bool = True,
     ) -> None:
         """Archive before marking closed or deleting the channel."""
         channel = interaction.channel
@@ -512,8 +531,37 @@ class TicketService:
         if not interaction.response.is_done():
             await interaction.response.defer(ephemeral=True)
 
+        upload_limit = int(getattr(guild, "filesize_limit", 10_000_000) or 10_000_000)
+        image_budget = max(0, min(20_000_000, upload_limit // 4)) if include_images else 0
         try:
-            transcript_html = await self.transcript(channel)
+            transcript_html = await self.transcript(
+                channel,
+                include_images=include_images,
+                max_cached_image_bytes=image_budget,
+            )
+            if len(transcript_html.encode("utf-8")) > upload_limit:
+                log.info(
+                    "Transcript for ticket %s exceeds guild upload limit; rerendering without embedded images",
+                    row["ticket_id"],
+                )
+                transcript_html = await self.transcript(
+                    channel,
+                    include_images=False,
+                    max_cached_image_bytes=0,
+                )
+            if len(transcript_html.encode("utf-8")) > upload_limit:
+                log.error(
+                    "Text-only transcript for ticket %s still exceeds guild upload limit (%s bytes)",
+                    row["ticket_id"],
+                    upload_limit,
+                )
+                await _followup(
+                    interaction,
+                    "❌ This transcript is too large for Discord even without embedded images. "
+                    "The ticket remains open; ask an administrator to archive it another way.",
+                    ephemeral=True,
+                )
+                return
         except discord.DiscordException:
             log.exception("Could not read transcript for ticket %s", row["ticket_id"])
             await _followup(
