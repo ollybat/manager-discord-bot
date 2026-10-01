@@ -65,6 +65,14 @@ class GridA1Bot(commands.Bot):
         self.refresh_panels.start()
         self.inactivity_loop.start()
         self.poll_expiration_loop.start()
+        poll_command = self.tree.get_command("poll")
+        if isinstance(poll_command, app_commands.Group):
+            poll_subcommands = ", ".join(
+                sorted(command.name for command in poll_command.commands)
+            )
+            log.info("Poll command group ready for sync: /poll %s", poll_subcommands)
+        else:
+            log.error("Poll command group is missing from the runtime command tree")
         # Clear stale guild registrations, then publish exactly one global tree.
         # Do not copy global commands into guild trees.
         cleared = 0
@@ -81,7 +89,21 @@ class GridA1Bot(commands.Bot):
                     raise
         try:
             synced = await self.tree.sync()
-            log.info("Command startup sync complete: cleared %s guild(s), published %s global command(s)", cleared, len(synced))
+            synced_poll = next(
+                (command for command in synced if command.name == "poll"),
+                None,
+            )
+            synced_poll_subcommands = (
+                ", ".join(sorted(command.name for command in synced_poll.commands))
+                if isinstance(synced_poll, app_commands.Group)
+                else "missing"
+            )
+            log.info(
+                "Command startup sync complete: cleared %s guild(s), published %s global command(s), poll subcommands=%s",
+                cleared,
+                len(synced),
+                synced_poll_subcommands,
+            )
         except discord.HTTPException as error:
             if error.status == 429:
                 log.warning("Global command startup sync rate-limited; continuing startup")
