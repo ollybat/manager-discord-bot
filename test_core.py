@@ -17,7 +17,12 @@ from grid_a1.config import Settings, validate_runtime
 from grid_a1.database import Database
 from grid_a1.embeds import inactivity_indicator
 from grid_a1.utils import active_ticket_owner, detected_external_links, inactivity_custom_id, is_http_url, safe_json_list, sanitize_channel_name, ticket_status_title
-from grid_a1.commands import _validate_image
+from grid_a1.commands import (
+    BASE_SERVER_SETUP_HELP,
+    MANAGE_GUILD_HELP,
+    POLL_SETUP_HELP,
+    _validate_image,
+)
 from grid_a1.polls import PollVoteView, parse_poll_options, poll_embed
 from grid_a1.views import DashboardView, TicketControls
 
@@ -28,6 +33,10 @@ ROOT = Path(__file__).parent
 class CoreTests(unittest.TestCase):
     def test_sanitize_channel_name_collapses_dashes(self):
         self.assertEqual(sanitize_channel_name("EU", "Bug / Links", "A--User", "ABC123"), "eu-bug-links-a-user-abc123")
+
+    def test_help_sections_fit_discord_embed_field_limits(self):
+        self.assertLessEqual(len(BASE_SERVER_SETUP_HELP + MANAGE_GUILD_HELP), 1024)
+        self.assertLessEqual(len(POLL_SETUP_HELP), 1024)
 
     def test_custom_embed_image_validation_checks_type_and_extension(self):
         self.assertIsNone(_validate_image(None))

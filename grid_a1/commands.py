@@ -14,6 +14,30 @@ from .embeds import embed
 
 IMAGE_EXTENSIONS = frozenset({".jpg", ".jpeg", ".png", ".gif", ".webp"})
 
+BASE_SERVER_SETUP_HELP = (
+    "`/setup tickets panel_channel logs_channel category inactivity_hours` — "
+    "Save ticket locations and publish the support panel.\n"
+    "`/setup welcomer welcome_channel link_channel bot_commands_channel "
+    "shop_channel verify_channel` — Save community channels.\n"
+    "`/welcomer preview` / `/welcomer test` — Preview privately or send a "
+    "test greeting."
+)
+MANAGE_GUILD_HELP = (
+    "\n`/verifypanel channel role` — Publish a verification panel; the bot "
+    "role must be above the assigned role.\n"
+    "`/anti-links enabled action log_channel` — configure enabled, action, and log channel. "
+    "The bot needs Message Content Intent and Manage Messages.\n"
+    "`/wipefeed enable enabled` / `/wipefeed send timestamp channel` — "
+    "Configure and post wipe announcements.\n"
+    "`/roles setchannel channel` — Publish the role directory."
+)
+POLL_SETUP_HELP = (
+    "`/poll config [channel] [default_duration_hours]` — View or update the "
+    "default channel and duration.\n"
+    "`/poll create question options [duration_hours]` — Create a poll with "
+    "2–10 choices separated by `|`; duration defaults to 24 hours."
+)
+
 
 class OwnerConfigurationError(app_commands.CheckFailure):
     """Raised when an owner-only command cannot run because OWNER_ID is missing."""
@@ -66,7 +90,9 @@ def register_commands(bot: discord.Client) -> None:
                 "`/embed title description image` — Post a custom embed (image optional)\n"
                 "`/report member reason proof_link proof_file` — Privately report a member; "
                 "reason and HTTP(S) link or upload are optional. Staff must configure a "
-                "report channel first."
+                "report channel first.\n"
+                "`/poll end poll_id` / `/poll remove poll_id` — manage a poll you created; "
+                "server managers can manage any poll."
             ),
             inline=False,
         )
@@ -136,33 +162,17 @@ def register_commands(bot: discord.Client) -> None:
             )
 
         if admin_access:
-            setup_help = (
-                "`/setup tickets panel_channel logs_channel category inactivity_hours` — "
-                "Save ticket locations and publish the support panel.\n"
-                "`/setup welcomer welcome_channel link_channel bot_commands_channel "
-                "shop_channel verify_channel` — Save community channels.\n"
-                "`/welcomer preview` / `/welcomer test` — Preview privately or send a "
-                "test greeting.\n"
-                "`/poll config` — View the default poll channel and duration. Add "
-                "`channel` or `default_duration_hours` to change them.\n"
-                "`/poll create question options duration_hours` — Create a live poll; "
-                "separate choices with `|`.\n"
-                "`/poll end poll_id` / `/poll remove poll_id` — Close or remove your poll "
-                "(or any poll if you manage the server)."
-            )
+            setup_help = BASE_SERVER_SETUP_HELP
             if manage_guild:
-                setup_help += (
-                    "\n`/verifypanel channel role` — Publish a verification panel; the bot "
-                    "role must be above the assigned role.\n"
-                    "`/anti-links enabled action log_channel` — configure enabled, action, and log channel. "
-                    "The bot needs Message Content Intent and Manage Messages.\n"
-                    "`/wipefeed enable enabled` / `/wipefeed send timestamp channel` — "
-                    "Configure and post wipe announcements.\n"
-                    "`/roles setchannel channel` — Publish the role directory."
-                )
+                setup_help += MANAGE_GUILD_HELP
             guide.add_field(
                 name="⚙️ Server setup & safety",
                 value=setup_help,
+                inline=False,
+            )
+            guide.add_field(
+                name="📊 Poll setup",
+                value=POLL_SETUP_HELP,
                 inline=False,
             )
 
