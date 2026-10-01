@@ -35,6 +35,12 @@ class CoreTests(unittest.TestCase):
     def test_sanitize_channel_name_collapses_dashes(self):
         self.assertEqual(sanitize_channel_name("EU", "Bug / Links", "A--User", "ABC123"), "eu-bug-links-a-user-abc123")
 
+    def test_env_examples_do_not_ship_a_real_owner_id(self):
+        for filename in (".env.example", ".env.owner.example"):
+            source = (ROOT / filename).read_text(encoding="utf-8")
+            owner_line = next(line for line in source.splitlines() if line.startswith("OWNER_ID="))
+            self.assertEqual(owner_line.partition("=")[2].strip(), "", filename)
+
     def test_help_sections_fit_discord_embed_field_limits(self):
         self.assertLessEqual(len(BASE_SERVER_SETUP_HELP + MANAGE_GUILD_HELP), 1024)
         self.assertLessEqual(len(POLL_SETUP_HELP), 1024)
