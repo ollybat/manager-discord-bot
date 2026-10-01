@@ -398,6 +398,12 @@ class CoreTests(unittest.TestCase):
         self.assertNotIn("has_permissions", command)
         self.assertIn("report_channel", command)
 
+    def test_dashboard_deferred_updates_fall_back_to_ephemeral_confirmation(self):
+        source = (ROOT / "grid_a1" / "dashboard_setup.py").read_text(encoding="utf-8")
+        self.assertIn("async def finish(self, interaction, result_embed, view=None):", source)
+        self.assertIn("await interaction.followup.send(embed=result_embed, ephemeral=True)", source)
+        self.assertEqual(source.count("await interaction.edit_original_response("), 1)
+
     def test_dashboard_save_callbacks_acknowledge_before_database_writes(self):
         source = (ROOT / "grid_a1" / "dashboard_setup.py").read_text(encoding="utf-8")
         tree = ast.parse(source)
