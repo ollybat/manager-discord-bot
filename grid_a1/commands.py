@@ -31,7 +31,12 @@ MANAGE_GUILD_HELP = (
     "Configure and post wipe announcements.\n"
     "`/roles setchannel channel` — Publish the role directory."
 )
+GIVEAWAY_SETUP_HELP = (
+    "`/giveaway dashboard` — Configure a giveaway's channel, optional ping role, free-text reward, duration, and winner count.\n"
+    "`/giveaway end giveaway_id` — End early and draw winners. Giveaways otherwise draw automatically when their timer expires."
+)
 POLL_SETUP_HELP = (
+    "`/poll dashboard` — Open the private create/view poll panel.\n"
     "`/poll config [channel] [default_duration_hours]` — View or update the "
     "default channel and duration.\n"
     "`/poll create question options [duration_hours]` — Create a poll with "
@@ -172,6 +177,11 @@ def register_commands(bot: discord.Client) -> None:
             guide.add_field(
                 name="📊 Poll setup",
                 value=POLL_SETUP_HELP,
+                inline=False,
+            )
+            guide.add_field(
+                name="🎁 Giveaways",
+                value=GIVEAWAY_SETUP_HELP,
                 inline=False,
             )
 

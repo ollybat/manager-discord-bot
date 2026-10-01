@@ -20,6 +20,7 @@ from grid_a1.embeds import inactivity_indicator
 from grid_a1.utils import anti_link_config_updates, active_ticket_owner, detected_external_links, inactivity_custom_id, is_http_url, safe_json_list, sanitize_channel_name, ticket_status_title
 from grid_a1.commands import (
     BASE_SERVER_SETUP_HELP,
+    GIVEAWAY_SETUP_HELP,
     MANAGE_GUILD_HELP,
     POLL_SETUP_HELP,
     _validate_image,
@@ -44,6 +45,7 @@ class CoreTests(unittest.TestCase):
     def test_help_sections_fit_discord_embed_field_limits(self):
         self.assertLessEqual(len(BASE_SERVER_SETUP_HELP + MANAGE_GUILD_HELP), 1024)
         self.assertLessEqual(len(POLL_SETUP_HELP), 1024)
+        self.assertLessEqual(len(GIVEAWAY_SETUP_HELP), 1024)
 
     def test_custom_embed_image_validation_checks_type_and_extension(self):
         self.assertIsNone(_validate_image(None))
@@ -94,7 +96,7 @@ class CoreTests(unittest.TestCase):
             self.assertEqual(database.ticket("ABC123")["issue"], "links")
             self.assertEqual(database.config(42)["owner_role"], 101)
             self.assertEqual(database.config(42)["report_channel"], 9900)
-            self.assertEqual(database.startup_check()["schema_version"], 18)
+            self.assertEqual(database.startup_check()["schema_version"], 19)
 
     def test_ticket_create_rolls_back_when_audit_insert_fails(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -286,6 +288,34 @@ class CoreTests(unittest.TestCase):
                 audit_count = db.execute("SELECT COUNT(*) FROM audit_log WHERE ticket_id='CLOSE1' AND action='closed'").fetchone()[0]
             self.assertEqual(audit_count, 1)
 
+    def test_migration_adds_poll_metadata_and_giveaway_tables_to_legacy_database(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "manager.sqlite3"
+            legacy = sqlite3.connect(path)
+            legacy.execute(
+                "CREATE TABLE polls (poll_id TEXT PRIMARY KEY, guild_id INTEGER NOT NULL, "
+                "channel_id INTEGER NOT NULL, message_id INTEGER, creator_id INTEGER NOT NULL, "
+                "question TEXT NOT NULL, options_json TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'open', "
+                "created_at TEXT NOT NULL, ends_at TEXT NOT NULL, ended_at TEXT)"
+            )
+            legacy.execute(
+                "INSERT INTO polls(poll_id,guild_id,channel_id,creator_id,question,options_json,created_at,ends_at) "
+                "VALUES(?,?,?,?,?,?,?,?)",
+                ("OLDPOLL", 42, 9200, 7001, "Legacy question", json.dumps(["Yes", "No"]), "2026-01-01T00:00:00+00:00", "2026-01-02T00:00:00+00:00"),
+            )
+            legacy.commit()
+            legacy.close()
+
+            database = Database(path)
+            database.migrate()
+            self.assertTrue(database.startup_check()["ok"])
+            self.assertEqual(database.startup_check()["schema_version"], 19)
+            self.assertEqual(database.poll_for_guild(42, "OLDPOLL")["description"], "")
+            with database.connect() as db:
+                tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            self.assertIn("giveaways", tables)
+            self.assertIn("giveaway_entries", tables)
+
     def test_poll_storage_configuration_votes_and_removal(self):
         with tempfile.TemporaryDirectory() as directory:
             database = Database(Path(directory) / "manager.sqlite3")
@@ -298,7 +328,8 @@ class CoreTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 database.upsert_poll_settings(42, default_duration_hours=0)
 
-            database.create_poll(poll_id="POLL1234", guild_id=42, channel_id=9200, creator_id=7001, question="Which map?", options_json='["Island", "Ragnarok"]', created_at="2026-01-01T00:00:00+00:00", ends_at="2026-01-02T00:00:00+00:00")
+            database.create_poll(poll_id="POLL1234", guild_id=42, channel_id=9200, creator_id=7001, question="Which map?", description="Choose the next community map.", options_json='["Island", "Ragnarok"]', created_at="2026-01-01T00:00:00+00:00", ends_at="2026-01-02T00:00:00+00:00")
+            self.assertEqual(database.poll_for_guild(42, "POLL1234")["description"], "Choose the next community map.")
             self.assertIsNone(database.poll_for_guild(99, "POLL1234"))
             self.assertEqual(database.poll_options("POLL1234"), ["Island", "Ragnarok"])
             self.assertTrue(database.set_poll_message_id("POLL1234", 98765))
@@ -318,6 +349,40 @@ class CoreTests(unittest.TestCase):
             database.create_poll(poll_id="EXPIRED1", guild_id=42, channel_id=9200, creator_id=7001, question="Expired?", options_json='["Yes", "No"]', created_at="2026-01-01T00:00:00+00:00", ends_at="2026-01-01T01:00:00+00:00")
             self.assertEqual(database.cast_poll_vote("EXPIRED1", 7002, 0, "2026-01-01T01:00:00+00:00"), "expired")
             self.assertEqual(database.poll_for_guild(42, "EXPIRED1")["status"], "ended")
+
+    def test_giveaway_entries_and_winner_draw_persist_safely(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(Path(directory) / "manager.sqlite3")
+            database.migrate()
+            database.create_giveaway(
+                giveaway_id="GIVEAWAY1",
+                guild_id=42,
+                channel_id=9201,
+                creator_id=7001,
+                reward_type="RCE item pack",
+                ping_role_id=None,
+                winner_count=2,
+                created_at="2026-01-01T00:00:00+00:00",
+                ends_at="2026-01-02T00:00:00+00:00",
+            )
+            self.assertTrue(database.set_giveaway_message_id("GIVEAWAY1", 55501))
+            self.assertEqual(len(database.active_giveaways(42)), 1)
+            self.assertEqual(database.enter_giveaway(42, "GIVEAWAY1", 7002, "2026-01-01T01:00:00+00:00"), "entered")
+            self.assertEqual(database.enter_giveaway(42, "GIVEAWAY1", 7002, "2026-01-01T01:01:00+00:00"), "already_entered")
+            self.assertEqual(database.enter_giveaway(99, "GIVEAWAY1", 7003, "2026-01-01T02:00:00+00:00"), "missing")
+            self.assertEqual(database.giveaway_entry_count("GIVEAWAY1"), 1)
+            row, winners, state = database.finalize_giveaway(42, "GIVEAWAY1", "2026-01-01T12:00:00+00:00")
+            self.assertEqual(state, "not_due")
+            self.assertEqual(row["status"], "open")
+            self.assertEqual(winners, [])
+            row, winners, state = database.finalize_giveaway(42, "GIVEAWAY1", "2026-01-01T12:00:00+00:00", ended_by=7001, force=True)
+            self.assertEqual(state, "ended")
+            self.assertEqual(row["status"], "ended")
+            self.assertEqual(winners, [7002])
+            row, winners_again, state = database.finalize_giveaway(42, "GIVEAWAY1", "2026-01-01T13:00:00+00:00", ended_by=7001, force=True)
+            self.assertEqual(state, "already_ended")
+            self.assertEqual(winners_again, winners)
+            self.assertEqual(database.active_giveaways(42), [])
 
     def test_poll_management_commands_are_registered(self):
         tree = ast.parse((ROOT / "grid_a1" / "bot.py").read_text(encoding="utf-8"))
@@ -342,7 +407,33 @@ class CoreTests(unittest.TestCase):
                 )
                 if name:
                     registered.add(name)
-        self.assertEqual(registered, {"config", "create", "end", "remove"})
+        self.assertEqual(registered, {"config", "create", "dashboard", "end", "remove"})
+
+    def test_poll_and_giveaway_dashboards_expose_the_expected_controls(self):
+        from grid_a1.giveaways import GiveawayDashboardView, GiveawayEntryView, GiveawayService
+        from grid_a1.polls import PollDashboardView, PollService
+
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(Path(directory) / "manager.sqlite3")
+            database.migrate()
+            poll_view = PollDashboardView(database, PollService(database), 42, 7001, 9100)
+            giveaway_service = GiveawayService(database)
+            giveaway_view = GiveawayDashboardView(giveaway_service, 42, 7001)
+            entry_view = GiveawayEntryView(giveaway_service, "GIVEAWAY1")
+        self.assertEqual({item.label for item in poll_view.children}, {"Create Poll", "View Active"})
+        self.assertEqual({item.label for item in giveaway_view.children}, {"Configure Giveaway", "View Active"})
+        self.assertIsNone(entry_view.timeout)
+        self.assertEqual(entry_view.children[0].custom_id, "grid-a1:giveaway:GIVEAWAY1:enter")
+
+    def test_giveaway_commands_are_registered_on_the_runtime_tree(self):
+        from grid_a1.bot import bot as runtime_bot
+
+        giveaway_group = runtime_bot.tree.get_command("giveaway")
+        self.assertIsNotNone(giveaway_group)
+        self.assertEqual(
+            {command.name for command in giveaway_group.commands},
+            {"dashboard", "end"},
+        )
 
     def test_poll_subcommands_are_registered_on_the_runtime_tree(self):
         from grid_a1.bot import bot as runtime_bot
@@ -351,7 +442,7 @@ class CoreTests(unittest.TestCase):
         self.assertIsNotNone(poll_group)
         self.assertEqual(
             {command.name for command in poll_group.commands},
-            {"config", "create", "end", "remove"},
+            {"config", "create", "dashboard", "end", "remove"},
         )
 
     def test_optional_postgres_baseline_lists_poll_tables(self):
@@ -374,12 +465,14 @@ class CoreTests(unittest.TestCase):
         poll = {
             "poll_id": "POLL1234",
             "question": "Which map?",
+            "description": "Community context for the choice.",
             "status": "ended",
             "ends_at": "2026-01-02T00:00:00+00:00",
             "ended_at": "2026-01-01T00:00:00+00:00",
         }
         result = poll_embed(poll, ["Island", "Ragnarok"], {0: 2, 1: 1})
         self.assertEqual(result.title, "📊 Which map?")
+        self.assertTrue(result.description.startswith("Community context for the choice."))
         self.assertIn("Voting has ended", result.description)
         self.assertEqual(result.fields[2].name, "🗳️ Total votes")
         self.assertEqual(result.fields[2].value, "**3**")
@@ -722,9 +815,9 @@ class CoreTests(unittest.TestCase):
 
     def test_help_lists_all_command_groups(self):
         source = (ROOT / "grid_a1" / "commands.py").read_text(encoding="utf-8")
-        for section in ("🌐 Everyone", "🎛️ Easy private dashboard", "👑 Server owner setup", "⚙️ Server setup & safety", "🛡️ Staff tools", "🔧 Bot owner"):
+        for section in ("🌐 Everyone", "🎛️ Easy private dashboard", "👑 Server owner setup", "⚙️ Server setup & safety", "📊 Poll setup", "🎁 Giveaways", "🛡️ Staff tools", "🔧 Bot owner"):
             self.assertIn(section, source)
-        for command in ("/report", "/setup tickets", "/setup welcomer", "/ticket transfer", "/ticket close", "/anti-links", "/embed-edit", "/sync"):
+        for command in ("/report", "/setup tickets", "/setup welcomer", "/ticket transfer", "/ticket close", "/poll dashboard", "/giveaway dashboard", "/anti-links", "/embed-edit", "/sync"):
             self.assertIn(command, source)
 
     def test_help_does_not_advertise_removed_commands_or_anti_link_options(self):
