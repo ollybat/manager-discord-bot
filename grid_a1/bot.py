@@ -10,10 +10,12 @@ from .config import Settings, configure_logging, validate_runtime
 from .database import Database
 from .embeds import embed, support_panel, inactivity_indicator
 from .tickets import TicketService, claim
+from .giveaways import GiveawayDashboardView, GiveawayEntryView, GiveawayService
 from .polls import (
     DEFAULT_POLL_DURATION_HOURS,
     MAX_POLL_DURATION_HOURS,
     MAX_POLL_QUESTION_LENGTH,
+    PollDashboardView,
     PollService,
     PollVoteView,
     parse_poll_options,
@@ -29,7 +31,7 @@ intents = discord.Intents.default(); intents.members = True; intents.message_con
 class GridA1Bot(commands.Bot):
     def __init__(self):
         super().__init__(command_prefix=settings.prefix, intents=intents, help_command=None)
-        self.database = Database(settings.database_path); self.tickets = TicketService(self.database); self.polls = PollService(self.database)
+        self.database = Database(settings.database_path); self.tickets = TicketService(self.database); self.polls = PollService(self.database); self.giveaways = GiveawayService(self.database)
         self._global_sync_last_at = 0.0
         self.settings_owner_id = settings.owner_id
         self.started_at = time.time()
@@ -63,9 +65,12 @@ class GridA1Bot(commands.Bot):
                     disabled=poll["status"] != "open",
                 )
             )
+        for giveaway in self.database.open_giveaways_all():
+            self.add_view(GiveawayEntryView(self.giveaways, giveaway["giveaway_id"]))
         self.refresh_panels.start()
         self.inactivity_loop.start()
         self.poll_expiration_loop.start()
+        self.giveaway_expiration_loop.start()
         poll_command = self.tree.get_command("poll")
         if isinstance(poll_command, app_commands.Group):
             poll_subcommands = ", ".join(
@@ -243,6 +248,31 @@ class GridA1Bot(commands.Bot):
             except Exception: log.exception('Inactivity loop failed for guild %s; continuing', getattr(guild, 'id', 'unknown'))
 
     @tasks.loop(minutes=1)
+    async def giveaway_expiration_loop(self):
+        """End due giveaways and draw winners once, preserving state across restarts."""
+        now = utcnow().isoformat()
+        try:
+            due_giveaways = self.database.giveaways_due(now)
+        except Exception:
+            log.exception("Could not load giveaways due for ending; retrying next cycle")
+            return
+        for giveaway in due_giveaways:
+            guild = self.get_guild(giveaway["guild_id"])
+            if guild is None:
+                continue
+            try:
+                state, winners, panel_updated = await self.giveaways.finish(
+                    guild,
+                    giveaway["giveaway_id"],
+                    ended_by=0,
+                    force=False,
+                )
+                if state == "ended" and not panel_updated:
+                    log.warning("Giveaway %s ended but its panel could not refresh", giveaway["giveaway_id"])
+            except Exception:
+                log.exception("Giveaway expiration failed for %s", giveaway["giveaway_id"])
+
+    @tasks.loop(minutes=1)
     async def poll_expiration_loop(self):
         """Close expired polls and disable their persistent vote selectors."""
         now = utcnow().isoformat()
@@ -272,6 +302,8 @@ class GridA1Bot(commands.Bot):
 
     @inactivity_loop.before_loop
     async def before_inactivity_loop(self): await self.wait_until_ready()
+    @giveaway_expiration_loop.before_loop
+    async def before_giveaway_expiration_loop(self): await self.wait_until_ready()
     @poll_expiration_loop.before_loop
     async def before_poll_expiration_loop(self): await self.wait_until_ready()
     @refresh_panels.before_loop
@@ -281,10 +313,12 @@ setup_group = app_commands.Group(name="setup", description="⚙️ Configure ser
 welcomer_group = app_commands.Group(name="welcomer", description="👋 Preview and test welcome messages")
 ticket_group = app_commands.Group(name="ticket", description="🎫 Manage and assign support tickets")
 poll_group = app_commands.Group(name="poll", description="📊 Create, vote on, and manage server polls")
+giveaway_group = app_commands.Group(name="giveaway", description="🎁 Configure and manage timed giveaways")
 bot.tree.add_command(setup_group)
 bot.tree.add_command(welcomer_group)
 bot.tree.add_command(ticket_group)
 bot.tree.add_command(poll_group)
+bot.tree.add_command(giveaway_group)
 def guild(i): return i.guild
 def _privileged(interaction: discord.Interaction, require_staff: bool = False) -> bool:
     if not interaction.guild or not isinstance(interaction.user, discord.Member): return False
@@ -673,6 +707,64 @@ async def ticket_requestclose(i,reason:str):
 @staff()
 @app_commands.describe(reason="Resolution or closure reason saved with the transcript")
 async def ticket_close(i,reason:str="No reason provided"): await bot.tickets.close(i,reason)
+@giveaway_group.command(
+    name="dashboard",
+    description="🎛️ Open the private giveaway setup and active list",
+)
+@app_commands.guild_only()
+@admin()
+async def giveaway_dashboard(interaction: discord.Interaction) -> None:
+    guild = interaction.guild
+    if guild is None:
+        return await interaction.response.send_message("❌ Giveaways are only available inside a server.", ephemeral=True)
+    active = bot.database.active_giveaways(guild.id)
+    dashboard = discord.Embed(
+        title=f"🎁 Giveaway Dashboard — {guild.name}",
+        description="Create a giveaway, optionally ping a role, set the free-text reward and winner count, and draw winners automatically after its timer expires.",
+        colour=discord.Colour.gold(),
+    )
+    dashboard.add_field(name="Active giveaways", value=str(len(active)), inline=True)
+    dashboard.add_field(name="Default duration", value="24 hours", inline=True)
+    view = GiveawayDashboardView(bot.giveaways, guild.id, interaction.user.id)
+    await interaction.response.send_message(embed=dashboard, view=view, ephemeral=True)
+
+
+@giveaway_group.command(
+    name="end",
+    description="🎉 End an active giveaway and draw its winners now",
+)
+@app_commands.guild_only()
+@admin()
+@app_commands.describe(giveaway_id="Giveaway ID shown in its public panel")
+async def giveaway_end(interaction: discord.Interaction, giveaway_id: str) -> None:
+    guild = interaction.guild
+    if guild is None:
+        return await interaction.response.send_message("❌ Giveaways can only be managed inside a server.", ephemeral=True)
+    normalized_id = giveaway_id.strip().upper()
+    if not bot.database.giveaway_for_guild(guild.id, normalized_id):
+        return await interaction.response.send_message("⚠️ I could not find that giveaway in this server.", ephemeral=True)
+    await interaction.response.defer(ephemeral=True)
+    try:
+        state, winners, panel_updated = await bot.giveaways.finish(
+            guild,
+            normalized_id,
+            ended_by=interaction.user.id,
+            force=True,
+        )
+    except Exception:
+        log.exception("Manual giveaway end failed for %s", normalized_id)
+        return await interaction.followup.send("❌ I could not end that giveaway. Check its public panel and try again.", ephemeral=True)
+    if state == "already_ended":
+        return await interaction.followup.send("ℹ️ That giveaway has already ended.", ephemeral=True)
+    if state != "ended":
+        return await interaction.followup.send("⚠️ That giveaway is no longer active.", ephemeral=True)
+    winner_text = ", ".join(f"<@{user_id}>" for user_id in winners) if winners else "No one entered."
+    message = f"✅ Giveaway `{normalized_id}` ended. Winners: {winner_text}"
+    if not panel_updated:
+        message += " The winner draw was saved, but I could not refresh the public panel."
+    await interaction.followup.send(message, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
+
+
 def _may_manage_poll(interaction: discord.Interaction, poll) -> bool:
     """Allow a poll creator or server-level manager to control that poll."""
     return bool(
@@ -682,6 +774,40 @@ def _may_manage_poll(interaction: discord.Interaction, poll) -> bool:
             or _privileged(interaction)
         )
     )
+
+
+@poll_group.command(
+    name="dashboard",
+    description="🎛️ Open the private poll dashboard",
+)
+@app_commands.guild_only()
+@admin()
+async def poll_dashboard(interaction: discord.Interaction) -> None:
+    guild = interaction.guild
+    if guild is None:
+        return await interaction.response.send_message("❌ Polls are only available inside a server.", ephemeral=True)
+    active_count = len(bot.database.active_polls(guild.id))
+    dashboard = discord.Embed(
+        title=f"📊 Poll Dashboard — {guild.name}",
+        description=(
+            "Create new polls or review active ones here. Polls support 2–10 choices, "
+            "live totals, one changeable vote per member, and automatic expiration."
+        ),
+        colour=discord.Colour.from_rgb(177, 77, 255),
+    )
+    dashboard.add_field(name="Active polls", value=str(active_count), inline=True)
+    settings_row = bot.database.poll_settings(guild.id)
+    default_duration = int(settings_row["default_duration_hours"] if settings_row else DEFAULT_POLL_DURATION_HOURS)
+    dashboard.add_field(name="Default duration", value=f"{default_duration} hours", inline=True)
+    fallback_channel_id = interaction.channel.id if isinstance(interaction.channel, discord.TextChannel) else 0
+    view = PollDashboardView(
+        bot.database,
+        bot.polls,
+        guild.id,
+        interaction.user.id,
+        fallback_channel_id,
+    )
+    await interaction.response.send_message(embed=dashboard, view=view, ephemeral=True)
 
 
 @poll_group.command(
@@ -793,12 +919,14 @@ async def poll_config(
     question="The question shown on the poll panel (up to 256 characters)",
     options="Two to ten choices separated by | (example: Island | Ragnarok)",
     duration_hours="Optional poll duration; defaults to /poll config",
+    description="Optional context shown under the poll title",
 )
 async def poll_create(
     interaction: discord.Interaction,
     question: str,
     options: str,
     duration_hours: app_commands.Range[int, 1, MAX_POLL_DURATION_HOURS] | None = None,
+    description: str | None = None,
 ) -> None:
     """Validate and publish a persistent, single-choice poll."""
     guild = interaction.guild
@@ -881,6 +1009,14 @@ async def poll_create(
             )
             return
 
+    cleaned_description = (description or "").strip()
+    if len(cleaned_description) > 1000:
+        await interaction.response.send_message(
+            "❌ Poll descriptions must be 1,000 characters or fewer.",
+            ephemeral=True,
+        )
+        return
+
     configured_duration = (
         int(settings_row["default_duration_hours"])
         if settings_row
@@ -896,6 +1032,7 @@ async def poll_create(
             cleaned_question,
             choices,
             poll_duration,
+            description=cleaned_description,
         )
     except discord.Forbidden:
         log.exception("Poll creation was denied in channel %s", target_channel.id)
