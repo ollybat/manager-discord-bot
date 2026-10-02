@@ -275,7 +275,7 @@ class GiveawayDashboardView(discord.ui.View):
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.user_id or not interaction.guild or interaction.guild.id != self.guild_id:
-            await interaction.response.send_message("🔒 Open your own giveaway dashboard with `/giveaway dashboard`.", ephemeral=True)
+            await interaction.response.send_message("🔒 Open your own giveaway dashboard with `/giveaway config`.", ephemeral=True)
             return False
         return True
 
