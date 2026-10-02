@@ -428,7 +428,10 @@ class CoreTests(unittest.TestCase):
             giveaway_view = GiveawayDashboardView(giveaway_service, 42, 7001)
             entry_view = GiveawayEntryView(giveaway_service, "GIVEAWAY1")
         self.assertEqual({item.label for item in poll_view.children}, {"Create Poll", "View Active", "Poll Settings"})
-        self.assertTrue({"Set Default Duration", "Use Command Channel", "Back to Poll Config"} <= {item.label for item in poll_settings_view.children if item.label})
+        self.assertTrue(
+            {"Set Default Duration", "Use Command Channel", "Back to Poll Config"}
+            <= {getattr(item, "label", None) for item in poll_settings_view.children if getattr(item, "label", None)}
+        )
         self.assertEqual({item.label for item in giveaway_view.children}, {"Configure Giveaway", "View Active"})
         self.assertIsNone(entry_view.timeout)
         self.assertEqual(entry_view.children[0].custom_id, "grid-a1:giveaway:GIVEAWAY1:enter")
