@@ -32,15 +32,13 @@ MANAGE_GUILD_HELP = (
     "`/roles setchannel channel` — Publish the role directory."
 )
 GIVEAWAY_SETUP_HELP = (
-    "`/giveaway dashboard` — Configure a giveaway's channel, optional ping role, free-text reward, duration, and winner count.\n"
+    "`/giveaway config` — Configure a giveaway's channel, optional ping role, free-text reward, duration, and winner count.\n"
     "`/giveaway end giveaway_id` — End early and draw winners. Giveaways otherwise draw automatically when their timer expires."
 )
 POLL_SETUP_HELP = (
-    "`/poll dashboard` — Open the private create/view poll panel.\n"
-    "`/poll config [channel] [default_duration_hours]` — View or update the "
-    "default channel and duration.\n"
+    "`/poll config` — Open the private Create Poll / View Active panel; use Poll Settings to set the default channel and duration.\n"
     "`/poll create question options [duration_hours]` — Create a poll with "
-    "2–10 choices separated by `|`; duration defaults to 24 hours."
+    "2–10 choices separated by `|`; duration defaults to your saved setting."
 )
 
 

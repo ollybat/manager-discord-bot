@@ -19,6 +19,7 @@ from .polls import (
     PollService,
     PollVoteView,
     parse_poll_options,
+    poll_dashboard_embed,
     poll_embed,
 )
 from .utils import anti_link_config_updates, is_http_url, is_ticket, parse_ticket_topic, staff_member, detected_external_links, normalize_domain, safe_json_list, utcnow
@@ -708,12 +709,12 @@ async def ticket_requestclose(i,reason:str):
 @app_commands.describe(reason="Resolution or closure reason saved with the transcript")
 async def ticket_close(i,reason:str="No reason provided"): await bot.tickets.close(i,reason)
 @giveaway_group.command(
-    name="dashboard",
+    name="config",
     description="🎛️ Open the private giveaway setup and active list",
 )
 @app_commands.guild_only()
 @admin()
-async def giveaway_dashboard(interaction: discord.Interaction) -> None:
+async def giveaway_config(interaction: discord.Interaction) -> None:
     guild = interaction.guild
     if guild is None:
         return await interaction.response.send_message("❌ Giveaways are only available inside a server.", ephemeral=True)
@@ -777,28 +778,16 @@ def _may_manage_poll(interaction: discord.Interaction, poll) -> bool:
 
 
 @poll_group.command(
-    name="dashboard",
-    description="🎛️ Open the private poll dashboard",
+    name="config",
+    description="🎛️ Open the private poll configuration dashboard",
 )
 @app_commands.guild_only()
 @admin()
-async def poll_dashboard(interaction: discord.Interaction) -> None:
+async def poll_config(interaction: discord.Interaction) -> None:
     guild = interaction.guild
     if guild is None:
         return await interaction.response.send_message("❌ Polls are only available inside a server.", ephemeral=True)
-    active_count = len(bot.database.active_polls(guild.id))
-    dashboard = discord.Embed(
-        title=f"📊 Poll Dashboard — {guild.name}",
-        description=(
-            "Create new polls or review active ones here. Polls support 2–10 choices, "
-            "live totals, one changeable vote per member, and automatic expiration."
-        ),
-        colour=discord.Colour.from_rgb(177, 77, 255),
-    )
-    dashboard.add_field(name="Active polls", value=str(active_count), inline=True)
-    settings_row = bot.database.poll_settings(guild.id)
-    default_duration = int(settings_row["default_duration_hours"] if settings_row else DEFAULT_POLL_DURATION_HOURS)
-    dashboard.add_field(name="Default duration", value=f"{default_duration} hours", inline=True)
+    dashboard = poll_dashboard_embed(bot.database, guild)
     fallback_channel_id = interaction.channel.id if isinstance(interaction.channel, discord.TextChannel) else 0
     view = PollDashboardView(
         bot.database,
@@ -808,105 +797,6 @@ async def poll_dashboard(interaction: discord.Interaction) -> None:
         fallback_channel_id,
     )
     await interaction.response.send_message(embed=dashboard, view=view, ephemeral=True)
-
-
-@poll_group.command(
-    name="config",
-    description="⚙️ Set the default poll channel and duration",
-)
-@app_commands.guild_only()
-@admin()
-@app_commands.describe(
-    channel="Default channel where new polls are posted",
-    default_duration_hours="Default poll length (1–168 hours)",
-)
-async def poll_config(
-    interaction: discord.Interaction,
-    channel: discord.TextChannel | None = None,
-    default_duration_hours: app_commands.Range[int, 1, 168] | None = None,
-) -> None:
-    """Show current poll defaults or update one or both settings."""
-    guild = interaction.guild
-    if guild is None:
-        await interaction.response.send_message(
-            "❌ Poll settings are only available inside a server.",
-            ephemeral=True,
-        )
-        return
-
-    if channel is None and default_duration_hours is None:
-        current = bot.database.poll_settings(guild.id)
-        channel_id = current["channel_id"] if current else None
-        configured_channel = guild.get_channel(channel_id) if channel_id else None
-        duration = int(
-            current["default_duration_hours"]
-            if current
-            else DEFAULT_POLL_DURATION_HOURS
-        )
-        channel_value = (
-            configured_channel.mention
-            if configured_channel
-            else f"<#{channel_id}>"
-            if channel_id
-            else "Not set — new polls use the channel where `/poll create` is run"
-        )
-        settings_embed = embed(
-            "📊 Poll settings",
-            "Configure where new polls are posted and how long they stay open.",
-            discord.Colour.from_rgb(177, 77, 255),
-        )
-        settings_embed.add_field(
-            name="📣 Default channel",
-            value=channel_value,
-            inline=False,
-        )
-        settings_embed.add_field(
-            name="⏳ Default duration",
-            value=f"**{duration} hours**",
-            inline=True,
-        )
-        settings_embed.add_field(
-            name="🧭 Quick guide",
-            value=(
-                "Use `/poll config channel` and/or `default_duration_hours` to change "
-                "these defaults. Run `/poll create` to publish a poll."
-            ),
-            inline=False,
-        )
-        await interaction.response.send_message(embed=settings_embed, ephemeral=True)
-        return
-
-    changes: dict[str, int] = {}
-    if channel is not None:
-        changes["channel_id"] = channel.id
-    if default_duration_hours is not None:
-        changes["default_duration_hours"] = int(default_duration_hours)
-    bot.database.upsert_poll_settings(guild.id, **changes)
-
-    updated = bot.database.poll_settings(guild.id)
-    channel_id = updated["channel_id"] if updated else None
-    configured_channel = guild.get_channel(channel_id) if channel_id else None
-    duration = int(
-        updated["default_duration_hours"]
-        if updated
-        else DEFAULT_POLL_DURATION_HOURS
-    )
-    channel_display = (
-        configured_channel.mention
-        if configured_channel
-        else f"<#{channel_id}>"
-        if channel_id
-        else "Not set"
-    )
-    await interaction.response.send_message(
-        embed=embed(
-            "✅ Poll settings saved",
-            f"📣 Channel: {channel_display}\n"
-            f"⏳ Default duration: **{duration} hours**",
-            discord.Colour.green(),
-        ),
-        ephemeral=True,
-    )
 
 
 @poll_group.command(

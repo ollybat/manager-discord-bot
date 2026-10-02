@@ -325,6 +325,11 @@ class CoreTests(unittest.TestCase):
             settings = database.poll_settings(42)
             self.assertEqual(settings["channel_id"], 9200)
             self.assertEqual(settings["default_duration_hours"], 12)
+            database.clear_poll_channel(42)
+            settings = database.poll_settings(42)
+            self.assertIsNone(settings["channel_id"])
+            self.assertEqual(settings["default_duration_hours"], 12)
+            database.upsert_poll_settings(42, channel_id=9200)
             with self.assertRaises(ValueError):
                 database.upsert_poll_settings(42, default_duration_hours=0)
 
@@ -407,20 +412,26 @@ class CoreTests(unittest.TestCase):
                 )
                 if name:
                     registered.add(name)
-        self.assertEqual(registered, {"config", "create", "dashboard", "end", "remove"})
+        self.assertEqual(registered, {"config", "create", "end", "remove"})
 
     def test_poll_and_giveaway_dashboards_expose_the_expected_controls(self):
         from grid_a1.giveaways import GiveawayDashboardView, GiveawayEntryView, GiveawayService
-        from grid_a1.polls import PollDashboardView, PollService
+        from grid_a1.polls import PollDashboardView, PollService, PollSettingsView
 
         with tempfile.TemporaryDirectory() as directory:
             database = Database(Path(directory) / "manager.sqlite3")
             database.migrate()
-            poll_view = PollDashboardView(database, PollService(database), 42, 7001, 9100)
+            poll_service = PollService(database)
+            poll_view = PollDashboardView(database, poll_service, 42, 7001, 9100)
+            poll_settings_view = PollSettingsView(database, poll_service, 42, 7001, 9100)
             giveaway_service = GiveawayService(database)
             giveaway_view = GiveawayDashboardView(giveaway_service, 42, 7001)
             entry_view = GiveawayEntryView(giveaway_service, "GIVEAWAY1")
-        self.assertEqual({item.label for item in poll_view.children}, {"Create Poll", "View Active"})
+        self.assertEqual({item.label for item in poll_view.children}, {"Create Poll", "View Active", "Poll Settings"})
+        self.assertTrue(
+            {"Set Default Duration", "Use Command Channel", "Back to Poll Config"}
+            <= {getattr(item, "label", None) for item in poll_settings_view.children if getattr(item, "label", None)}
+        )
         self.assertEqual({item.label for item in giveaway_view.children}, {"Configure Giveaway", "View Active"})
         self.assertIsNone(entry_view.timeout)
         self.assertEqual(entry_view.children[0].custom_id, "grid-a1:giveaway:GIVEAWAY1:enter")
@@ -432,7 +443,7 @@ class CoreTests(unittest.TestCase):
         self.assertIsNotNone(giveaway_group)
         self.assertEqual(
             {command.name for command in giveaway_group.commands},
-            {"dashboard", "end"},
+            {"config", "end"},
         )
 
     def test_poll_subcommands_are_registered_on_the_runtime_tree(self):
@@ -442,7 +453,7 @@ class CoreTests(unittest.TestCase):
         self.assertIsNotNone(poll_group)
         self.assertEqual(
             {command.name for command in poll_group.commands},
-            {"config", "create", "dashboard", "end", "remove"},
+            {"config", "create", "end", "remove"},
         )
 
     def test_optional_postgres_baseline_lists_poll_tables(self):
@@ -817,7 +828,7 @@ class CoreTests(unittest.TestCase):
         source = (ROOT / "grid_a1" / "commands.py").read_text(encoding="utf-8")
         for section in ("🌐 Everyone", "🎛️ Easy private dashboard", "👑 Server owner setup", "⚙️ Server setup & safety", "📊 Poll setup", "🎁 Giveaways", "🛡️ Staff tools", "🔧 Bot owner"):
             self.assertIn(section, source)
-        for command in ("/report", "/setup tickets", "/setup welcomer", "/ticket transfer", "/ticket close", "/poll dashboard", "/giveaway dashboard", "/anti-links", "/embed-edit", "/sync"):
+        for command in ("/report", "/setup tickets", "/setup welcomer", "/ticket transfer", "/ticket close", "/poll config", "/giveaway config", "/anti-links", "/embed-edit", "/sync"):
             self.assertIn(command, source)
 
     def test_help_does_not_advertise_removed_commands_or_anti_link_options(self):

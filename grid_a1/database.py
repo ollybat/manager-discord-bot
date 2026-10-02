@@ -315,6 +315,21 @@ class Database:
                 (guild_id,),
             ).fetchone()
 
+    def clear_poll_channel(self, guild_id: int) -> None:
+        """Return poll posting to the channel where the dashboard/create command runs."""
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            try:
+                db.execute(
+                    "INSERT INTO poll_settings(guild_id) VALUES(?) ON CONFLICT DO NOTHING",
+                    (guild_id,),
+                )
+                db.execute("UPDATE poll_settings SET channel_id=NULL WHERE guild_id=?", (guild_id,))
+                db.execute("COMMIT")
+            except Exception:
+                db.execute("ROLLBACK")
+                raise
+
     def upsert_poll_settings(
         self,
         guild_id: int,

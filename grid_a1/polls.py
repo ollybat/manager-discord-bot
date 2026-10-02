@@ -524,6 +524,175 @@ class PollMetadataModal(discord.ui.Modal):
         await interaction.followup.send(embed=result, ephemeral=True)
 
 
+def poll_dashboard_embed(database: Database, guild: discord.Guild) -> discord.Embed:
+    settings = database.poll_settings(guild.id)
+    configured_channel_id = settings["channel_id"] if settings else None
+    configured_channel = guild.get_channel(configured_channel_id) if configured_channel_id else None
+    channel_text = configured_channel.mention if configured_channel else (f"<#{configured_channel_id}>" if configured_channel_id else "Command channel")
+    duration = int(settings["default_duration_hours"] if settings else DEFAULT_POLL_DURATION_HOURS)
+    result = discord.Embed(
+        title=f"📊 Poll Dashboard — {guild.name}",
+        description=(
+            "Create polls, review active polls, or configure defaults. Polls support 2–10 choices, "
+            "live totals, one changeable vote per member, and automatic expiration."
+        ),
+        colour=NEON_PURPLE,
+    )
+    result.add_field(name="Active polls", value=str(len(database.active_polls(guild.id))), inline=True)
+    result.add_field(name="Default channel", value=channel_text, inline=True)
+    result.add_field(name="Default duration", value=f"{duration} hours", inline=True)
+    return result
+
+
+def poll_settings_embed(database: Database, guild: discord.Guild) -> discord.Embed:
+    settings = database.poll_settings(guild.id)
+    channel_id = settings["channel_id"] if settings else None
+    channel = guild.get_channel(channel_id) if channel_id else None
+    channel_text = channel.mention if channel else (f"<#{channel_id}>" if channel_id else "Command channel")
+    duration = int(settings["default_duration_hours"] if settings else DEFAULT_POLL_DURATION_HOURS)
+    result = discord.Embed(
+        title="⚙️ Poll Defaults",
+        description="These defaults apply to new polls created from the dashboard. A poll's modal can override its duration.",
+        colour=NEON_PURPLE,
+    )
+    result.add_field(name="📣 Default channel", value=channel_text, inline=False)
+    result.add_field(name="⏳ Default duration", value=f"{duration} hours", inline=False)
+    return result
+
+
+class PollSettingsView(discord.ui.View):
+    """Private editor for defaults opened from the `/poll config` dashboard."""
+
+    def __init__(self, database: Database, service: PollService, guild_id: int, user_id: int, fallback_channel_id: int):
+        super().__init__(timeout=600)
+        self.database = database
+        self.service = service
+        self.guild_id = guild_id
+        self.user_id = user_id
+        self.fallback_channel_id = fallback_channel_id
+        self.add_item(PollDefaultChannelSelect(self))
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.user_id or not interaction.guild or interaction.guild.id != self.guild_id:
+            await interaction.response.send_message("🔒 These poll settings belong to someone else.", ephemeral=True)
+            return False
+        return True
+
+    @discord.ui.button(label="Set Default Duration", style=discord.ButtonStyle.primary, emoji="⏳", row=1)
+    async def set_duration(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await interaction.response.send_modal(
+            PollDefaultDurationModal(
+                self.database,
+                self.service,
+                self.guild_id,
+                self.user_id,
+                self.fallback_channel_id,
+            )
+        )
+
+    @discord.ui.button(label="Use Command Channel", style=discord.ButtonStyle.secondary, row=1)
+    async def clear_channel(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        try:
+            self.database.clear_poll_channel(self.guild_id)
+        except Exception:
+            log.exception("Could not clear the default poll channel for guild %s", self.guild_id)
+            return await interaction.response.send_message("❌ I couldn't update the default poll channel. Try again.", ephemeral=True)
+        await interaction.response.edit_message(
+            embed=poll_settings_embed(self.database, interaction.guild),
+            view=self,
+        )
+
+    @discord.ui.button(label="Back to Poll Config", style=discord.ButtonStyle.secondary, row=2)
+    async def back(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await interaction.response.edit_message(
+            embed=poll_dashboard_embed(self.database, interaction.guild),
+            view=PollDashboardView(
+                self.database,
+                self.service,
+                self.guild_id,
+                self.user_id,
+                self.fallback_channel_id,
+            ),
+        )
+
+
+class PollDefaultChannelSelect(discord.ui.ChannelSelect):
+    def __init__(self, settings_view: PollSettingsView):
+        self.settings_view = settings_view
+        super().__init__(
+            placeholder="Select a default poll channel…",
+            channel_types=[discord.ChannelType.text],
+            min_values=1,
+            max_values=1,
+        )
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        guild = interaction.guild
+        selected = self.values[0]
+        channel = guild.get_channel(int(selected.id)) if guild else None
+        if channel is None and guild:
+            try:
+                channel = await guild.fetch_channel(int(selected.id))
+            except discord.HTTPException:
+                channel = None
+        if not isinstance(channel, discord.TextChannel):
+            return await interaction.response.send_message("⚠️ Choose a text channel the bot can access.", ephemeral=True)
+        try:
+            self.settings_view.database.upsert_poll_settings(guild.id, channel_id=channel.id)
+        except Exception:
+            log.exception("Could not update the default poll channel for guild %s", guild.id)
+            return await interaction.response.send_message("❌ I couldn't save that default channel. Try again.", ephemeral=True)
+        await interaction.response.edit_message(
+            embed=poll_settings_embed(self.settings_view.database, guild),
+            view=self.settings_view,
+        )
+
+
+class PollDefaultDurationModal(discord.ui.Modal):
+    def __init__(self, database: Database, service: PollService, guild_id: int, user_id: int, fallback_channel_id: int):
+        super().__init__(title="Default Poll Duration")
+        self.database = database
+        self.service = service
+        self.guild_id = guild_id
+        self.user_id = user_id
+        self.fallback_channel_id = fallback_channel_id
+        settings = database.poll_settings(guild_id)
+        duration = int(settings["default_duration_hours"] if settings else DEFAULT_POLL_DURATION_HOURS)
+        self.duration_input = discord.ui.TextInput(
+            label="Default duration in hours (1–168)",
+            default=str(duration),
+            max_length=3,
+            required=True,
+        )
+        self.add_item(self.duration_input)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        if not interaction.guild or interaction.guild.id != self.guild_id or interaction.user.id != self.user_id:
+            return await interaction.response.send_message("🔒 These poll settings belong to someone else.", ephemeral=True)
+        try:
+            duration = int(str(self.duration_input.value).strip())
+            if not 1 <= duration <= MAX_POLL_DURATION_HOURS:
+                raise ValueError(f"Choose a default duration between 1 and {MAX_POLL_DURATION_HOURS} hours.")
+        except ValueError as error:
+            return await interaction.response.send_message(f"❌ {error}", ephemeral=True)
+        try:
+            self.database.upsert_poll_settings(self.guild_id, default_duration_hours=duration)
+        except Exception:
+            log.exception("Could not update poll duration for guild %s", self.guild_id)
+            return await interaction.response.send_message("❌ I couldn't save the poll duration. Try again.", ephemeral=True)
+        await interaction.response.send_message(
+            embed=poll_settings_embed(self.database, interaction.guild),
+            view=PollSettingsView(
+                self.database,
+                self.service,
+                self.guild_id,
+                self.user_id,
+                self.fallback_channel_id,
+            ),
+            ephemeral=True,
+        )
+
+
 class PollDashboardView(discord.ui.View):
     """Private poll dashboard with create and active-poll views."""
 
@@ -537,7 +706,7 @@ class PollDashboardView(discord.ui.View):
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
         if interaction.user.id != self.user_id or not interaction.guild or interaction.guild.id != self.guild_id:
-            await interaction.response.send_message("🔒 Open your own poll dashboard with `/poll dashboard`.", ephemeral=True)
+            await interaction.response.send_message("🔒 Open your own poll dashboard with `/poll config`.", ephemeral=True)
             return False
         return True
 
@@ -583,3 +752,16 @@ class PollDashboardView(discord.ui.View):
                 inline=False,
             )
         return await interaction.response.edit_message(embed=result, view=self)
+
+    @discord.ui.button(label="Poll Settings", style=discord.ButtonStyle.secondary, emoji="⚙️", row=0)
+    async def poll_settings(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await interaction.response.edit_message(
+            embed=poll_settings_embed(self.database, interaction.guild),
+            view=PollSettingsView(
+                self.database,
+                self.service,
+                self.guild_id,
+                self.user_id,
+                self.fallback_channel_id,
+            ),
+        )

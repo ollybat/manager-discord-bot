@@ -10,9 +10,9 @@ For interactive setup, open `/dashboard` and use the module buttons. Permission 
 
 ### Polls
 
-Server managers can use `/poll dashboard` to open the private Create Poll / View Active panel. `/poll config` sets the default poll channel and duration; `/poll create` accepts a question, optional description, and pipe-separated choices (for example, `Island | Ragnarok`). Members vote through the persistent select menu and may change their vote while the poll is open. Polls and votes are stored in SQLite, so bot restarts do not reset them. The creator or a server manager can use `/poll end poll_id` or `/poll remove poll_id`; duration expiry automatically ends voting.
+Server managers can use `/poll config` to open the private Create Poll / View Active panel. Its Poll Settings button sets the default channel and duration; `/poll create` accepts a question, optional description, and pipe-separated choices (for example, `Island | Ragnarok`). Members vote through the persistent select menu and may change their vote while the poll is open. Polls and votes are stored in SQLite, so bot restarts do not reset them. The creator or a server manager can use `/poll end poll_id` or `/poll remove poll_id`; duration expiry automatically ends voting.
 
-Server managers can use `/giveaway dashboard` to choose an announcement channel, optionally ping a role, enter a free-text reward, set 1–50 winners, and choose a duration (24 hours by default). Members get one persistent entry per giveaway; the bot draws winners when the timer expires or when staff run `/giveaway end giveaway_id`. Active giveaways and entries survive restarts.
+Server managers can use `/giveaway config` to choose an announcement channel, optionally ping a role, enter a free-text reward, set 1–50 winners, and choose a duration (24 hours by default). Members get one persistent entry per giveaway; the bot draws winners when the timer expires or when staff run `/giveaway end giveaway_id`. Active giveaways and entries survive restarts.
 
 Run `/setup roles owner_role: ... co_owner_role: ... head_admin_role: ... admin_role: ... moderator_role: ...` if you need to initialize dashboard access first. These five roles are both permission roles and ticket notification targets. There is no `/setup staff` command.
 
