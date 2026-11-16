@@ -8,10 +8,11 @@ import json
 from discord import app_commands
 from discord.ext import commands, tasks
 from .config import Settings, configure_logging, validate_runtime
-from .database import Database
+from .database import SCHEMA_VERSION, Database
 from .embeds import embed, support_panel, inactivity_indicator, priority_embed, ticket_stats_embed
 from .tickets import TicketService, claim
 from .giveaways import GiveawayDashboardView, GiveawayEntryView, GiveawayService
+from .health import HealthServer
 from .polls import (
     DEFAULT_POLL_DURATION_HOURS,
     MAX_POLL_DURATION_HOURS,
@@ -40,7 +41,24 @@ class GridA1Bot(commands.Bot):
         self.started_at = time.time()
         self._global_sync_in_progress = False
         self._stale_guild_commands_cleared = False
+        self.health_server = HealthServer(self.health_report)
         register_commands(self)
+    def health_report(self) -> dict[str, object]:
+        """Small non-sensitive status document for the optional HTTP status endpoint."""
+        gateway_ms = round(self.latency * 1_000) if self.latency >= 0 else None
+        return {
+            "status": "ok",
+            "service": "grid-a1-manager",
+            "uptime_seconds": max(0, int(time.time() - self.started_at)),
+            "connected_servers": len(self.guilds),
+            "gateway_latency_ms": gateway_ms,
+            "schema_version": SCHEMA_VERSION,
+            "checked_at": utcnow().isoformat(),
+        }
+    async def close(self) -> None:
+        """Stop the optional status endpoint before disconnecting from Discord."""
+        self.health_server.stop()
+        await super().close()
     async def setup_hook(self):
         log.info("Starting Grid A1: database=%s prefix=%s owner_configured=%s", self.database.path, settings.prefix, bool(settings.owner_id))
         for problem in validate_runtime(settings):
@@ -50,6 +68,9 @@ class GridA1Bot(commands.Bot):
         if not store["ok"]:
             raise RuntimeError(f"SQLite startup check failed: {store}")
         log.info("SQLite ready: schema=%s WAL=enabled indexes=verified", store["schema_version"])
+        # Optional: answer the host's public domain so platform health checks and uptime
+        # monitors see a 200. Discord traffic never depends on this listener.
+        self.health_server.start()
         self.add_view(TicketPanel(self.tickets))
         self.add_view(TicketControls(self.tickets))
         self.add_view(VerifyPanel(self.database))
