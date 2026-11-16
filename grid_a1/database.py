@@ -2,10 +2,11 @@ from __future__ import annotations
 import sqlite3
 import json
 import secrets
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
-from .utils import utcnow, safe_json_list
-SCHEMA_VERSION = 19
+from .utils import FEEDBACK_SCORES, utcnow, safe_json_list
+SCHEMA_VERSION = 20
 class Database:
     def __init__(self, path: Path) -> None:
         self.path = path
@@ -41,6 +42,8 @@ class Database:
             db.execute("CREATE INDEX IF NOT EXISTS idx_config_panel ON guild_config(panel_channel, panel_message)")
             db.execute("CREATE INDEX IF NOT EXISTS idx_audit_guild_created ON audit_log(guild_id, created_at)")
             db.execute('''CREATE TABLE IF NOT EXISTS closed_tickets (id INTEGER PRIMARY KEY AUTOINCREMENT, guild INTEGER NOT NULL, region TEXT NOT NULL, issue TEXT NOT NULL, closed_by INTEGER NOT NULL, reason TEXT NOT NULL, closed_at TEXT NOT NULL)''')
+            db.execute('''CREATE TABLE IF NOT EXISTS ticket_feedback (ticket_id TEXT PRIMARY KEY, guild_id INTEGER NOT NULL, owner_id INTEGER NOT NULL, score INTEGER NOT NULL, created_at TEXT NOT NULL)''')
+            db.execute("CREATE INDEX IF NOT EXISTS idx_feedback_guild_created ON ticket_feedback(guild_id, created_at)")
             db.execute("""
                 CREATE TABLE IF NOT EXISTS poll_settings (
                     guild_id INTEGER PRIMARY KEY,
@@ -129,7 +132,7 @@ class Database:
 
     def startup_check(self) -> dict[str, object]:
         with self.connect() as db:
-            required = {"guild_config", "tickets", "audit_log", "closed_tickets", "poll_settings", "polls", "poll_votes", "giveaways", "giveaway_entries", "schema_migrations"}
+            required = {"guild_config", "tickets", "audit_log", "closed_tickets", "ticket_feedback", "poll_settings", "polls", "poll_votes", "giveaways", "giveaway_entries", "schema_migrations"}
             tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
             missing = sorted(required - tables)
             integrity = db.execute("PRAGMA integrity_check").fetchone()[0]
@@ -296,6 +299,84 @@ class Database:
 
         with self.connect() as db:
             return int(db.execute(query, parameters).fetchone()[0])
+
+    def save_feedback(
+        self,
+        ticket_id: str,
+        guild_id: int,
+        owner_id: int,
+        score: int,
+        *,
+        created_at: str | None = None,
+    ) -> int:
+        """Store or replace one ticket owner's rating and append an audit event."""
+        if score not in FEEDBACK_SCORES:
+            raise ValueError("unknown feedback score")
+        moment = created_at or utcnow().isoformat()
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            try:
+                db.execute(
+                    "INSERT INTO ticket_feedback(ticket_id, guild_id, owner_id, score, created_at) "
+                    "VALUES(?,?,?,?,?) "
+                    "ON CONFLICT(ticket_id) DO UPDATE SET score=excluded.score, created_at=excluded.created_at",
+                    (ticket_id, guild_id, owner_id, score, moment),
+                )
+                db.execute(
+                    "INSERT INTO audit_log(guild_id, ticket_id, actor_id, action, metadata, created_at) "
+                    "VALUES(?,?,?,?,?,?)",
+                    (guild_id, ticket_id, owner_id, "feedback_recorded", json.dumps({"score": score}), moment),
+                )
+                db.execute("COMMIT")
+            except Exception:
+                db.execute("ROLLBACK")
+                raise
+        return score
+
+    def feedback_summary(self, guild_id: int) -> tuple[float | None, int]:
+        """Average rating and number of ratings recorded for one guild."""
+        with self.connect() as db:
+            row = db.execute(
+                "SELECT AVG(score) AS average, COUNT(*) AS total FROM ticket_feedback WHERE guild_id=?",
+                (guild_id,),
+            ).fetchone()
+        total = int(row["total"] or 0)
+        return (round(float(row["average"]), 2), total) if total else (None, 0)
+
+    def feedback_scores(self, guild_id: int) -> list[int]:
+        """Every stored rating for one guild, newest first."""
+        with self.connect() as db:
+            rows = db.execute(
+                "SELECT score FROM ticket_feedback WHERE guild_id=? ORDER BY created_at DESC",
+                (guild_id,),
+            ).fetchall()
+        return [int(row["score"]) for row in rows]
+
+    def feedback_for(self, ticket_id: str) -> sqlite3.Row | None:
+        """One ticket's stored rating, if the owner has rated it."""
+        with self.connect() as db:
+            return db.execute(
+                "SELECT * FROM ticket_feedback WHERE ticket_id=?",
+                (ticket_id,),
+            ).fetchone()
+
+    def feedback_pending(
+        self,
+        *,
+        days: int = 7,
+        limit: int = 200,
+        now: datetime | None = None,
+    ) -> list[str]:
+        """Recently closed tickets with no rating yet, for startup view restore."""
+        since = ((now or utcnow()) - timedelta(days=max(0, int(days)))).isoformat()
+        with self.connect() as db:
+            rows = db.execute(
+                "SELECT ticket_id FROM tickets WHERE status='closed' AND closed_at >= ? "
+                "AND ticket_id NOT IN (SELECT ticket_id FROM ticket_feedback) "
+                "ORDER BY closed_at DESC LIMIT ?",
+                (since, max(1, int(limit))),
+            ).fetchall()
+        return [row["ticket_id"] for row in rows]
 
     def open_counts(self, guild_id: int) -> dict[str, int]:
         """Return open-ticket counts keyed by region for the public support panel."""
