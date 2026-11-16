@@ -4,7 +4,7 @@ This repository is a standalone Python Discord bot. `bot.py` is the supported en
 
 ## Runtime flow
 
-Startup loads `.env`, validates settings, configures logging, runs SQLite migrations, restores persistent ticket/poll/giveaway views, starts panel/inactivity/poll-expiry/giveaway-expiry loops, publishes the global application command tree, and clears stale guild command copies after the Gateway is ready. The bot is Discord-only and has no unrelated network transport layer. SQLite schema version is 19; migrations are additive and preserve DATABASE_PATH and existing records.
+Startup loads `.env`, validates settings, configures logging, runs SQLite migrations, restores persistent ticket/poll/giveaway views, starts panel/inactivity/poll-expiry/giveaway-expiry loops, publishes the global application command tree, and clears stale guild command copies after the Gateway is ready. The bot is Discord-only and has no unrelated network transport layer. SQLite schema version is 19; migrations are additive and preserve DATABASE_PATH and existing records. Closing a ticket uploads a plain-text transcript (`<channel>-transcript.txt`) to the transcript channel before the channel is deleted.
 
 ## Modules
 
@@ -19,7 +19,8 @@ Startup loads `.env`, validates settings, configures logging, runs SQLite migrat
 - `grid_a1/polls.py`: poll dashboard/metadata modal, persistent poll creation, result embeds, vote controls, and message refresh service.
 - `grid_a1/giveaways.py`: private giveaway setup, persistent entry buttons, timer-based winner draws, and active giveaway dashboard.
 - `grid_a1/utils.py`: topic parsing, staff checks, link normalization, and safe JSON parsing.
-- `grid_a1/embeds.py`, `welcomer.py`, `transcript.py`: user-facing presentation and welcome/transcript rendering.
+- `grid_a1/embeds.py`, `welcomer.py`: user-facing presentation and welcome rendering.
+- `grid_a1/transcript.py`: plain-text ticket transcript renderer (60-column bordered header, indented message blocks, attachment links, no image downloads).
 
 ## Configuration contract
 
