@@ -161,7 +161,7 @@ class DashboardView(discord.ui.View):
             ("Welcome messages", state(("welcome_channel", "link_channel", "bot_commands_channel", "shop_channel", "verify_channel"))),
             ("Moderation commands", "🟢 Active" if config else "🔴 Disabled / Not Setup"),
             ("Server overview", "🟢 Active"),
-            ("Wipe announcements", state(("wipefeed_enabled", "wipefeed_channel"))),
+            ("Wipe announcements", state(("wipe_announce_enabled", "wipe_channel"))),
             ("Bot health", "🟢 Active" if guild.me else "🟡 Partial"),
             ("Member reports", state(("report_channel",))),
         ]
@@ -189,7 +189,7 @@ class DashboardView(discord.ui.View):
                 "verification": (("Panel channel", "verify_panel_channel"), ("Verification role", "verify_role")),
                 "welcome": (("Welcome channel", "welcome_channel"), ("Link channel", "link_channel"), ("Verify channel", "verify_channel")),
                 "moderation": (("Policy", None),),
-                "announcement": (("Enabled", "wipefeed_enabled"), ("Channel", "wipefeed_channel")),
+                "announcement": (("Automatic posting", "wipe_announce_enabled"), ("Channel", "wipe_channel"), ("Ping role", "wipe_ping_role")),
                 "reports": (("Report channel", "report_channel"),),
             }.get(module, ())
             lines = []
@@ -251,7 +251,7 @@ class RegionView(discord.ui.View):
 class TicketTypeSelect(discord.ui.Select):
     def __init__(self, service: TicketService):
         self.service = service
-        options = [discord.SelectOption(label=f"Ticket {k.title()}", value=k, emoji=e, description=d) for k,e,d in [("general","📄","Requests and questions not covered by another category"),("base","🏠","Questions or problems about your base or area"),("clan","👥","Clan requests or specific clan-related problems"),("shop","💎","Questions about the store, products, or purchases"),("raid","⚠️","Bounty raids and other raid-related issues"),("bug","🐛","Bugs or glitches in-game or with our bots")]]
+        options = [discord.SelectOption(label=f"Ticket {k.title()}", value=k, emoji=e, description=d) for k,e,d in [("general","📄","Requests and questions not covered by another category"),("base","🏠","Questions or problems about your base or area"),("clan","👥","Clan requests or specific clan-related problems"),("shop","💎","Questions about the store, products, or purchases"),("raid","⚠️","Bounty raids and other raid-related issues"),("bug","🐛","Bugs or glitches in-game or with our bots"),("reimburse","🧾","Reimbursement for items, progress, or in-game losses")]]
         super().__init__(placeholder="Select your issue type ...", options=options, custom_id="grid-a1:ticket:type")
     async def callback(self, interaction: discord.Interaction):
         option = next(x for x in self.options if x.value == self.values[0])
