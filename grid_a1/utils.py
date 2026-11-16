@@ -72,17 +72,28 @@ def utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def sanitize_channel_name(
-    region: str,
+PRIORITY_MARKERS = {"low": "🟢", "normal": "🔵", "high": "🟠", "urgent": "🔴"}
+"""Leading marker so the ticket list groups itself by urgency at a glance."""
+
+
+def sanitize_channel_name(*parts: str, limit: int = 90) -> str:
+    """Build a Discord-safe, bounded name from any number of parts."""
+    raw_name = "-".join(str(part) for part in parts if part)
+    sanitized = re.sub(r"[^a-z0-9-]+", "-", raw_name.lower()).strip("-")
+    sanitized = re.sub(r"-+", "-", sanitized).strip("-")
+    return (sanitized or "ticket")[:max(1, int(limit))]
+
+
+def ticket_channel_name(
     issue: str,
     username: str,
     ticket_id: str,
+    priority: str = DEFAULT_PRIORITY,
 ) -> str:
-    """Build a Discord-safe, bounded channel name for a new ticket."""
-    raw_name = f"{region.lower()}-{issue}-{username}-{ticket_id}"
-    sanitized = re.sub(r"[^a-z0-9-]+", "-", raw_name.lower()).strip("-")
-    sanitized = re.sub(r"-+", "-", sanitized).strip("-")
-    return (sanitized or f"ticket-{ticket_id}")[:90]
+    """Readable ticket channel name: urgency marker, category, owner, reference."""
+    marker = PRIORITY_MARKERS.get(priority, PRIORITY_MARKERS[DEFAULT_PRIORITY])
+    body = sanitize_channel_name(issue, username, ticket_id, limit=80)
+    return f"{marker}-{body}"[:95]
 
 
 def ticket_status_title(title: str | None, indicator: str) -> str:
@@ -117,6 +128,18 @@ def feedback_custom_id(score: int, ticket_id: str) -> str:
         raise ValueError("ticket_id is required")
 
     return f"grid-a1:feedback:{safe_ticket_id}:{score}"[:100]
+
+
+def suggestion_custom_id(vote: str, suggestion_id: str) -> str:
+    """Give each suggestion vote button a persistent ID tied to its suggestion."""
+    if vote not in ("up", "down"):
+        raise ValueError("unknown suggestion vote")
+
+    safe_id = re.sub(r"[^A-Za-z0-9_-]", "", str(suggestion_id))[:32]
+    if not safe_id:
+        raise ValueError("suggestion_id is required")
+
+    return f"grid-a1:suggestion:{safe_id}:{vote}"[:100]
 
 
 def ticket_topic(ticket_id: str, owner_id: int, issue: str, region: str) -> str:
@@ -169,24 +192,29 @@ def active_ticket_owner(row: Any, user_id: int) -> bool:
 
 
 def staff_member(member: discord.Member, database: Any = None) -> bool:
-    """Check the server owner, configured bot owner, permissions, and staff roles."""
+    """Ticket staff access: the roles saved by /setup roles, plus the server and bot owner.
+
+    Discord permissions are deliberately not consulted, so a server decides for itself
+    which roles may work tickets by running /setup roles.
+    """
     if not isinstance(member, discord.Member):
         return False
-    if member.guild.owner_id == member.id:
+    guild = getattr(member, "guild", None)
+    if guild is None:
+        return False
+    if guild.owner_id == member.id:
         return True
 
-    configured_owner_id = os.getenv("OWNER_ID", "").strip()
+    configured_owner_id = (os.getenv("OWNER_ID", "") or "").strip()
     if configured_owner_id and str(member.id) == configured_owner_id:
-        return True
-
-    permissions = member.guild_permissions
-    if permissions.administrator or permissions.manage_channels or permissions.manage_guild:
         return True
     if database is None:
         return False
 
     # Notification targets and extra viewer roles do not automatically grant staff access.
-    staff_role_ids = set(database.configured_permission_role_ids(member.guild.id))
+    staff_role_ids = set(database.configured_permission_role_ids(guild.id))
+    if not staff_role_ids:
+        return False
     return any(role.id in staff_role_ids for role in member.roles)
 
 

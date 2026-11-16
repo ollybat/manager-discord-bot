@@ -11,8 +11,9 @@ from discord.ext import commands, tasks
 from .config import Settings, configure_logging, validate_runtime
 from .database import SCHEMA_VERSION, Database
 from .embeds import embed, support_panel, inactivity_indicator, priority_embed, ticket_stats_embed
-from .tickets import TicketService, claim
+from .tickets import ReimburseModal, TicketService, claim
 from .giveaways import GiveawayDashboardView, GiveawayEntryView, GiveawayService
+from .suggestions import SuggestionModal, SuggestionService, SuggestionVoteView, suggestion_line
 from .guides import build_choices, prefix_guide_lines
 from .health import HealthServer
 from .polls import (
@@ -25,6 +26,13 @@ from .polls import (
     parse_poll_options,
     poll_dashboard_embed,
     poll_embed,
+)
+from .wipes import (
+    WipeDashboardView,
+    WipeService,
+    announce_for_guilds,
+    parse_wipe_time,
+    wipe_sections,
 )
 from .stats import (
     collect as collect_ticket_stats,
@@ -43,7 +51,7 @@ intents = discord.Intents.default(); intents.members = True; intents.message_con
 class GridA1Bot(commands.Bot):
     def __init__(self):
         super().__init__(command_prefix=settings.prefix, intents=intents, help_command=None)
-        self.database = Database(settings.database_path); self.tickets = TicketService(self.database); self.polls = PollService(self.database); self.giveaways = GiveawayService(self.database)
+        self.database = Database(settings.database_path); self.tickets = TicketService(self.database); self.polls = PollService(self.database); self.giveaways = GiveawayService(self.database); self.wipes = WipeService(self.database); self.suggestions = SuggestionService(self.database)
         self._global_sync_last_at = 0.0
         self.settings_owner_id = settings.owner_id
         self.started_at = time.time()
@@ -101,10 +109,13 @@ class GridA1Bot(commands.Bot):
             )
         for giveaway in self.database.open_giveaways_all():
             self.add_view(GiveawayEntryView(self.giveaways, giveaway["giveaway_id"]))
+        for row in self.database.published_suggestions_all():
+            self.add_view(SuggestionVoteView(self.suggestions, row["suggestion_id"]))
         self.refresh_panels.start()
         self.inactivity_loop.start()
         self.poll_expiration_loop.start()
         self.giveaway_expiration_loop.start()
+        self.wipe_announcer.start()
         poll_command = self.tree.get_command("poll")
         if isinstance(poll_command, app_commands.Group):
             poll_subcommands = ", ".join(
@@ -213,6 +224,17 @@ class GridA1Bot(commands.Bot):
             log.warning("Panel refresh request failed for guild %s (HTTP %s); will retry next cycle", guild.id, getattr(error, "status", "unknown"))
         except discord.DiscordException:
             log.warning("Panel refresh encountered a Discord error for guild %s; will retry next cycle", guild.id)
+
+    @tasks.loop(minutes=5)
+    async def wipe_announcer(self):
+        """Post every wipe that is due whenever the server enabled automatic posting."""
+        try:
+            posted = await announce_for_guilds(self)
+        except Exception:
+            log.exception("Wipe announcer pass failed")
+            return
+        if posted:
+            log.info("Posted %s due wipe announcement(s)", posted)
 
     @tasks.loop(minutes=5)
     async def inactivity_loop(self):
@@ -976,34 +998,116 @@ async def ticket_remove(i: discord.Interaction, user: discord.Member):
     bot.database.audit(i.guild.id, row["ticket_id"], i.user.id, "member_removed", json.dumps({"member_id": user.id}))
     await i.followup.send(f"✅ Removed {user.mention} from this ticket.", ephemeral=True)
 
-wipefeed_group = app_commands.Group(name="wipefeed", description="📣 Configure and post wipe announcements")
-bot.tree.add_command(wipefeed_group)
+wipe_group = app_commands.Group(name="wipe", description="🌍 Configure wipe announcements and the wipe schedule")
+bot.tree.add_command(wipe_group)
 
-@wipefeed_group.command(name="enable", description="🔔 Turn wipe announcements on or off")
+def _wipe_embed(title: str, rows: list, empty: str):
+    """Shared listing embed for the wipe commands and the !wipe prefix command."""
+    upcoming, past, hidden = wipe_sections(rows)
+    result = embed(title, f"**{len(rows)}** wipe{'s' if len(rows) != 1 else ''} on file. Times below follow each member's own timezone.")
+    result.add_field(name="Next wipes", value="\n".join(upcoming) or empty, inline=False)
+    if past:
+        result.add_field(name="Already wiped", value="\n".join(past), inline=False)
+    if hidden:
+        result.set_footer(text=f"…and {hidden} more not shown. Raise the limit to see them.")
+    return result
+
+@wipe_group.command(name="config", description="🎛️ Open the wipe panel: channel, ping role, automatic posting, and the schedule")
 @app_commands.guild_only()
 @admin()
-@app_commands.describe(enabled="Whether new wipe announcements are enabled")
-async def wipefeed_enable(i: discord.Interaction, enabled: bool):
-    bot.database.upsert_config(i.guild.id, wipefeed_enabled=int(enabled))
-    state = "enabled" if enabled else "disabled"
-    await i.response.send_message(f"✅ Wipefeed is now **{state}**.", ephemeral=True)
+async def wipe_config(i: discord.Interaction):
+    if not i.guild: return await i.response.send_message("❌ The wipe panel only works inside a server.", ephemeral=True)
+    view = WipeDashboardView(bot.wipes, i.guild.id, i.user.id, i.guild)
+    await i.response.send_message(embed=view.panel(), view=view, ephemeral=True)
 
-@wipefeed_group.command(name="send", description="📣 Post an EU 6X wipe announcement")
+@wipe_group.command(name="add", description="➕ Schedule a wipe")
 @app_commands.guild_only()
 @admin()
-@app_commands.describe(timestamp="Unix timestamp, for example 1785524400", channel="Channel where the wipe announcement will be posted")
-async def wipefeed_send(i: discord.Interaction, timestamp: str, channel: discord.TextChannel):
-    config = bot.database.config(i.guild.id)
-    if not config or not config["wipefeed_enabled"]: return await i.response.send_message("⚠️ Wipefeed is disabled. Run `/wipefeed enable enabled:true` first.", ephemeral=True)
-    try: unix = int(timestamp.strip().replace("<t:", "").split(":", 1)[0])
-    except ValueError: return await i.response.send_message("❌ Timestamp must be a Unix timestamp, such as `1785524400`.", ephemeral=True)
-    if unix < 0: return await i.response.send_message("❌ Timestamp cannot be negative.", ephemeral=True)
-    content = (f"🇪🇺 **EU 6X WIPE ANNOUNCEMENT** • <t:{unix}:R> 🇪🇺\n\n" f"**Server Name**\nVALORA | CLAN | 5X | EU | WEEKLY | .gg/valora5x\n\n" f"Search the name displayed above and add the server to your favorites to be ready.\n\n" f"**Server Information**\n:jack: 5X Gather Rates\n:bp: Instant Crafting\n:crate: Fast Respawn\n:Time: Automatic Events\n:player: 100+ Players\n\n" f"**Latest wipe** • <t:{unix}:F> (<t:{unix}:R>)")
+@app_commands.describe(
+    region="Region code such as EU or NA",
+    when="When the wipe happens: +3h, 2026-12-01 18:00 (UTC), or a Unix timestamp",
+    title="What this wipe is, for example Weekly wipe",
+)
+async def wipe_add(i: discord.Interaction, region: str, when: str, title: str):
+    if not i.guild: return await i.response.send_message("❌ Wipes can only be scheduled inside a server.", ephemeral=True)
+    try: row = bot.wipes.schedule(i.guild.id, region=region, title=title, when_text=when, actor_id=i.user.id)
+    except ValueError as error: return await i.response.send_message(f"❌ {error}", ephemeral=True)
+    moment = parse_wipe_time(row["scheduled_at"])
+    stamp = f"<t:{int(moment.timestamp())}:F>" if moment else "soon"
+    result = embed("🌍 Wipe scheduled", f"**{row['title']}** for {row['region']} at {stamp} ({row['wipe_id']}).\n\nPost it with /wipe announce, or let automatic posting handle it.")
+    result.set_footer(text="Members can read the schedule with /wipe list or !wipe.")
+    await i.response.send_message(embed=result, ephemeral=True)
+
+@wipe_group.command(name="list", description="📋 Show every wipe this server has scheduled")
+@app_commands.guild_only()
+@app_commands.describe(limit="How many wipes to show (1–50)")
+async def wipe_list(i: discord.Interaction, limit: app_commands.Range[int, 1, 50] = 15):
+    if not i.guild: return await i.response.send_message("❌ Wipe schedules only exist inside a server.", ephemeral=True)
+    rows = bot.wipes.listing(i.guild.id, limit=int(limit))
+    await i.response.send_message(embed=_wipe_embed(f"🌍 Wipe schedule — {i.guild.name}", rows, "Nothing is scheduled yet. Staff can add one with /wipe add."), ephemeral=True)
+
+@wipe_group.command(name="remove", description="🗑️ Delete a scheduled wipe")
+@app_commands.guild_only()
+@admin()
+@app_commands.describe(wipe_id="Start typing to pick a scheduled wipe, or paste its ID")
+async def wipe_remove(i: discord.Interaction, wipe_id: str):
+    if not i.guild: return await i.response.send_message("❌ Wipes can only be managed inside a server.", ephemeral=True)
+    row = bot.database.wipe(i.guild.id, wipe_id)
+    if not row: return await i.response.send_message("⚠️ I could not find that wipe in this server. Pick one from the autocomplete list.", ephemeral=True)
+    async def confirmed(interaction: discord.Interaction) -> None:
+        removed = bot.wipes.cancel(i.guild.id, row["wipe_id"], interaction.user.id)
+        if not removed: return await interaction.response.edit_message(embed=embed("⚠️ Already gone", "That wipe was removed before this button was pressed."), view=None)
+        await interaction.response.edit_message(embed=embed("🗑️ Wipe removed", f"**{removed['title']}** ({removed['wipe_id']}) is no longer scheduled."), view=None)
+    prompt = embed("🗑️ Delete this wipe?", f"**{row['title']}** for {row['region']}, scheduled {timestamp_marker(row['scheduled_at'])} ({row['wipe_id']}).\n\nThis cannot be undone.")
+    prompt.set_footer(text="Only you can answer this prompt, and it expires after 90 seconds.")
+    view = ConfirmView(confirmed, author_id=i.user.id, confirm_label="Delete this wipe")
+    await i.response.send_message(embed=prompt, view=view, ephemeral=True)
+    view.message = await i.original_response()
+
+@wipe_remove.autocomplete("wipe_id")
+async def wipe_remove_autocomplete(i: discord.Interaction, current: str):
+    if not i.guild: return []
+    return [
+        app_commands.Choice(name=label, value=value)
+        for label, value in build_choices(
+            bot.database.wipes(i.guild.id, limit=25),
+            ("region", "title", "scheduled_at"),
+            "wipe_id",
+            current,
+        )
+    ]
+
+@wipe_group.command(name="announce", description="📣 Post a wipe now")
+@app_commands.guild_only()
+@admin()
+@app_commands.describe(wipe_id="Start typing to pick a wipe, or paste its ID")
+async def wipe_announce(i: discord.Interaction, wipe_id: str):
+    if not i.guild: return await i.response.send_message("❌ Wipes can only be announced inside a server.", ephemeral=True)
+    row = bot.database.wipe(i.guild.id, wipe_id)
+    if not row: return await i.response.send_message("⚠️ I could not find that wipe in this server. Pick one from the autocomplete list.", ephemeral=True)
     await i.response.defer(ephemeral=True)
-    try: await channel.send(content)
-    except discord.Forbidden: return await i.followup.send("❌ I cannot post in that channel. Check View Channel and Send Messages permissions.", ephemeral=True)
-    bot.database.upsert_config(i.guild.id, wipefeed_channel=channel.id)
-    await i.followup.send(f"✅ EU 6X wipe announcement posted in {channel.mention}.", ephemeral=True)
+    result = await bot.wipes.announce_one(i.guild, row, actor_id=i.user.id)
+    await i.followup.send(result["message"], ephemeral=True)
+
+@wipe_announce.autocomplete("wipe_id")
+async def wipe_announce_autocomplete(i: discord.Interaction, current: str):
+    if not i.guild: return []
+    return [
+        app_commands.Choice(name=label, value=value)
+        for label, value in build_choices(
+            bot.database.wipes(i.guild.id, limit=25),
+            ("region", "title", "scheduled_at"),
+            "wipe_id",
+            current,
+        )
+    ]
+
+@bot.command(name="wipe", help="🌍 Show every wipe this server has scheduled.")
+async def prefix_wipe(ctx, limit: int = 15):
+    if not ctx.guild: return await ctx.send("❌ Wipe schedules only exist inside a server.")
+    count = max(1, min(int(limit), 50))
+    rows = bot.wipes.listing(ctx.guild.id, limit=count)
+    await ctx.send(embed=_wipe_embed(f"🌍 Wipe schedule — {ctx.guild.name}", rows, "Nothing is scheduled yet. Staff can add one with /wipe add."))
 
 info_group = app_commands.Group(name="info", description="🌐 View server information")
 bot.tree.add_command(info_group)
@@ -1137,6 +1241,8 @@ async def ticket_priority(i: discord.Interaction, priority: app_commands.Choice[
     if row["priority"] == priority.value: return await i.response.send_message(f"ℹ️ This ticket is already **{PRIORITY_LABELS[priority.value]}**.", ephemeral=True)
     if not bot.database.set_priority(row["ticket_id"], priority.value, i.user.id): return await i.response.send_message("⚠️ This ticket closed while the priority was being set.", ephemeral=True)
     await i.response.send_message(embed=priority_embed(priority.value, i.user))
+    if await bot.tickets.sync_channel_name(i.channel, row, priority.value):
+        await i.followup.send("🏷️ Renamed the channel to match its new priority.", ephemeral=True)
 @ticket_group.command(name="list", description="🗂️ List this server's open tickets, most urgent first")
 @staff()
 @app_commands.checks.cooldown(5, 60.0, key=lambda i: (i.guild_id, i.user.id))
@@ -1944,6 +2050,71 @@ async def on_app_command_error(i, error):
         else: await i.response.send_message(msg, ephemeral=True)
     except discord.NotFound:
         log.warning("Could not deliver application-command error response; interaction expired")
+
+
+# --- Suggestions and reimbursement -------------------------------------------
+suggestion_group = app_commands.Group(name="suggestion", description="💡 Send, read, and configure member suggestions")
+bot.tree.add_command(suggestion_group)
+
+
+@suggestion_group.command(name="send", description="💡 Send an idea and let the server vote on it")
+@app_commands.guild_only()
+@app_commands.checks.cooldown(3, 600.0, key=lambda i: (i.guild_id, i.user.id))
+async def suggestion_send(i: discord.Interaction):
+    """Open the suggestion form; the result is posted for public voting."""
+    await i.response.send_modal(SuggestionModal(bot.suggestions))
+
+
+@suggestion_group.command(name="list", description="💡 Show the newest suggestions and how the server voted")
+@app_commands.guild_only()
+@app_commands.checks.cooldown(4, 60.0, key=lambda i: (i.guild_id, i.user.id))
+async def suggestion_list(i: discord.Interaction):
+    if not i.guild:
+        return await i.response.send_message("💡 Suggestions only exist inside a server.", ephemeral=True)
+    rows = bot.suggestions.listing(i.guild.id, limit=10)
+    if not rows:
+        return await i.response.send_message("💡 No suggestions yet. Use /suggestion send to add the first one.", ephemeral=True)
+    counts = bot.database.suggestion_votes_many([row["suggestion_id"] for row in rows])
+    panel = embed(
+        f"💡 Suggestions — {i.guild.name}",
+        f"The **{len(rows)}** newest ideas, newest first, with the votes they have collected.",
+    )
+    blocks = [suggestion_line(row, counts[row["suggestion_id"]]) for row in rows]
+    fields: list[str] = []
+    current = ""
+    for item in blocks:
+        if current and len(current) + len(item) + 2 > 1000:
+            fields.append(current)
+            current = ""
+        current = f"{current}\n\n{item}".strip() if current else item
+    if current:
+        fields.append(current)
+    for index, value in enumerate(fields):
+        panel.add_field(name="Newest first" if index == 0 else f"More suggestions ({index + 1})", value=value[:1024], inline=False)
+    panel.set_footer(text="Vote on a suggestion in the channel where it was posted")
+    await i.response.send_message(embed=panel)
+
+
+@suggestion_group.command(name="config", description="⚙️ Choose the channel that receives new suggestions (admin)")
+@admin()
+@app_commands.guild_only()
+@app_commands.describe(channel="Text channel where new suggestions should be posted for voting")
+async def suggestion_config(i: discord.Interaction, channel: discord.TextChannel):
+    await i.response.defer(ephemeral=True)
+    bot.database.upsert_config(i.guild.id, suggestion_channel=channel.id)
+    await i.followup.send(
+        f"✅ Suggestions will be posted in {channel.mention}. Members submit them with the suggestion send "
+        "command and everyone can vote with the buttons on each post.",
+        ephemeral=True,
+    )
+
+
+@bot.tree.command(name="reimburse", description="🧾 Ask staff for reimbursement of lost items or progress")
+@app_commands.guild_only()
+@app_commands.checks.cooldown(3, 900.0, key=lambda i: (i.guild_id, i.user.id))
+async def reimburse(i: discord.Interaction):
+    """Public entry point: everyone gets the reimbursement form and a private ticket."""
+    await i.response.send_modal(ReimburseModal(bot.tickets))
 
 
 def run():

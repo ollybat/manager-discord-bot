@@ -15,11 +15,13 @@ Startup loads `.env`, validates settings, configures logging, runs SQLite migrat
 - `grid_a1/commands.py`: standalone commands and owner diagnostics.
 - `grid_a1/views.py`: dashboard shell, persistent ticket and verification views, the shared destructive-action confirmation view, and the persistent 1–5 star feedback view sent privately to ticket owners after closure.
 - `grid_a1/dashboard_setup.py`: role/channel dropdown setup wizards, explicit panel publishing, and report routing.
-- `grid_a1/tickets.py`: ticket creation, permissions, defer/followup closure, transcripts, and archive.
+- `grid_a1/tickets.py`: ticket creation, permissions, readable channel naming, the reimbursement form modal, defer/followup closure, transcripts, and archive.
 - `grid_a1/polls.py`: poll dashboard/metadata modal, persistent poll creation, result embeds, vote controls, and message refresh service.
+- `grid_a1/wipes.py`: wipe scheduling (absolute or relative times), the wipe config panel, and the once-only announcement loop.
+- `grid_a1/suggestions.py`: member suggestion storage helpers, the persistent vote buttons, and the suggestion modal.
 - `grid_a1/giveaways.py`: private giveaway setup, persistent entry buttons, timer-based winner draws, and active giveaway dashboard.
 - `grid_a1/stats.py`: read-only ticket workload statistics, plus the shared queue/moderation/note line formatters and Discord relative-timestamp helper (queue split, closed-ticket windows, first-claim and closure averages, per-region load, per-priority load, claim leaderboard with each claimer's first-claim average, owner rating average).
-- `grid_a1/utils.py`: topic parsing, staff checks, link normalization, safe JSON parsing, and the shared priority/feedback constants.
+- `grid_a1/utils.py`: topic parsing, staff checks, link normalization, safe JSON parsing, channel-name slugs, and the shared priority/feedback/suggestion constants.
 - `grid_a1/guides.py`: the live command catalog plus the prefix-command registry the `!` help lists, live command catalog built from the running application-command tree, permission-aware `/help` rendering, per-command detail text, and the autocomplete helpers for poll and giveaway identifiers.
 - `grid_a1/health.py`: optional read-only status endpoint (stdlib HTTP server on the host PORT) used when a public domain is attached; disabled with HEALTH_DISABLED=1.
 - `grid_a1/embeds.py`, `welcomer.py`: user-facing presentation and welcome rendering.

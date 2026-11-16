@@ -10,14 +10,63 @@ import discord
 from .database import Database
 from .embeds import embed, feedback_embed, inactivity_indicator, ticket_archive_embed, ticket_embed
 from .utils import (
+    DEFAULT_PRIORITY,
     is_ticket,
     parse_ticket_topic,
     sanitize_channel_name,
     staff_member,
+    ticket_channel_name,
     ticket_status_title,
     ticket_topic,
     utcnow,
 )
+
+REIMBURSE_ISSUE = "reimburse"
+REIMBURSE_LABEL = "Reimbursement"
+REIMBURSE_PROMPTS = (
+    ("Gamertag", "Your PSN or Xbox name", False),
+    ("Clan Name", "The clan you belong to, or N/A", False),
+    ("Grid Location", "Where it happened, for example Grid A1 north gate", False),
+    ("What Happened", "What went wrong and what you lost, with dates if you can", True),
+)
+
+
+def reimbursement_details(answers: dict[str, str]) -> str:
+    """Turn the reimbursement form into the ticket's initial report."""
+    lines: list[str] = []
+    for label, _hint, _paragraph in REIMBURSE_PROMPTS:
+        value = " ".join(str(answers.get(label, "") or "").split())
+        lines.append(f"{label}: {value or 'Not provided'}")
+    return "\n".join(lines)
+
+
+class ReimburseModal(discord.ui.Modal, title="Reimbursement request"):
+    """The four-question form that opens a reimbursement ticket."""
+
+    def __init__(self, service: "TicketService"):
+        super().__init__(timeout=900.0)
+        self.service = service
+        self.inputs: dict[str, discord.ui.TextInput] = {}
+        for label, hint, paragraph in REIMBURSE_PROMPTS:
+            field = discord.ui.TextInput(
+                label=label,
+                placeholder=hint,
+                style=discord.TextStyle.paragraph if paragraph else discord.TextStyle.short,
+                max_length=600 if paragraph else 100,
+                required=label != "Clan Name",
+            )
+            self.inputs[label] = field
+            self.add_item(field)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        answers = {label: str(field.value or "") for label, field in self.inputs.items()}
+        await self.service.create(
+            interaction,
+            REIMBURSE_ISSUE,
+            REIMBURSE_LABEL,
+            "EU",
+            reimbursement_details(answers),
+        )
 
 log = logging.getLogger(__name__)
 
@@ -189,8 +238,7 @@ class TicketService:
                     attach_files=True,
                 )
 
-        channel_name = sanitize_channel_name(
-            region,
+        channel_name = ticket_channel_name(
             issue,
             interaction.user.name,
             ticket_id,
@@ -233,6 +281,7 @@ class TicketService:
                 region=region,
                 opened_at=utcnow().isoformat(),
                 last_activity_at=utcnow().isoformat(),
+                details=details,
             )
         except Exception as error:
             log.exception(
@@ -257,12 +306,19 @@ class TicketService:
 
         from .views import TicketControls
 
-        welcome = ticket_embed(label, region, details)
+        welcome = ticket_embed(
+            issue,
+            region,
+            details,
+            requester=f"{interaction.user.mention} ({interaction.user.display_name})",
+            ticket_id=ticket_id,
+        )
         welcome.title = f"🎫 {label.title()} • Private support ticket"
         welcome.description = (
-            f"👋 Welcome {interaction.user.mention}! Keep updates here so staff can follow "
-            "your request. **Ticket owner:** Urgent help, Check in, Request staff, or "
-            "Request closure. **Staff:** Staff claim or Staff close."
+            f"👋 Welcome {interaction.user.mention}! Everything you post here stays between you "
+            "and staff.\n"
+            "**Your buttons:** 🚨 Urgent help • 👀 Check in • 🙋 Request staff • 🔒 Request closure.\n"
+            "**Staff buttons:** 🙌 Staff claim • ✅ Staff close."
         )
         welcome.set_footer(
             text=f"🆔 Ticket {ticket_id} • Keep replies in this private channel"
@@ -417,6 +473,30 @@ class TicketService:
                 return
         except discord.DiscordException:
             log.info("Could not refresh status for %s", row["ticket_id"], exc_info=True)
+
+    async def sync_channel_name(self, channel: discord.TextChannel, row=None, priority: str | None = None) -> bool:
+        """Rename a ticket channel so its urgency marker matches the triage state."""
+        row = row or self.db.ticket_by_channel(channel.id)
+        if not row:
+            return False
+
+        owner = channel.guild.get_member(int(row["owner_id"])) if row["owner_id"] else None
+        owner_slug = getattr(owner, "name", None) or f"user-{int(row['owner_id'] or 0)}"
+        wanted = ticket_channel_name(
+            str(row["issue"]),
+            owner_slug,
+            str(row["ticket_id"]),
+            priority or str(row["priority"] or DEFAULT_PRIORITY),
+        )
+        if channel.name == wanted:
+            return False
+
+        try:
+            await channel.edit(name=wanted, reason="Ticket priority changed")
+        except (discord.Forbidden, discord.HTTPException):
+            log.info("Could not rename ticket channel %s", row["ticket_id"], exc_info=True)
+            return False
+        return True
 
     async def resolve_ticket_channel(
         self,

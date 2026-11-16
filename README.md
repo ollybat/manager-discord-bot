@@ -1,6 +1,6 @@
 # Grid A1 Manager Discord Bot
 
-This repository preserves the existing SQLite deployment and `DATABASE_PATH` contract. SQLite migrations are additive and schema version 20; use `Database.backup()` before upgrades. A startup schema/integrity check runs before the Discord client starts.
+This repository preserves the existing SQLite deployment and `DATABASE_PATH` contract. SQLite migrations are additive and schema version 23; use `Database.backup()` before upgrades. A startup schema/integrity check runs before the Discord client starts.
 
 PostgreSQL is not a runtime backend or a tested SQLite migration path: `grid_a1/database.py` always uses SQLite and `DATABASE_PATH`. The separate `grid_a1/postgres.py` module is an optional operator helper with a baseline schema sketch; it does not migrate data or switch the bot runtime. Setting `DATABASE_URL` has no effect on the bot. The SQLite source is never modified. Install `requirements-postgres-tools.txt` only if you explicitly use that helper.
 
@@ -24,9 +24,21 @@ When a ticket closes, the owner receives a private message asking them to rate t
 
 Staff can run `/ticket stats` for a live workload panel: queue size split into claimed and unclaimed, closures in the last 7 and 30 days, average time to first staff claim, average time to closure, open tickets per region, open tickets per priority, the most active claimers with each claimer's average time to first claim, and the owner rating average. `/ticket transcript` writes a plain-text transcript of the current ticket on demand without closing it.
 
-### Ticket priority
+### Ticket priority and readable ticket names
 
-Staff run `/ticket priority` inside a ticket to set it to 🟢 Low, 🔵 Normal, 🟠 High or 🔴 Urgent; new tickets default to Normal. The choice is confirmed in the ticket channel, recorded in the audit log, summarised in `/ticket stats`, and shown on the archive embed in the transcript channel.
+Staff run `/ticket priority` inside a ticket to set it to 🟢 Low, 🔵 Normal, 🟠 High or 🔴 Urgent; new tickets default to Normal. The choice is confirmed in the ticket channel, recorded in the audit log, summarised in `/ticket stats`, and shown on the archive embed in the transcript channel. Changing the priority renames the channel so the urgency marker at the front of its name follows the ticket: 🔴-reimburse-olly-a1b2c3d4. The opening embed now shows who asked, the category, the region, the ticket reference, and each answer of the ticket form on its own line, so staff read a filled-in form instead of one wall of text.
+
+### Reimbursement tickets
+
+`/reimburse` is open to everyone and opens a private reimbursement ticket after a short four-question form: Gamertag, Clan Name, Grid Location, and What Happened. The answers become the ticket's opening report, one labeled field per answer, so staff see the full picture in the channel and in the plain-text transcript. The support panel offers the same category as 🧾 Ticket Reimbursement, and each member can open one request every 15 minutes.
+
+### Wipe announcements
+
+Wipes are scheduled per region instead of announced by hand. `/wipe config` opens a panel for the announcement channel, an optional ping role, and automatic posting; `/wipe add` accepts a wipe as an ISO timestamp or a relative offset (`+2d`, `6h`), `/wipe list` shows what is scheduled soonest-first with a copy-ready countdown, `/wipe remove` cancels one, and `/wipe announce` posts a chosen wipe immediately. With automatic posting on, a background job announces each wipe once when its time arrives and marks it announced, so nothing is posted twice across restarts. `!wipe` prints the same schedule from chat.
+
+### Suggestions
+
+Members send ideas with `/suggestion send`; the request is posted in the channel chosen by `/suggestion config`, with 👍 Yes and 👎 No buttons that anyone can use. Votes are stored per member and per suggestion: pressing the same button again removes the vote, switching buttons moves it, and the totals, share, and your own vote are refreshed on the post. `/suggestion list` shows the newest ideas with their vote totals, and voting buttons keep working after a restart.
 
 Run `/setup roles owner_role: ... co_owner_role: ... head_admin_role: ... admin_role: ... moderator_role: ...` if you need to initialize dashboard access first. These five roles are both permission roles and ticket notification targets. There is no `/setup staff` command.
 

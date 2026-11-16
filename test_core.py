@@ -17,7 +17,7 @@ from discord import app_commands
 from pathlib import Path
 
 from grid_a1.config import Settings, validate_runtime
-from grid_a1.database import Database
+from grid_a1.database import Database, SCHEMA_VERSION
 from grid_a1.embeds import inactivity_indicator
 from grid_a1.utils import anti_link_config_updates, active_ticket_owner, detected_external_links, inactivity_custom_id, is_http_url, safe_json_list, sanitize_channel_name, ticket_status_title
 from grid_a1.commands import _validate_image
@@ -43,7 +43,7 @@ class CoreTests(unittest.TestCase):
         from grid_a1.guides import ACCESS_LABELS, catalog, render_guide
 
         entries = catalog(runtime_bot.tree)
-        fields = render_guide(entries, list(ACCESS_LABELS))
+        fields = render_guide(entries, list(ACCESS_LABELS), max_total=6000)
         self.assertTrue(fields)
         for name, value in fields:
             self.assertLessEqual(len(name), 256)
@@ -96,10 +96,11 @@ class CoreTests(unittest.TestCase):
                                    issue="links", region="EU", opened_at="2024-01-01T00:00:00+00:00",
                                    last_activity_at="2024-01-01T00:00:00+00:00")
             database.migrate()
+            self.assertEqual(SCHEMA_VERSION, 23)
             self.assertEqual(database.ticket("ABC123")["issue"], "links")
             self.assertEqual(database.config(42)["owner_role"], 101)
             self.assertEqual(database.config(42)["report_channel"], 9900)
-            self.assertEqual(database.startup_check()["schema_version"], 21)
+            self.assertEqual(database.startup_check()["schema_version"], SCHEMA_VERSION)
 
     def test_ticket_create_rolls_back_when_audit_insert_fails(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -439,7 +440,7 @@ class CoreTests(unittest.TestCase):
             self.assertNotIn("purge", actions)
 
         entries = catalog(bot_module.bot.tree)
-        rendered = "\n".join(value for _, value in render_guide(entries, list(ACCESS_LABELS)))
+        rendered = "\n".join(value for _, value in render_guide(entries, list(ACCESS_LABELS), max_total=6000))
         for command in ("/unban", "/untimeout", "/purge", "/modlog", "/poll results", "/giveaway list"):
             self.assertIn(command, rendered)
         self.assertEqual(COMMAND_ACCESS["purge"], "manage_messages")
@@ -457,6 +458,165 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(timestamp_marker("nonsense"), "an unknown time")
 
 
+
+
+    def test_parse_wipe_time_reads_every_supported_format(self):
+        from datetime import datetime, timedelta, timezone
+
+        from grid_a1.wipes import parse_wipe_time
+
+        now = datetime(2026, 11, 16, 12, 0, tzinfo=timezone.utc)
+        self.assertEqual(parse_wipe_time("+3h", now), now + timedelta(hours=3))
+        self.assertEqual(parse_wipe_time("+2d", now), now + timedelta(days=2))
+        self.assertEqual(parse_wipe_time("+90m", now), now + timedelta(minutes=90))
+        self.assertEqual(parse_wipe_time(" +1w ", now), now + timedelta(weeks=1))
+        self.assertEqual(parse_wipe_time("2026-12-01 18:00", now), datetime(2026, 12, 1, 18, 0, tzinfo=timezone.utc))
+        self.assertEqual(parse_wipe_time("2026-12-01T07:05", now), datetime(2026, 12, 1, 7, 5, tzinfo=timezone.utc))
+        self.assertEqual(parse_wipe_time("<t:1796000000:R>", now), datetime.fromtimestamp(1796000000, tz=timezone.utc))
+        self.assertEqual(parse_wipe_time("1796000000", now), datetime.fromtimestamp(1796000000, tz=timezone.utc))
+        for broken in ("", "soon", "+0m", "2026-13-01 18:00", "12", "tomorrow at 6"):
+            with self.assertRaises(ValueError):
+                parse_wipe_time(broken, now)
+        self.assertIn("wipe time", parse_wipe_time.__doc__ or "")
+
+    def test_wipe_service_stores_lists_announces_and_removes(self):
+        from grid_a1.wipes import WipeService, new_wipe_id
+
+        self.assertEqual(len(new_wipe_id()), 8)
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(Path(directory) / "manager.sqlite3")
+            database.migrate()
+            service = WipeService(database)
+            soon = service.schedule(42, region="eu", title="  Weekly   wipe ", when_text="+1h", actor_id=7)
+            later = service.schedule(42, region="NA", title="Season start", when_text="+10d", actor_id=7)
+            self.assertEqual(soon["region"], "EU")
+            self.assertEqual(soon["title"], "Weekly wipe")
+            self.assertNotEqual(soon["wipe_id"], later["wipe_id"])
+            self.assertEqual([row["wipe_id"] for row in service.listing(42)], [soon["wipe_id"], later["wipe_id"]])
+            self.assertEqual(service.listing(99), [])
+            self.assertEqual(service.cancel(99, soon["wipe_id"], 7), None)
+            self.assertEqual(service.due(42), [])
+
+            for region, title, when in (("", "x", "+1h"), ("E" * 40, "x", "+1h"), ("EU", "   ", "+1h"), ("EU", "y" * 200, "+1h")):
+                with self.assertRaises(ValueError):
+                    service.schedule(42, region=region, title=title, when_text=when, actor_id=7)
+
+            forced = service.schedule(42, region="EU", title="Past wipe", when_text="+1m", actor_id=7)
+            with database.connect() as connection:
+                connection.execute("UPDATE wipes SET scheduled_at=? WHERE wipe_id=?", ("2020-01-01T00:00:00+00:00", forced["wipe_id"]))
+            due = service.due(42)
+            self.assertEqual([row["wipe_id"] for row in due], [forced["wipe_id"]])
+
+            when = "2026-11-16T12:00:00+00:00"
+            self.assertTrue(database.mark_wipe_announced(42, forced["wipe_id"], channel_id=555, message_id=999, when=when))
+            self.assertFalse(database.mark_wipe_announced(42, forced["wipe_id"], channel_id=555, message_id=1000, when=when))
+            self.assertEqual(service.due(42), [])
+            counts = database.wipe_counts(42)
+            self.assertEqual(counts["announced"], 1)
+            self.assertEqual(counts["upcoming"], 2)
+            self.assertEqual(counts["due"], 0)
+
+            removed = service.cancel(42, later["wipe_id"], 7)
+            self.assertEqual(removed["wipe_id"], later["wipe_id"])
+            self.assertIsNone(database.wipe(42, later["wipe_id"]))
+            self.assertIsNone(database.wipe(99, soon["wipe_id"]))
+            with database.connect() as connection:
+                actions = [row["action"] for row in connection.execute("SELECT action FROM audit_log WHERE guild_id=42")]
+            self.assertIn("wipe_scheduled", actions)
+            self.assertIn("wipe_announced", actions)
+            self.assertIn("wipe_removed", actions)
+
+    def test_wipe_helpers_render_lines_embeds_and_sections(self):
+        from grid_a1.wipes import wipe_announcement, wipe_line, wipe_panel_embed, wipe_region_emoji, wipe_sections, wipe_state
+
+        upcoming = {"wipe_id": "AAA1", "region": "EU", "title": "Weekly wipe", "scheduled_at": "2999-01-01T00:00:00+00:00", "announced_at": None}
+        due = {"wipe_id": "BBB2", "region": "NA", "title": "Season start", "scheduled_at": "2000-01-01T00:00:00+00:00", "announced_at": None}
+        done = {"wipe_id": "CCC3", "region": "ZZ", "title": "Old wipe", "scheduled_at": "2000-01-01T00:00:00+00:00", "announced_at": "2000-01-02T00:00:00+00:00"}
+        self.assertEqual(wipe_region_emoji("eu"), "🇪🇺")
+        self.assertEqual(wipe_region_emoji("XX"), "🌍")
+        self.assertEqual(wipe_state(upcoming), "🗓️ scheduled")
+        self.assertEqual(wipe_state(due), "⏰ due now")
+        self.assertEqual(wipe_state(done), "✅ announced")
+        line = wipe_line(upcoming)
+        self.assertIn("AAA1", line)
+        self.assertIn("<t:", line)
+        self.assertIn("Weekly wipe", line)
+
+        upcoming_lines, past_lines, hidden = wipe_sections([upcoming, due, done])
+        self.assertEqual([len(upcoming_lines), len(past_lines), hidden], [1, 2, 0])
+        limited, _, hidden = wipe_sections([upcoming, due, done], limit=1)
+        self.assertEqual((len(limited), hidden), (1, 2))
+
+        content, announcement = wipe_announcement(upcoming, ping_role_id=4321)
+        self.assertEqual(content, "<@&4321>")
+        self.assertIn("WIPE ANNOUNCEMENT", announcement.title)
+        self.assertEqual(announcement.fields[1].value, "AAA1")
+        self.assertIsNone(wipe_announcement(upcoming)[0])
+
+        panel = wipe_panel_embed(SimpleNamespace(name="Test"), {"wipe_channel": 5, "wipe_ping_role": 6, "wipe_announce_enabled": 1}, [upcoming, due, done])
+        values = "\n".join(field.value for field in panel.fields)
+        self.assertIn("<#5>", values)
+        self.assertIn("<@&6>", values)
+        self.assertIn("🟢 on", values)
+        self.assertIn("AAA1", values)
+        self.assertEqual(wipe_panel_embed(SimpleNamespace(name="Test"), None, []).fields[0].value, "not set")
+
+    def test_wipe_commands_replace_wipefeed_and_stay_guided(self):
+        import grid_a1.bot as bot_module
+        from grid_a1.guides import ACCESS_LABELS, COMMAND_ACCESS, PREFIX_COMMANDS, catalog, prefix_guide_lines, render_guide
+
+        self.assertIsNone(bot_module.bot.tree.get_command("wipefeed"))
+        wipe_group = bot_module.bot.tree.get_command("wipe")
+        self.assertIsNotNone(wipe_group)
+        self.assertEqual({command.name for command in wipe_group.commands}, {"config", "add", "list", "remove", "announce"})
+        self.assertIsNotNone(bot_module.wipe_remove_autocomplete)
+        self.assertIsNotNone(bot_module.wipe_announce_autocomplete)
+        self.assertIsNotNone(bot_module.bot.get_command("wipe"))
+        self.assertIsNotNone(bot_module.bot.wipes)
+        self.assertTrue(bot_module.wipe_group.commands[0].checks)
+
+        entries = catalog(bot_module.bot.tree)
+        rendered = "\n".join(value for _, value in render_guide(entries, list(ACCESS_LABELS), max_total=6000))
+        for command in ("/wipe config", "/wipe add", "/wipe list", "/wipe remove", "/wipe announce"):
+            self.assertIn(command, rendered)
+        self.assertNotIn("wipefeed", rendered.lower())
+        self.assertEqual(COMMAND_ACCESS["wipe list"], "everyone")
+        self.assertEqual(COMMAND_ACCESS["wipe config"], "admin")
+        self.assertIn("!wipe [limit]", "\n".join(prefix_guide_lines()))
+        self.assertTrue(any(name == "wipe" for name, _, _ in PREFIX_COMMANDS))
+
+        section_chars = sum(len(name) + len(value) for name, value in render_guide(entries, list(ACCESS_LABELS)))
+        self.assertLessEqual(section_chars + len("\n".join(prefix_guide_lines())) + 400, 6000)
+
+        for module in ("bot.py", "wipes.py", "guides.py", "dashboard_setup.py", "views.py", "database.py"):
+            source = (ROOT / "grid_a1" / module).read_text(encoding="utf-8")
+            self.assertNotIn("wipefeed", source.lower(), module)
+
+    def test_staff_member_ignores_discord_permissions(self):
+        from grid_a1.utils import staff_member
+
+        class FakeDatabase:
+            def __init__(self, roles):
+                self.roles = roles
+
+            def configured_permission_role_ids(self, guild_id):
+                return self.roles
+
+        def member(member_id, roles=(), owner=False, administrator=False):
+            person = MagicMock(spec=discord.Member)
+            person.id = member_id
+            person.guild = SimpleNamespace(id=42, owner_id=member_id if owner else 1)
+            person.roles = [SimpleNamespace(id=role_id) for role_id in roles]
+            person.guild_permissions = discord.Permissions.all() if administrator else discord.Permissions.none()
+            return person
+
+        self.assertFalse(staff_member(member(7, administrator=True)))
+        self.assertTrue(staff_member(member(7, roles=(77,)), FakeDatabase([77])))
+        self.assertFalse(staff_member(member(7, administrator=True), FakeDatabase([77])))
+        self.assertFalse(staff_member(member(7, roles=(78,)), FakeDatabase([77])))
+        self.assertFalse(staff_member(member(7, roles=(77,)), FakeDatabase([])))
+        self.assertTrue(staff_member(member(1, owner=True), FakeDatabase([])))
+        self.assertFalse(staff_member(object(), FakeDatabase([77])))
 
     def test_clear_channel_batches_and_respects_budgets(self):
         import grid_a1.bot as bot_module
@@ -688,7 +848,7 @@ class CoreTests(unittest.TestCase):
             self.assertIsNotNone(tickets.get_command(name), name)
         self.assertIsNotNone(bot_module.bot.tree.get_command("modlog"))
         entries = catalog(bot_module.bot.tree)
-        rendered = "\n".join(value for _, value in render_guide(entries, list(ACCESS_LABELS)))
+        rendered = "\n".join(value for _, value in render_guide(entries, list(ACCESS_LABELS), max_total=6000))
         for command in ("/ticket list", "/ticket note", "/ticket notes", "/modlog"):
             self.assertIn(command, rendered)
             self.assertEqual(COMMAND_ACCESS[command.lstrip("/")], "staff")
@@ -755,7 +915,7 @@ class CoreTests(unittest.TestCase):
         self.assertIn("🛡️ Moderation", [name for name, _ in staff])
         self.assertFalse(any("/giveaway config" in value for _, value in staff))
 
-        admin = render_guide(entries, viewer_access(fake_bot, member(7, roles=(11,)), guild))
+        admin = render_guide(entries, viewer_access(fake_bot, member(7, roles=(11,)), guild), max_total=6000)
         admin_values = "\n".join(value for _, value in admin)
         self.assertIn("⚙️ Server setup", [name for name, _ in admin])
         self.assertIn("/giveaway config", admin_values)
@@ -764,6 +924,7 @@ class CoreTests(unittest.TestCase):
         discord_perms = render_guide(
             entries,
             viewer_access(fake_bot, member(7, administrator=True, manage_guild=True, manage_channels=True), guild),
+            max_total=6000,
         )
         discord_values = "\n".join(value for _, value in discord_perms)
         self.assertNotIn("⚙️ Server setup", [name for name, _ in discord_perms])
@@ -938,7 +1099,7 @@ class CoreTests(unittest.TestCase):
         self.assertFalse(health_enabled({"HEALTH_DISABLED": "TRUE"}))
 
         server = HealthServer(
-            lambda: {"connected_servers": 2, "uptime_seconds": 15, "schema_version": 21},
+            lambda: {"connected_servers": 2, "uptime_seconds": 15, "schema_version": SCHEMA_VERSION},
             host="127.0.0.1",
             port=0,
         )
@@ -952,7 +1113,7 @@ class CoreTests(unittest.TestCase):
                 payload = json.loads(response.read().decode("utf-8"))
             self.assertEqual(payload["status"], "ok")
             self.assertEqual(payload["connected_servers"], 2)
-            self.assertEqual(payload["schema_version"], 21)
+            self.assertEqual(payload["schema_version"], SCHEMA_VERSION)
             with urllib.request.urlopen(f"{base}/", timeout=5) as root_response:
                 self.assertEqual(root_response.status, 200)
             with self.assertRaises(urllib.error.HTTPError) as missing:
@@ -995,7 +1156,7 @@ class CoreTests(unittest.TestCase):
         report = runtime_bot.health_report()
         self.assertEqual(report["status"], "ok")
         self.assertEqual(report["service"], "grid-a1-manager")
-        self.assertEqual(report["schema_version"], 21)
+        self.assertEqual(report["schema_version"], SCHEMA_VERSION)
         self.assertIsInstance(report["uptime_seconds"], int)
         self.assertIsInstance(report["connected_servers"], int)
         self.assertNotIn("token", json.dumps(report).lower())
@@ -1234,7 +1395,7 @@ class CoreTests(unittest.TestCase):
             database = Database(path)
             database.migrate()
             self.assertTrue(database.startup_check()["ok"])
-            self.assertEqual(database.startup_check()["schema_version"], 21)
+            self.assertEqual(database.startup_check()["schema_version"], SCHEMA_VERSION)
             self.assertEqual(database.poll_for_guild(42, "OLDPOLL")["description"], "")
             with database.connect() as db:
                 tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
@@ -1769,7 +1930,7 @@ class CoreTests(unittest.TestCase):
         from grid_a1.guides import ACCESS_LABELS, catalog, render_guide
 
         rendered = "\n".join(
-            value for _, value in render_guide(catalog(runtime_bot.tree), list(ACCESS_LABELS))
+            value for _, value in render_guide(catalog(runtime_bot.tree), list(ACCESS_LABELS), max_total=6000)
         )
         for stale in ("`/staff`", "whitelist domains", "bypass roles", "allowed link roles", "/setup staff"):
             self.assertNotIn(stale, rendered)
@@ -1813,6 +1974,240 @@ class CoreTests(unittest.TestCase):
             self.assertNotIn("[more lines in file", source.lower(), str(path))
             self.assertNotIn("todo: implement", source.lower(), str(path))
             self.assertIsNotNone(tree)
+
+
+    def test_ticket_channel_names_show_priority_and_stay_bounded(self):
+        from grid_a1.utils import PRIORITY_MARKERS, sanitize_channel_name, suggestion_custom_id, ticket_channel_name
+
+        self.assertEqual(sanitize_channel_name("EU", "Bug / Links", "A--User", "ABC123"), "eu-bug-links-a-user-abc123")
+        self.assertEqual(sanitize_channel_name(""), "ticket")
+        self.assertEqual(sanitize_channel_name("EU", "General", limit=6), "eu-gen")
+
+        urgent = ticket_channel_name("reimburse", "Olly Bat", "A1B2C3", "urgent")
+        self.assertTrue(urgent.startswith("🔴-"))
+        self.assertIn("reimburse-olly-bat-a1b2c3", urgent)
+        self.assertLessEqual(len(urgent), 95)
+        self.assertTrue(ticket_channel_name("general", "player", "ID1").startswith(f"{PRIORITY_MARKERS['normal']}-"))
+        self.assertTrue(ticket_channel_name("general", "player", "ID1", "not-a-priority").startswith("🔵-"))
+        self.assertEqual(sorted(PRIORITY_MARKERS), ["high", "low", "normal", "urgent"])
+
+        self.assertEqual(suggestion_custom_id("up", "AB12"), "grid-a1:suggestion:AB12:up")
+        self.assertEqual(suggestion_custom_id("down", "x!" * 40), "grid-a1:suggestion:" + "x" * 32 + ":down")
+        self.assertLessEqual(len(suggestion_custom_id("down", "Z" * 90)), 100)
+        for broken in ("sideways", ""):
+            with self.assertRaises(ValueError):
+                suggestion_custom_id(broken, "AB12")
+        with self.assertRaises(ValueError):
+            suggestion_custom_id("up", "")
+
+    def test_reimburse_form_collects_and_formats_the_four_answers(self):
+        from grid_a1.tickets import REIMBURSE_PROMPTS, ReimburseModal, reimbursement_details
+
+        self.assertEqual([label for label, _, _ in REIMBURSE_PROMPTS], ["Gamertag", "Clan Name", "Grid Location", "What Happened"])
+
+        calls = []
+
+        class FakeService:
+            async def create(self, interaction, issue, label, region, details):
+                calls.append((issue, label, region, details))
+
+        modal = ReimburseModal(FakeService())
+        self.assertEqual([item.label for item in modal.children], ["Gamertag", "Clan Name", "Grid Location", "What Happened"])
+        self.assertEqual([item.required for item in modal.children], [True, False, True, True])
+        self.assertEqual(modal.children[-1].style, discord.TextStyle.paragraph)
+        self.assertLessEqual(modal.children[-1].max_length, 1024)
+
+        details = reimbursement_details({"Gamertag": "  Olly  ", "Grid Location": "Grid A1", "What Happened": "Lost my base"})
+        self.assertIn("Gamertag: Olly", details)
+        self.assertIn("Clan Name: Not provided", details)
+        self.assertTrue(details.endswith("What Happened: Lost my base"))
+
+        class FakeInteraction:
+            def __init__(self):
+                self.user = SimpleNamespace(id=77, name="olly")
+
+        async def submit():
+            for item, value in zip(modal.children, ["Olly", "", "Grid A1", "Lost my base"]):
+                item._value = value
+            await modal.on_submit(FakeInteraction())
+
+        asyncio.run(submit())
+        self.assertEqual(len(calls), 1)
+        issue, label, region, submitted = calls[0]
+        self.assertEqual((issue, label, region), ("reimburse", "Reimbursement", "EU"))
+        self.assertIn("Gamertag: Olly", submitted)
+        self.assertIn("Clan Name: Not provided", submitted)
+
+    def test_reimburse_command_is_public_and_opens_the_form(self):
+        import grid_a1.bot as bot_module
+        from grid_a1.guides import ACCESS_LABELS, COMMAND_ACCESS, catalog, render_guide
+
+        command = bot_module.bot.tree.get_command("reimburse")
+        self.assertIsNotNone(command)
+        self.assertTrue(command.description.startswith("🧾"))
+        self.assertEqual(COMMAND_ACCESS["reimburse"], "everyone")
+        self.assertIsNotNone(bot_module.ReimburseModal)
+
+        entries = catalog(bot_module.bot.tree)
+        rendered = "\n".join(value for _, value in render_guide(entries, list(ACCESS_LABELS), max_total=6000))
+        self.assertIn("/reimburse", rendered)
+
+    def test_suggestions_store_votes_and_toggle_cleanly(self):
+        from grid_a1.suggestions import SuggestionService, new_suggestion_id, suggestion_embed, suggestion_line
+
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(Path(directory) / "manager.sqlite3")
+            database.migrate()
+            service = SuggestionService(database)
+
+            self.assertEqual(len(new_suggestion_id()), 6)
+            with self.assertRaises(ValueError):
+                database.create_suggestion(suggestion_id="SHORT", guild_id=1, author_id=2, body="hi", created_at="now")
+            with self.assertRaises(ValueError):
+                database.create_suggestion(suggestion_id="LONG", guild_id=1, author_id=2, body="x" * 1001, created_at="now")
+
+            row = service.create(1, 2, "  Add   a   replay   night  ")
+            self.assertEqual(row["body"], "Add a replay night")
+            self.assertIsNone(database.suggestion(99, row["suggestion_id"]))
+            self.assertEqual([item["suggestion_id"] for item in service.listing(1)], [row["suggestion_id"]])
+
+            self.assertEqual(database.record_suggestion_vote(row["suggestion_id"], 2, 1, "t1"), 1)
+            self.assertEqual(database.record_suggestion_vote(row["suggestion_id"], 3, 1, "t1"), 1)
+            self.assertEqual(database.suggestion_votes(row["suggestion_id"]), {"up": 2, "down": 0})
+            self.assertEqual(database.record_suggestion_vote(row["suggestion_id"], 2, 1, "t2"), 0)
+            self.assertEqual(database.suggestion_votes(row["suggestion_id"]), {"up": 1, "down": 0})
+            self.assertEqual(database.record_suggestion_vote(row["suggestion_id"], 2, -1, "t3"), -1)
+            self.assertEqual(database.suggestion_votes(row["suggestion_id"]), {"up": 1, "down": 1})
+            self.assertEqual(database.suggestion_vote_of(row["suggestion_id"], 2), -1)
+            self.assertEqual(database.suggestion_vote_of(row["suggestion_id"], 4), 0)
+            with self.assertRaises(ValueError):
+                database.record_suggestion_vote(row["suggestion_id"], 2, 5, "t4")
+
+            totals = database.suggestion_votes_many([row["suggestion_id"], "MISSING"])
+            self.assertEqual(totals[row["suggestion_id"]], {"up": 1, "down": 1})
+            self.assertEqual(totals["MISSING"], {"up": 0, "down": 0})
+            self.assertEqual(database.suggestion_votes_many([]), {})
+
+            self.assertEqual(database.published_suggestions_all(), [])
+            self.assertTrue(database.attach_suggestion_message(row["suggestion_id"], 55, 66))
+            self.assertFalse(database.attach_suggestion_message("NOPE", 55, 66))
+            published = database.published_suggestions_all()
+            self.assertEqual([item["suggestion_id"] for item in published], [row["suggestion_id"]])
+            self.assertEqual(published[0]["message_id"], 66)
+
+            panel = suggestion_embed(row, {"up": 3, "down": 1}, viewer_vote=1)
+            values = "\n".join(field.value for field in panel.fields)
+            self.assertIn("**3**", values)
+            self.assertIn("<@2>", values)
+            self.assertIn("75% of 4", values)
+            self.assertIn("👍 yes", values)
+            self.assertIn("vote back", (panel.footer.text or "").lower())
+            self.assertIn("No votes yet", suggestion_embed(row, {}) .fields[5].value)
+            self.assertIn(row["suggestion_id"], suggestion_line(row, {"up": 1, "down": 0}))
+
+    def test_suggestion_commands_and_vote_view_are_wired(self):
+        import grid_a1.bot as bot_module
+        from grid_a1.guides import ACCESS_LABELS, COMMAND_ACCESS, catalog, render_guide
+        from grid_a1.suggestions import SuggestionModal, SuggestionVoteView
+
+        group = bot_module.bot.tree.get_command("suggestion")
+        self.assertIsNotNone(group)
+        self.assertEqual({command.name for command in group.commands}, {"send", "list", "config"})
+        self.assertIsNotNone(bot_module.bot.suggestions)
+        self.assertEqual(COMMAND_ACCESS["suggestion send"], "everyone")
+        self.assertEqual(COMMAND_ACCESS["suggestion config"], "admin")
+
+        modal = SuggestionModal(bot_module.bot.suggestions)
+        self.assertEqual(len(modal.children), 1)
+        self.assertEqual(modal.children[0].max_length, 1000)
+        self.assertEqual(modal.children[0].style, discord.TextStyle.paragraph)
+
+        view = SuggestionVoteView(bot_module.bot.suggestions, "AB12CD")
+        self.assertEqual({item.custom_id for item in view.children}, {"grid-a1:suggestion:AB12CD:up", "grid-a1:suggestion:AB12CD:down"})
+
+        entries = catalog(bot_module.bot.tree)
+        rendered = "\n".join(value for _, value in render_guide(entries, list(ACCESS_LABELS), max_total=6000))
+        for command in ("/suggestion send", "/suggestion list", "/suggestion config"):
+            self.assertIn(command, rendered)
+
+    def test_suggestion_vote_view_counts_toggles_and_reports(self):
+        from grid_a1.suggestions import SuggestionService, SuggestionVoteView
+
+        class Recorder:
+            def __init__(self):
+                self.calls = []
+
+            async def __call__(self, *args, **kwargs):
+                self.calls.append((args, kwargs))
+
+        class FakeInteraction:
+            def __init__(self, user_id, guild_id=3):
+                self.guild = SimpleNamespace(id=guild_id)
+                self.user = SimpleNamespace(id=user_id, name=f"member-{user_id}")
+                self.replied = Recorder()
+                self.edited = Recorder()
+                self.response = SimpleNamespace(send_message=self.replied, edit_message=self.edited)
+
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(Path(directory) / "manager.sqlite3")
+            database.migrate()
+            service = SuggestionService(database)
+            row = service.create(3, 900, "Add a weekly replay night")
+            view = SuggestionVoteView(service, row["suggestion_id"])
+
+            first = FakeInteraction(900)
+            asyncio.run(view._record(first, 1))
+            self.assertEqual(database.suggestion_votes(row["suggestion_id"]), {"up": 1, "down": 0})
+            embed_items = first.edited.calls[0][1]
+            self.assertIn("**1**", "\n".join(field.value for field in embed_items["embed"].fields))
+
+            second = FakeInteraction(900)
+            asyncio.run(view._record(second, 1))
+            self.assertEqual(database.suggestion_votes(row["suggestion_id"]), {"up": 0, "down": 0})
+            self.assertIn("vote was removed", second.edited.calls[0][1]["embed"].description)
+
+            third = FakeInteraction(901)
+            asyncio.run(view._record(third, -1))
+            self.assertEqual(database.suggestion_votes(row["suggestion_id"]), {"up": 0, "down": 1})
+
+            outsider = FakeInteraction(902, guild_id=77)
+            asyncio.run(view._record(outsider, 1))
+            self.assertIn("no longer available", outsider.replied.calls[0][0][0])
+
+    def test_suggestion_publish_requires_a_configured_channel(self):
+        from grid_a1.suggestions import SuggestionService
+
+        class Recorder:
+            def __init__(self):
+                self.calls = []
+
+            async def __call__(self, *args, **kwargs):
+                self.calls.append((args, kwargs))
+
+        class FakeDatabase:
+            def __init__(self, config):
+                self._config = config
+
+            def config(self, guild_id):
+                return self._config
+
+        class FakeInteraction:
+            def __init__(self, guild_id=3):
+                self.guild = SimpleNamespace(id=guild_id)
+                self.user = SimpleNamespace(id=5, name="member")
+                self.sent = Recorder()
+                self.response = SimpleNamespace(send_message=self.sent, defer=Recorder())
+
+        service = SuggestionService(FakeDatabase(None))
+        first = FakeInteraction()
+        asyncio.run(service.publish(first, "Add a shop"))
+        self.assertIn("No suggestion channel is set", first.sent.calls[0][0][0])
+
+        service = SuggestionService(FakeDatabase({"suggestion_channel": 4242}))
+        second = FakeInteraction()
+        second.guild = SimpleNamespace(id=3, get_channel=lambda channel_id: None)
+        asyncio.run(service.publish(second, "Add a shop"))
+        self.assertIn("suggestion channel is missing", second.sent.calls[0][0][0].lower())
 
 
 if __name__ == "__main__":
