@@ -3,6 +3,7 @@ from __future__ import annotations
 import discord
 
 from .database import Database
+from .stats import MONTH_WINDOW_DAYS, RECENT_WINDOW_DAYS, TicketStats, format_duration
 from .utils import utcnow
 
 NEON_PURPLE = discord.Colour.from_rgb(177, 77, 255)
@@ -63,6 +64,60 @@ def ticket_embed(issue: str, region: str, details: str, status: str = "🟢", in
     result.add_field(name="📝 Initial report", value=discord.utils.escape_markdown(details)[:1024], inline=False)
     result.add_field(name="🕒 Activity", value=(f"Active • **{inactive_for}**" if status == "🟢" and inactive_for == "0m" else f"Inactive for **{inactive_for}**"), inline=True)
     result.set_footer(text="Please keep replies in this channel • Times shown in UTC")
+    return result
+
+
+def ticket_stats_embed(guild: discord.Guild, stats: TicketStats) -> discord.Embed:
+    """Render one guild's ticket workload as a staff-facing statistics panel."""
+    server = getattr(guild, "name", "this server")
+    result = embed(
+        f"📊 {server} • Support statistics",
+        "Ticket workload and response times read straight from the ticket database. All times are UTC.",
+        NEON_PURPLE,
+    )
+    result.add_field(
+        name="🎫 Open tickets",
+        value=(
+            f"Queue: **{stats.open_total}**\n"
+            f"🙋 Unclaimed: **{stats.unclaimed}**\n"
+            f"✅ Claimed: **{stats.claimed}**\n"
+            f"🔒 Closure requested: **{stats.close_requested}**"
+        ),
+        inline=True,
+    )
+    result.add_field(
+        name="📦 Closed tickets",
+        value=(
+            f"Last {RECENT_WINDOW_DAYS} days: **{stats.closed_recent}**\n"
+            f"Last {MONTH_WINDOW_DAYS} days: **{stats.closed_month}**"
+        ),
+        inline=True,
+    )
+    result.add_field(
+        name="⏱️ Response times",
+        value=(
+            f"First staff claim: **{format_duration(stats.average_claim_minutes)}**\n"
+            f"Ticket closure: **{format_duration(stats.average_close_minutes)}**"
+        ),
+        inline=True,
+    )
+    result.add_field(
+        name="🌍 Open by region",
+        value=(
+            "\n".join(f"{region}: **{count}**" for region, count in stats.regions)
+            or "No open tickets right now."
+        ),
+        inline=True,
+    )
+    result.add_field(
+        name="🥇 Most claims",
+        value=(
+            "\n".join(f"<@{staff_id}> — **{count}**" for staff_id, count in stats.top_claimers)
+            or "No claims recorded yet."
+        ),
+        inline=True,
+    )
+    result.set_footer(text="Staff only • Use /ticket stats to refresh")
     return result
 
 
