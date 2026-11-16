@@ -7,6 +7,7 @@ small enough to read and review on its own.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import tempfile
 import unittest
 from pathlib import Path
@@ -89,7 +90,7 @@ class SpinBackFeatureTests(unittest.TestCase):
 
         command = bot_module.bot.tree.get_command("reimburse")
         self.assertIsNotNone(command)
-        self.assertTrue(command.description.startswith("🧾"))
+        self.assertEqual(command.description, "Ask staff for reimbursement of lost items or progress")
         self.assertEqual(COMMAND_ACCESS["reimburse"], "everyone")
         self.assertIsNotNone(bot_module.ReimburseModal)
 
@@ -643,6 +644,109 @@ class SpinBackFeatureTests(unittest.TestCase):
                 plain.footer.text,
                 f"🏓 Support - Other Server • {utcnow().year}",
             )
+
+    def test_new_utility_commands_are_registered_with_plain_descriptions(self):
+        import grid_a1.bot as bot_module
+        from grid_a1 import guides
+
+        tree = bot_module.bot.tree
+        info = tree.get_command("info")
+        self.assertEqual(sorted(command.name for command in info.commands), ["bot", "server", "user"])
+        for name in ("avatar", "slowmode", "modstats"):
+            self.assertIsNotNone(tree.get_command(name), name)
+
+        entries = {entry.path: entry for entry in guides.catalog(tree)}
+        for command_path in ("info user", "info bot", "avatar", "slowmode", "modstats"):
+            self.assertIn(command_path, entries)
+            self.assertTrue(entries[command_path].description, command_path)
+            self.assertFalse(
+                any(ord(character) > 0x2100 for character in entries[command_path].description),
+                command_path,
+            )
+        rendered = "\n".join(
+            value
+            for _, value in guides.render_guide(
+                guides.catalog(tree),
+                list(guides.ACCESS_LABELS),
+                max_total=8000,
+            )
+        )
+        for command_path in ("/info user", "/info bot", "/avatar", "/slowmode", "/modstats"):
+            self.assertIn(command_path, rendered)
+
+    def test_staff_only_commands_refuse_members_without_a_configured_role(self):
+        import grid_a1.bot as bot_module
+        from discord import app_commands
+
+        for name in ("slowmode", "modstats"):
+            command = bot_module.bot.tree.get_command(name)
+            self.assertTrue(command.checks, name)
+            self.assertIn("staff_member", inspect.getsource(command.checks[0]))
+
+        class FakeMember:
+            def __init__(self):
+                self.id = 4242
+                self.roles = ()
+                self.guild = SimpleNamespace(id=77, owner_id=1)
+
+        class FakeInteraction:
+            def __init__(self):
+                self.guild = SimpleNamespace(id=77, owner_id=1)
+                self.user = FakeMember()
+
+        command = bot_module.bot.tree.get_command("slowmode")
+        with self.assertRaises(app_commands.CheckFailure):
+            asyncio.run(command.checks[0](FakeInteraction()))
+
+    def test_moderation_activity_summary_counts_actions_and_moderators(self):
+        import grid_a1.bot as bot_module
+        from datetime import timedelta
+
+        from grid_a1.utils import utcnow
+
+        class FakeResponse:
+            def __init__(self):
+                self.embed = None
+                self.ephemeral = None
+
+            async def send_message(self, embed=None, ephemeral=False, **kwargs):
+                self.embed = embed
+                self.ephemeral = ephemeral
+
+        class FakeInteraction:
+            def __init__(self):
+                self.guild = SimpleNamespace(id=77)
+                self.user = SimpleNamespace(id=9001, __str__=lambda self: "moderator")
+                self.response = FakeResponse()
+
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(Path(directory) / "manager.sqlite3")
+            database.migrate()
+            database.audit(77, None, 9001, "kick", '{"member=5"}')
+            database.audit(77, None, 9001, "warn", '{"member=6"}')
+            database.audit(77, None, 9002, "warn", '{"member=7"}')
+            database.audit(77, None, 9001, "slowmode", "seconds=5")
+
+            since = (utcnow() - timedelta(days=7)).isoformat()
+            rows = database.moderation_activity(77, since)
+            self.assertEqual([row["action"] for row in rows], ["warn", "warn", "kick"])
+            self.assertEqual(database.moderation_activity(77, utcnow().isoformat()), [])
+
+            command = bot_module.bot.tree.get_command("modstats")
+            interaction = FakeInteraction()
+            original = bot_module.bot.database
+            bot_module.bot.database = database
+            try:
+                asyncio.run(command.callback(interaction, 7))
+            finally:
+                bot_module.bot.database = original
+
+            card = interaction.response.embed
+            self.assertEqual(card.description, "Recorded actions in the last 7 day(s): 3")
+            fields = {field.name: field.value for field in card.fields}
+            self.assertEqual(fields["By action"], "warn: 2\nkick: 1")
+            self.assertIn("<@9001>: 2", fields["Most active moderators"])
+            self.assertIn("Newest record", fields)
 
     def test_every_shipped_file_uses_the_spinback_brand(self):
         stale = ("Grid A1", "grid-a1-manager")
