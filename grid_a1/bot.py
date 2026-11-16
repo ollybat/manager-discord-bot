@@ -25,7 +25,7 @@ from .polls import (
 )
 from .stats import collect as collect_ticket_stats
 from .utils import anti_link_config_updates, is_http_url, is_ticket, parse_ticket_topic, staff_member, detected_external_links, normalize_domain, safe_json_list, utcnow
-from .views import DashboardView, OwnerInactivityView, TicketControls, TicketPanel, VerifyPanel
+from .views import DashboardView, OwnerInactivityView, TicketControls, TicketFeedbackView, TicketPanel, VerifyPanel
 from .welcomer import missing, send_welcome, welcome_embed
 from .commands import OwnerConfigurationError, OwnerOnlyError, register_commands
 settings = Settings.from_env(); configure_logging(settings.log_level)
@@ -55,6 +55,8 @@ class GridA1Bot(commands.Bot):
         self.add_view(VerifyPanel(self.database))
         for row in self.database.open_tickets_all():
             self.add_view(OwnerInactivityView(self.tickets, row["ticket_id"]))
+        for ticket_id in self.database.feedback_pending():
+            self.add_view(TicketFeedbackView(self.tickets, ticket_id))
         for poll in self.database.polls_with_messages_all():
             options = self.database.poll_options(poll["poll_id"])
             if len(options) < 2:
