@@ -4,11 +4,11 @@ This repository is a standalone Python Discord bot. `bot.py` is the supported en
 
 ## Runtime flow
 
-Startup loads `.env`, validates settings, configures logging, runs SQLite migrations, restores persistent ticket/poll/giveaway views, starts panel/inactivity/poll-expiry/giveaway-expiry loops, publishes the global application command tree, and clears stale guild command copies after the Gateway is ready. The bot is Discord-only and has no unrelated network transport layer. SQLite schema version is 19; migrations are additive and preserve DATABASE_PATH and existing records.
+Startup loads `.env`, validates settings, configures logging, runs SQLite migrations, restores persistent ticket/poll/giveaway views, starts panel/inactivity/poll-expiry/giveaway-expiry loops, publishes the global application command tree, and clears stale guild command copies after the Gateway is ready. The bot is Discord-only and has no unrelated network transport layer. SQLite schema version is 19; migrations are additive and preserve DATABASE_PATH and existing records. Closing a ticket uploads a plain-text transcript (`<channel>-transcript.txt`) to the transcript channel before the channel is deleted.
 
 ## Modules
 
-- `grid_a1/bot.py`: bot composition, commands, lifecycle, sync safety, event/error handling, anti-links, and loops.
+- `grid_a1/bot.py`: bot composition, commands, lifecycle, sync safety, event/error handling, anti-links, and loops. `/ticket stats` renders the workload panel and `/ticket transcript` writes an on-demand `.txt` transcript without closing the ticket.
 - `grid_a1/config.py`: environment settings, logging, and Railway volume/path persistence warnings.
 - `grid_a1/database.py`: SQLite schema repair/migration, ticket/poll/giveaway persistence, indexes, backup, and audit log.
 - `grid_a1/postgres.py`: optional operator-only PostgreSQL connection/schema sketch; not imported by the bot and not a data migration tool.
@@ -18,8 +18,10 @@ Startup loads `.env`, validates settings, configures logging, runs SQLite migrat
 - `grid_a1/tickets.py`: ticket creation, permissions, defer/followup closure, transcripts, and archive.
 - `grid_a1/polls.py`: poll dashboard/metadata modal, persistent poll creation, result embeds, vote controls, and message refresh service.
 - `grid_a1/giveaways.py`: private giveaway setup, persistent entry buttons, timer-based winner draws, and active giveaway dashboard.
+- `grid_a1/stats.py`: read-only ticket workload statistics (queue split, closed-ticket windows, first-claim and closure averages, per-region load, claim leaderboard).
 - `grid_a1/utils.py`: topic parsing, staff checks, link normalization, and safe JSON parsing.
-- `grid_a1/embeds.py`, `welcomer.py`, `transcript.py`: user-facing presentation and welcome/transcript rendering.
+- `grid_a1/embeds.py`, `welcomer.py`: user-facing presentation and welcome rendering.
+- `grid_a1/transcript.py`: plain-text ticket transcript renderer (60-column bordered header, indented message blocks, attachment links, no image downloads).
 
 ## Configuration contract
 

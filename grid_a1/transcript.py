@@ -1,70 +1,154 @@
+"""Render a ticket channel's history as the plain-text archive staff keep."""
+
 from __future__ import annotations
-import html
-import base64
+
+from collections.abc import Iterable
 from datetime import datetime, timezone
+from typing import Any
+
+BORDER = "═" * 60
+DIVIDER = "─" * 60
+LABEL_WIDTH = 13
+INDENT = "    "
+BOT_MARKER = " [BOT]"
+UNKNOWN = "Unknown"
+
+RECORD_FIELDS = ("closed_at", "claimed_by")
+
+
+def single_line(value: Any) -> str:
+    """Collapse whitespace so a name or URL cannot break the label column."""
+    return " ".join(str(value).split())
+
+
+def format_timestamp(value: Any) -> str:
+    """Format a UTC time as `10/24/2026, 6:23:54 AM` on every platform."""
+    if isinstance(value, str):
+        try:
+            value = datetime.fromisoformat(value)
+        except ValueError:
+            return UNKNOWN
+    if not isinstance(value, datetime):
+        return UNKNOWN
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    moment = value.astimezone(timezone.utc)
+    hour = moment.strftime("%I").lstrip("0") or "12"
+    return f"{moment.month}/{moment.day}/{moment.year}, {hour}:{moment.strftime('%M:%S %p')}"
+
+
+def display_name(user: Any) -> str:
+    """Return the best available name for a Discord user or member."""
+    for attribute in ("display_name", "global_name", "name"):
+        value = getattr(user, attribute, None)
+        if isinstance(value, str) and value.strip():
+            return single_line(value)
+    return UNKNOWN
+
+
+def server_tag(user: Any) -> str:
+    """Return the member's four-character Discord server tag, when they have one."""
+    tag = getattr(getattr(user, "primary_guild", None), "tag", None)
+    return single_line(tag) if isinstance(tag, str) and tag.strip() else ""
+
+
+def author_label(user: Any) -> str:
+    """Name shown in a message header, with the bot marker or the member's server tag."""
+    name = display_name(user)
+    if getattr(user, "bot", False):
+        return f"{name}{BOT_MARKER}"
+    tag = server_tag(user)
+    return f"{name} | {tag}" if tag else name
+
+
+def record_value(record: Any, key: str) -> Any:
+    """Read one column from a sqlite3.Row without assuming the column exists."""
+    if key not in RECORD_FIELDS or record is None:
+        return None
+    try:
+        return record[key]
+    except (IndexError, KeyError, TypeError):
+        return None
+
+
+def _member(guild: Any, user_id: Any) -> Any:
+    """Resolve a stored user ID against the guild, ignoring unusable values."""
+    text = str(user_id or "").strip()
+    if guild is None or not text.isdigit():
+        return None
+    try:
+        return guild.get_member(int(text))
+    except (AttributeError, TypeError, ValueError):
+        return None
+
+
+def _person_name(guild: Any, user_id: Any, fallback: str) -> str:
+    """Name of a stored member ID, or the fallback when they cannot be resolved."""
+    member = _member(guild, user_id)
+    return display_name(member) if member is not None else fallback
+
+
+def _row(label: str, value: str) -> str:
+    """One aligned metadata row in the transcript header."""
+    return f"{label:<{LABEL_WIDTH}}  {value}"
+
+
+def _attachment_lines(message: Any) -> list[str]:
+    """Attachment references, kept as links instead of downloading image bytes."""
+    lines = []
+    for attachment in getattr(message, "attachments", None) or []:
+        filename = single_line(getattr(attachment, "filename", "attachment"))
+        url = single_line(getattr(attachment, "url", ""))
+        lines.append(f"{INDENT}📎 {filename} — {url}" if url else f"{INDENT}📎 {filename}")
+    return lines
+
+
+def _message_lines(message: Any) -> list[str]:
+    """The header line and indented body for one message, followed by a blank line."""
+    created_at = format_timestamp(getattr(message, "created_at", None))
+    lines = [f"[{created_at}] {author_label(getattr(message, 'author', None))}"]
+    body = str(getattr(message, "content", "") or "").strip()
+    if body:
+        lines.extend(f"{INDENT}{line}" for line in body.splitlines())
+    lines.extend(_attachment_lines(message))
+    lines.append("")
+    return lines
+
 
 async def render(
-    messages,
-    channel,
-    data,
-    record=None,
-    *,
-    include_images: bool = True,
-    max_cached_image_bytes: int = 20_000_000,
+    messages: Iterable[Any],
+    channel: Any,
+    data: dict[str, str] | None = None,
+    record: Any = None,
 ) -> str:
-    """Render an HTML transcript with an optional bounded cache of image data."""
-    e = html.escape
-    def dt(value):
-        if isinstance(value, str): value = datetime.fromisoformat(value)
-        return value.astimezone(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')
-    cards = []
-    cached_image_bytes = 0
-    max_cached_image_bytes = max(0, min(int(max_cached_image_bytes), 20_000_000))
-    for m in messages:
-        name = e(getattr(m.author, 'display_name', str(m.author))); initials = e(''.join(p[:1] for p in name.split()[:2]).upper() or '?')
-        body = e(m.content or '(no text)').replace('\n', '<br>')
-        files = ''.join(f'<li><a href="{e(a.url, quote=True)}" target="_blank" rel="noopener">📎 {e(a.filename)}</a><span>{a.size:,} bytes</span></li>' for a in m.attachments)
-        images = ''
-        for a in m.attachments:
-            if include_images and (a.content_type or '').startswith('image/') and a.size <= 5_000_000 and cached_image_bytes + a.size <= max_cached_image_bytes:
-                try:
-                    raw = await a.read()
-                    if len(raw) > 5_000_000 or cached_image_bytes + len(raw) > max_cached_image_bytes:
-                        images += f'<p>Image not embedded: {e(a.filename)} (transcript cache limit reached)</p>'
-                        continue
-                    cached_image_bytes += len(raw)
-                    uri = f'data:{a.content_type};base64,{base64.b64encode(raw).decode()}'
-                    images += f'<figure><img src="{uri}" alt="Attachment: {e(a.filename)}" loading="lazy"><figcaption>{e(a.filename)} (cached in transcript)</figcaption></figure>'
-                except Exception:
-                    images += f'<p>Image unavailable after channel deletion: {e(a.filename)}</p>'
-            elif (a.content_type or '').startswith('image/'):
-                reason = (
-                    "omitted to fit the server's transcript upload limit"
-                    if not include_images
-                    else "5 MB per-image or total transcript image cache limit reached"
-                )
-                images += f'<p>Image not embedded: {e(a.filename)} ({reason}); original attachment link is listed below.</p>'
-        attachment_list = f'<ul class="attachments" aria-label="Attachments">{files}</ul>' if files else ''
-        cards.append(f'<article class="message-card"><div class="avatar" aria-hidden="true">{initials}</div><div class="message-body"><header><strong>{name}</strong><time>{dt(m.created_at)}</time></header><div class="content">{body}</div>{images}{attachment_list}</div></article>')
-    owner = channel.guild.get_member(int(data['owner'])) if data.get('owner','').isdigit() else None
-    closer = channel.guild.get_member(record['closed_by']) if record and record['closed_by'] else None
-    ticket_id = e(data.get("id", str(channel.id)))
-    issue = e(data.get("issue", "Not available"))
-    region = e(data.get("region", "Not available"))
-    opened = dt(channel.created_at)
-    owner_name = e(owner.display_name if owner else "Not available")
-    closed = dt(record["closed_at"]) if record and record["closed_at"] else "Not closed"
-    closer_name = e(closer.display_name if closer else "Not available")
-    summary = (
-        "<dl>"
-        f"<div><dt>Ticket ID</dt><dd><code>{ticket_id}</code></dd></div>"
-        f"<div><dt>Issue</dt><dd>{issue}</dd></div>"
-        f"<div><dt>Region</dt><dd>{region}</dd></div>"
-        f"<div><dt>Opened</dt><dd>{opened}</dd></div>"
-        f"<div><dt>Owner</dt><dd>{owner_name}</dd></div>"
-        f"<div><dt>Closed</dt><dd>{closed}</dd></div>"
-        f"<div><dt>Closer</dt><dd>{closer_name}</dd></div>"
-        "</dl>"
+    """Render the plain-text transcript archived when a ticket closes.
+
+    The layout follows the transcript staff expect: a bordered header of ticket
+    metadata, one indented block per message, then a generated-by footer.
+    Attachment bytes are never read, so the file stays small and closes fast.
+    """
+    message_list = list(messages)
+    guild = getattr(channel, "guild", None)
+    bot_user = getattr(guild, "me", None)
+    topic = data or {}
+    generated_at = datetime.now(timezone.utc)
+    closed_at = record_value(record, "closed_at") or generated_at
+    bot_name = display_name(bot_user) if bot_user is not None else "Grid A1 Manager"
+
+    lines = [BORDER, "  TICKET TRANSCRIPT", BORDER, ""]
+    lines.append(_row("Server:", single_line(getattr(guild, "name", UNKNOWN))))
+    lines.append(_row("Ticket:", "#" + single_line(getattr(channel, "name", "ticket"))))
+    lines.append(_row("Messages:", str(len(message_list))))
+    lines.append(_row("Created:", format_timestamp(getattr(channel, "created_at", None))))
+    lines.append(_row("Closed:", format_timestamp(closed_at)))
+    lines.append(_row("Ticket Owner:", _person_name(guild, topic.get("owner"), UNKNOWN)))
+    lines.append(_row("Claimed By:", _person_name(guild, record_value(record, "claimed_by"), "Not claimed")))
+    lines.extend(["", DIVIDER, ""])
+
+    for message in message_list:
+        lines.extend(_message_lines(message))
+
+    lines.extend(
+        ["", DIVIDER, f"Generated by {bot_name} • {format_timestamp(generated_at)}", BORDER]
     )
-    css='body{margin:0;background:#e9eef5;color:#172033;font:18px/1.6 system-ui,sans-serif}main{max-width:1000px;margin:auto;padding:2rem 1rem}.hero{background:#12345b;color:#fff;padding:2rem;border-radius:16px}.hero .subtitle{color:#dbeafe}.eyebrow{letter-spacing:.12em;font-weight:800}.notice{background:#eaf3ff;color:#172033;padding:1rem;border-radius:10px}h1{font-size:clamp(2rem,5vw,3rem);line-height:1.1}.subtitle,dt,time,footer,.message-count{color:#536176}.summary,.message-card{background:#fff;border:1px solid #c8d1df;border-radius:12px;box-shadow:0 2px 8px #17203318}.summary{padding:1rem 1.25rem;margin:1.5rem 0}dl{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:.8rem}dt{font-size:.8rem;font-weight:700;text-transform:uppercase}dd{margin:0;font-weight:650}.message-card{display:flex;gap:1rem;padding:1rem;margin:1rem 0;border-inline-start:6px solid #124b91;break-inside:avoid}.avatar{flex:0 0 3rem;height:3rem;border-radius:50%;display:grid;place-items:center;background:#dbe9fb;color:#124b91;font-weight:800}.message-body{min-width:0;flex:1}.message-body header{display:flex;gap:1rem;flex-wrap:wrap}.content{overflow-wrap:anywhere}.attachments{padding:.5rem .8rem;background:#f4f7fb;border-radius:8px;list-style:none}.attachments li{display:flex;justify-content:space-between;gap:1rem}.attachments span{color:#536176;font-size:.85rem}img{max-width:100%;border:1px solid #c8d1df;border-radius:8px}a{color:#124b91;font-weight:650}@media print{body{background:#fff;font-size:12pt}main{max-width:none;padding:0}.summary,.message-card{box-shadow:none}.message-card{page-break-inside:avoid}}'
-    return f'<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Grid A1 ticket transcript</title><style>{css}</style></head><body><main><header class="hero"><p class="eyebrow">GRID A1 • MANAGER</p><h1>Ticket transcript</h1><p class="subtitle">A clear, readable support record • All times shown in UTC</p><p class="notice"><strong>How to read this:</strong> Each card is one message. Attachments and images appear directly below the message that included them.</p></header><section class="summary" aria-labelledby="summary-title"><h2 id="summary-title">Ticket summary</h2>{summary}</section><section aria-labelledby="messages-title"><h2 id="messages-title">Messages <span class="message-count">({len(messages)})</span></h2>{"".join(cards) or "<p>No messages were recorded.</p>"}</section><footer>Generated from the ticket channel. Text, filenames, and URLs are escaped for safe display.</footer></main></body></html>'
+    return "\n".join(lines) + "\n"

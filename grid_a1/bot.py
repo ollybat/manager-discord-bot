@@ -1,4 +1,5 @@
 from __future__ import annotations
+import io
 import logging
 import time
 import hashlib
@@ -8,7 +9,7 @@ from discord import app_commands
 from discord.ext import commands, tasks
 from .config import Settings, configure_logging, validate_runtime
 from .database import Database
-from .embeds import embed, support_panel, inactivity_indicator
+from .embeds import embed, support_panel, inactivity_indicator, ticket_stats_embed
 from .tickets import TicketService, claim
 from .giveaways import GiveawayDashboardView, GiveawayEntryView, GiveawayService
 from .polls import (
@@ -22,6 +23,7 @@ from .polls import (
     poll_dashboard_embed,
     poll_embed,
 )
+from .stats import collect as collect_ticket_stats
 from .utils import anti_link_config_updates, is_http_url, is_ticket, parse_ticket_topic, staff_member, detected_external_links, normalize_domain, safe_json_list, utcnow
 from .views import DashboardView, OwnerInactivityView, TicketControls, TicketPanel, VerifyPanel
 from .welcomer import missing, send_welcome, welcome_embed
@@ -708,6 +710,23 @@ async def ticket_requestclose(i,reason:str):
 @staff()
 @app_commands.describe(reason="Resolution or closure reason saved with the transcript")
 async def ticket_close(i,reason:str="No reason provided"): await bot.tickets.close(i,reason)
+@ticket_group.command(name="stats", description="📊 Show ticket workload, response times, and top claimers")
+@staff()
+async def ticket_stats(i: discord.Interaction):
+    g = guild(i)
+    if g is None: return await i.response.send_message("❌ Statistics are only available inside a server.", ephemeral=True)
+    await i.response.defer(ephemeral=True)
+    await i.followup.send(embed=ticket_stats_embed(g, collect_ticket_stats(bot.database, g.id)), ephemeral=True)
+@ticket_group.command(name="transcript", description="📄 Get a plain-text transcript without closing the ticket")
+@staff()
+async def ticket_transcript(i: discord.Interaction):
+    if not isinstance(i.channel, discord.TextChannel) or not is_ticket(i.channel): return await i.response.send_message("❌ This command only works inside an active ticket.", ephemeral=True)
+    await i.response.defer(ephemeral=True)
+    try: text = await bot.tickets.transcript(i.channel)
+    except discord.DiscordException:
+        log.warning("Could not render an on-demand transcript for channel %s", i.channel.id)
+        return await i.followup.send("❌ I could not read this channel's history. Please retry.", ephemeral=True)
+    await i.followup.send(f"📄 Transcript for {i.channel.mention}. The ticket stays open.", file=discord.File(io.BytesIO(text.encode("utf-8")), filename=f"{i.channel.name}-transcript.txt"), ephemeral=True)
 @giveaway_group.command(
     name="config",
     description="🎛️ Open the private giveaway setup and active list",
