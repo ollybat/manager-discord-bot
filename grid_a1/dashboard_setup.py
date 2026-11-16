@@ -121,12 +121,12 @@ async def _resolve_selected_channel(guild, selected):
 
 
 class _RoleDropdown(discord.ui.RoleSelect):
-    def __init__(self, wizard, key, placeholder, row):
+    def __init__(self, wizard, key, placeholder, row, optional=False):
         self.wizard, self.key = wizard, key
-        super().__init__(placeholder=placeholder, min_values=1, max_values=1, row=row)
+        super().__init__(placeholder=placeholder, min_values=0 if optional else 1, max_values=1, row=row)
 
     async def callback(self, interaction):
-        self.wizard.values[self.key] = self.values[0]
+        self.wizard.values[self.key] = self.values[0] if self.values else None
         await interaction.response.edit_message(embed=self.wizard.progress_embed(), view=self.wizard)
 
 
@@ -481,27 +481,30 @@ class VerificationWizardView(_DashboardWizard):
 
 
 class AnnouncementSettingsWizardView(_DashboardWizard):
+    """Wipe announcement settings: channel, ping role, and automatic posting."""
+
     def __init__(self, dashboard, guild):
         super().__init__(dashboard, guild)
-        channel_id = self.config["wipefeed_channel"] if self.config else None
-        channel = guild.get_channel(int(channel_id)) if channel_id else None
-        if channel: self.values["channel"] = channel
-        self.values["enabled"] = "yes" if self.config and self.config["wipefeed_enabled"] else "no"
-        self.add_item(_ChannelDropdown(self, "channel", "Choose wipefeed announcement channel", [discord.ChannelType.text], 0))
-        self.add_item(_ChoiceDropdown(self, "enabled", "Enable or disable wipefeed", (("Enabled", "yes"), ("Disabled", "no")), self.values["enabled"], 1))
+        self.values["enabled"] = "yes" if self.config and self.config["wipe_announce_enabled"] else "no"
+        self.add_item(_ChannelDropdown(self, "channel", "Choose the wipe announcement channel", [discord.ChannelType.text], 0))
+        self.add_item(_RoleDropdown(self, "role", "Choose an optional role to ping", 1, optional=True))
+        self.add_item(_ChoiceDropdown(self, "enabled", "Post due wipes automatically", (("Enabled", "yes"), ("Disabled", "no")), self.values["enabled"], 2))
 
     def progress_embed(self, message=None):
-        text = "Choose the announcement channel and whether wipefeed should be enabled." if not message else message
-        return super().progress_embed("Announcement settings", text, (("Channel", "channel"), ("Enabled", "enabled")))
+        text = "Choose the announcement channel, an optional ping role, and automatic posting. Schedule wipes with /wipe config." if not message else message
+        return super().progress_embed("Wipe announcements", text, (("Channel", "channel"), ("Ping role", "role"), ("Automatic", "enabled")))
 
     @discord.ui.button(label="Save", style=discord.ButtonStyle.success, emoji="💾", row=4)
     async def save(self, interaction, button):
         if not _text_channel_valid(interaction.guild, self.values.get("channel")) or self.values.get("enabled") not in ("yes", "no"):
             return await interaction.response.edit_message(embed=self.progress_embed("Choose a valid text channel and enabled/disabled."), view=self)
         await interaction.response.defer()
-        self.database.upsert_config(interaction.guild.id, wipefeed_channel=self.values["channel"].id, wipefeed_enabled=int(self.values["enabled"] == "yes"))
+        updates = {"wipe_channel": self.values["channel"].id, "wipe_announce_enabled": int(self.values["enabled"] == "yes")}
+        role = self.values.get("role")
+        updates["wipe_ping_role"] = role.id if role else None
+        self.database.upsert_config(interaction.guild.id, **updates)
         view = self.fresh_dashboard()
-        await self.finish(interaction, embed("✅ Announcement settings saved", "The wipefeed channel and enabled state were saved."), view)
+        await self.finish(interaction, embed("✅ Wipe settings saved", "The announcement channel, ping role, and automatic posting were saved. Build the schedule with /wipe config."), view)
 
     @discord.ui.button(label="Back", style=discord.ButtonStyle.secondary, emoji="↩️", row=4)
     async def cancel(self, interaction, button):
