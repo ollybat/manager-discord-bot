@@ -30,6 +30,7 @@ from .stats import (
     moderation_history_lines,
     note_lines,
     queue_overview,
+    timestamp_marker,
 )
 from .utils import PRIORITIES, PRIORITY_LABELS, anti_link_config_updates, is_http_url, is_ticket, parse_ticket_topic, staff_member, detected_external_links, normalize_domain, safe_json_list, utcnow
 from .views import ConfirmView, DashboardView, OwnerInactivityView, TicketControls, TicketFeedbackView, TicketPanel, VerifyPanel
@@ -513,7 +514,7 @@ async def moderation_kick(i: discord.Interaction, member: discord.Member, reason
     await i.response.defer(ephemeral=True)
     try: await member.kick(reason=f"{reason} • Moderator: {i.user}")
     except discord.Forbidden: return await i.followup.send("❌ Discord denied the kick. Check Kick Members permission and role hierarchy.", ephemeral=True)
-    bot.database.audit(i.guild.id, None, i.user.id, "kick", discord.utils.escape_markdown(reason)[:500])
+    bot.database.audit(i.guild.id, None, i.user.id, "kick", f"member={member.id}; {discord.utils.escape_markdown(reason)[:450]}")
     await i.followup.send(embed=embed("💜 Member kicked", f"✅ {member.mention} was removed from the server.\n\n**Reason:** {discord.utils.escape_markdown(reason)[:500]}"), ephemeral=True)
 
 @bot.tree.command(name="ban", description="🔨 Ban a member from this server with a recorded reason")
@@ -526,7 +527,7 @@ async def moderation_ban(i: discord.Interaction, member: discord.Member, reason:
     await i.response.defer(ephemeral=True)
     try: await member.ban(reason=f"{reason} • Moderator: {i.user}", delete_message_seconds=0)
     except discord.Forbidden: return await i.followup.send("❌ Discord denied the ban. Check Ban Members permission and role hierarchy.", ephemeral=True)
-    bot.database.audit(i.guild.id, None, i.user.id, "ban", discord.utils.escape_markdown(reason)[:500])
+    bot.database.audit(i.guild.id, None, i.user.id, "ban", f"member={member.id}; {discord.utils.escape_markdown(reason)[:450]}")
     await i.followup.send(embed=embed("💜 Member banned", f"🔨 {member.mention} was banned from the server.\n\n**Reason:** {discord.utils.escape_markdown(reason)[:500]}"), ephemeral=True)
 
 @bot.tree.command(name="warn", description="⚠️ Record a moderation warning for a member")
@@ -549,6 +550,74 @@ async def moderation_timeout(i: discord.Interaction, member: discord.Member, min
     except discord.Forbidden: return await i.followup.send("❌ Discord denied the timeout. Check Moderate Members permission and role hierarchy.", ephemeral=True)
     bot.database.audit(i.guild.id, None, i.user.id, "timeout", f"member={member.id}; minutes={minutes}; {discord.utils.escape_markdown(reason)[:400]}")
     await i.followup.send(embed=embed("💜 Member timed out", f"⏳ {member.mention} was timed out for **{minutes} minute(s)**.\n\n**Reason:** {discord.utils.escape_markdown(reason)[:500]}"), ephemeral=True)
+
+@bot.tree.command(name="unban", description="♻️ Lift a ban so the member can rejoin")
+@staff()
+@app_commands.guild_only()
+@app_commands.describe(user_id="Start typing to pick a banned member, or paste their numeric user ID", reason="Why the ban is being lifted")
+async def moderation_unban(i: discord.Interaction, user_id: str, reason: str = "No reason provided"):
+    if not i.guild: return await i.response.send_message("❌ Unbans only work inside a server.", ephemeral=True)
+    try: target_id = int(str(user_id).strip())
+    except (TypeError, ValueError): return await i.response.send_message("❌ Pick a banned member from the list, or paste their numeric user ID.", ephemeral=True)
+    await i.response.defer(ephemeral=True)
+    try: entry = await i.guild.fetch_ban(discord.Object(id=target_id))
+    except discord.NotFound: return await i.followup.send("ℹ️ That user is not banned in this server.", ephemeral=True)
+    except discord.Forbidden: return await i.followup.send("❌ I cannot read the ban list. Check the Ban Members permission.", ephemeral=True)
+    try: await i.guild.unban(entry.user, reason=f"{reason} • Moderator: {i.user}")
+    except discord.Forbidden: return await i.followup.send("❌ Discord denied the unban. Check the Ban Members permission and try again.", ephemeral=True)
+    bot.database.audit(i.guild.id, None, i.user.id, "unban", f"member={target_id}; {discord.utils.escape_markdown(reason)[:450]}")
+    await i.followup.send(embed=embed("💜 Ban lifted", f"♻️ {entry.user} can join the server again.\n\n**Reason:** {discord.utils.escape_markdown(reason)[:500]}"), ephemeral=True)
+
+@moderation_unban.autocomplete("user_id")
+async def moderation_unban_autocomplete(i: discord.Interaction, current: str):
+    """Offer this server's current bans so nobody has to hunt for a raw user ID."""
+    if not i.guild: return []
+    needle = (current or "").strip().lower()
+    choices: list[app_commands.Choice[str]] = []
+    try:
+        async for entry in i.guild.bans(limit=100):
+            user = entry.user
+            label = f"{user} • {user.id}"
+            if needle and needle not in label.lower() and needle not in str(user.id): continue
+            choices.append(app_commands.Choice(name=label[:100], value=str(user.id)))
+            if len(choices) >= 25: break
+    except discord.HTTPException:
+        log.warning("Could not read the ban list to autocomplete an unban")
+        return []
+    return choices
+
+@bot.tree.command(name="untimeout", description="🔓 End a member's timeout early")
+@staff()
+@app_commands.guild_only()
+@app_commands.describe(member="Member whose timeout should end now", reason="Why the timeout is being lifted")
+async def moderation_untimeout(i: discord.Interaction, member: discord.Member, reason: str = "No reason provided"):
+    if not i.guild: return await i.response.send_message("❌ Timeouts only work inside a server.", ephemeral=True)
+    if member.id == i.user.id or member.id == i.guild.owner_id: return await i.response.send_message("❌ You cannot change your own timeout or the server owner's.", ephemeral=True)
+    if not i.guild.me or member.top_role >= i.guild.me.top_role: return await i.response.send_message("❌ My bot role must be above that member.", ephemeral=True)
+    if member.timed_out_until is None: return await i.response.send_message("ℹ️ That member is not timed out right now.", ephemeral=True)
+    await i.response.defer(ephemeral=True)
+    try: await member.timeout(None, reason=f"{reason} • Moderator: {i.user}")
+    except discord.Forbidden: return await i.followup.send("❌ Discord denied the change. Check the Moderate Members permission and role hierarchy.", ephemeral=True)
+    bot.database.audit(i.guild.id, None, i.user.id, "untimeout", f"member={member.id}; {discord.utils.escape_markdown(reason)[:450]}")
+    await i.followup.send(embed=embed("💜 Timeout lifted", f"🔓 {member.mention} can talk again.\n\n**Reason:** {discord.utils.escape_markdown(reason)[:500]}"), ephemeral=True)
+
+@bot.tree.command(name="purge", description="🧹 Bulk-delete recent messages in this channel")
+@app_commands.guild_only()
+@app_commands.checks.has_permissions(manage_messages=True)
+@app_commands.checks.cooldown(3, 60.0, key=lambda i: (i.guild_id, i.user.id))
+@app_commands.describe(count="How many recent messages to delete (1–100)", reason="Why the messages are being removed")
+async def moderation_purge(i: discord.Interaction, count: app_commands.Range[int, 1, 100], reason: str = "No reason provided"):
+    if not isinstance(i.channel, discord.TextChannel): return await i.response.send_message("❌ Purge needs a normal text channel.", ephemeral=True)
+    await i.response.defer(ephemeral=True)
+    try: deleted = await i.channel.purge(limit=int(count), reason=f"{reason} • Moderator: {i.user}")
+    except discord.Forbidden: return await i.followup.send("❌ I need the Manage Messages permission in this channel to delete anything.", ephemeral=True)
+    except discord.HTTPException:
+        log.exception("Bulk delete failed in channel %s", i.channel.id)
+        return await i.followup.send("❌ Discord rejected that bulk delete. Try a smaller count.", ephemeral=True)
+    bot.database.audit(i.guild.id, None, i.user.id, "purge", f"channel={i.channel.id}; deleted={len(deleted)}; {discord.utils.escape_markdown(reason)[:400]}")
+    result = embed("🧹 Messages removed", f"Deleted **{len(deleted)}** message(s) in {i.channel.mention}.\n\n**Reason:** {discord.utils.escape_markdown(reason)[:500]}")
+    result.set_footer(text="Discord skips messages older than 14 days, so fewer may be removed than requested.")
+    await i.followup.send(embed=result, ephemeral=True)
 
 @bot.command(name="lock", help="🔒 Prevent members from sending messages in this channel (staff only).")
 async def prefix_lock(ctx):
@@ -840,6 +909,57 @@ async def ticket_transcript(i: discord.Interaction):
         return await i.followup.send("❌ I could not read this channel's history. Please retry.", ephemeral=True)
     await i.followup.send(f"📄 Transcript for {i.channel.mention}. The ticket stays open.", file=discord.File(io.BytesIO(text.encode("utf-8")), filename=f"{i.channel.name}-transcript.txt"), ephemeral=True)
 @giveaway_group.command(
+    name="list",
+    description="📋 List this server's active giveaways with entry counts",
+)
+@app_commands.guild_only()
+@admin()
+@app_commands.describe(limit="How many giveaways to show (1–25)")
+async def giveaway_list(
+    interaction: discord.Interaction,
+    limit: app_commands.Range[int, 1, 25] = 10,
+) -> None:
+    """Show open giveaways ending soonest first, with entries and winner counts."""
+    guild = interaction.guild
+    if guild is None:
+        return await interaction.response.send_message(
+            "❌ Giveaways are only available inside a server.",
+            ephemeral=True,
+        )
+    rows = sorted(
+        bot.database.active_giveaways(guild.id, limit=int(limit)),
+        key=lambda row: row["ends_at"] or "",
+    )
+    shown: list[str] = []
+    used = 0
+    for row in rows:
+        entries = bot.database.giveaway_entry_count(row["giveaway_id"])
+        ping = f"pings <@&{row['ping_role_id']}>" if row["ping_role_id"] else "no ping"
+        line = (
+            f"🎁 **{discord.utils.escape_markdown(row['reward_type'])[:80]}** • `{row['giveaway_id']}`\n"
+            f"┗ {entries} {'entry' if entries == 1 else 'entries'} • "
+            f"{int(row['winner_count'])} winner(s) • {timestamp_marker(row['ends_at'])} • "
+            f"{ping} • <#{row['channel_id']}>"
+        )
+        if used + len(line) + 1 > 1000:
+            break
+        shown.append(line)
+        used += len(line) + 1
+    listing = embed(
+        f"📋 Active giveaways — {guild.name}",
+        f"**{len(rows)}** open giveaway(s), ending soonest first.",
+    )
+    listing.add_field(
+        name="Giveaways",
+        value="\n".join(shown) or "Nothing is open right now. Start one with /giveaway config.",
+        inline=False,
+    )
+    if len(shown) < len(rows):
+        listing.set_footer(text=f"…and {len(rows) - len(shown)} more not shown. End the soonest ones first.")
+    await interaction.response.send_message(embed=listing, ephemeral=True)
+
+
+@giveaway_group.command(
     name="config",
     description="🎛️ Open the private giveaway setup and active list",
 )
@@ -1127,6 +1247,52 @@ async def poll_create(
         ),
         ephemeral=True,
     )
+
+
+@poll_group.command(
+    name="results",
+    description="📈 Show a poll's current results without ending it",
+)
+@app_commands.guild_only()
+@app_commands.describe(poll_id="Start typing to pick a poll, or paste its ID")
+async def poll_results(
+    interaction: discord.Interaction,
+    poll_id: str,
+) -> None:
+    """Show live standings to the creator or a server manager, without ending the poll."""
+    guild = interaction.guild
+    if guild is None:
+        await interaction.response.send_message(
+            "❌ Polls can only be managed inside a server.",
+            ephemeral=True,
+        )
+        return
+
+    poll = bot.database.poll_for_guild(guild.id, poll_id.strip().upper())
+    if not poll:
+        await interaction.response.send_message(
+            "⚠️ I could not find that poll in this server. Check the poll ID and try again.",
+            ephemeral=True,
+        )
+        return
+    if not _may_manage_poll(interaction, poll):
+        await interaction.response.send_message(
+            "🔒 Only the poll creator or a server manager can see results before the poll ends.",
+            ephemeral=True,
+        )
+        return
+
+    standings = poll_embed(
+        poll,
+        bot.database.poll_options(poll["poll_id"]),
+        bot.database.poll_results(poll["poll_id"]),
+    )
+    if poll["status"] == "open":
+        lead = "📊 Live standings — the poll is still open, so these numbers can still change."
+    else:
+        lead = "🔒 Final results — this poll has ended."
+    standings.description = f"{lead}\n\n{standings.description}"
+    await interaction.response.send_message(embed=standings, ephemeral=True)
 
 
 @poll_group.command(
