@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from .database import Database
-from .utils import DEFAULT_PRIORITY, PRIORITIES, utcnow
+from .utils import DEFAULT_PRIORITY, PRIORITIES, PRIORITY_LABELS, utcnow
 
 RECENT_WINDOW_DAYS = 7
 MONTH_WINDOW_DAYS = 30
@@ -77,6 +78,83 @@ def format_duration(minutes: float | None) -> str:
         return f"{hours}h {remainder}m"
     days, remaining_hours = divmod(hours, 24)
     return f"{days}d {remaining_hours}h"
+
+
+PRIORITY_ORDER = {
+    priority: index for index, priority in enumerate(reversed(PRIORITIES))
+}
+_MEMBER_PREFIX = re.compile(r"^member=\d+;?\s*")
+
+
+def relative_age(timestamp: Any, now: datetime | None = None) -> str:
+    """Human age of a stored UTC timestamp, such as '3h 20m'."""
+    minutes = minutes_between(timestamp, (now or utcnow()).isoformat())
+    return format_duration(minutes) if minutes is not None else "unknown age"
+
+
+def sort_open_queue(rows: Iterable[Any]) -> list[Any]:
+    """Order open tickets by priority (most urgent first) then oldest first."""
+    return sorted(
+        rows,
+        key=lambda row: (
+            PRIORITY_ORDER.get(row_value(row, "priority", DEFAULT_PRIORITY), len(PRIORITIES)),
+            str(row_value(row, "opened_at", "") or ""),
+        ),
+    )
+
+
+def queue_overview(rows: Iterable[Any], limit: int = 15) -> tuple[list[str], int]:
+    """One line per open ticket plus the number that did not fit."""
+    ordered = sort_open_queue(rows)
+    lines: list[str] = []
+    for row in ordered[: max(1, limit)]:
+        priority = row_value(row, "priority", DEFAULT_PRIORITY)
+        claimed = row_value(row, "claimed_by")
+        claimer = f"<@{claimed}>" if claimed else "unclaimed"
+        label = PRIORITY_LABELS.get(priority, str(priority).title())
+        lines.append(
+            f"{label} • <#{row_value(row, 'channel_id')}> • {claimer} • "
+            f"{relative_age(row_value(row, 'opened_at'))} old"
+        )
+    return lines, max(0, len(ordered) - len(lines))
+
+
+def history_detail(metadata: Any, limit: int = 140) -> str:
+    """Trim stored audit metadata into one readable moderation detail."""
+    text = _MEMBER_PREFIX.sub("", str(metadata or "").strip()) or "no details recorded"
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def moderation_history_lines(rows: Iterable[Any], limit: int = 10) -> list[str]:
+    """One line per recorded moderation action, newest first."""
+    lines: list[str] = []
+    for row in list(rows)[: max(1, limit)]:
+        actor = row_value(row, "actor_id")
+        byline = f" by <@{actor}>" if actor else ""
+        lines.append(
+            f"**{row_value(row, 'action', 'action')}** • "
+            f"{relative_age(row_value(row, 'created_at'))} ago{byline} — "
+            f"{history_detail(row_value(row, 'metadata'))}"
+        )
+    return lines
+
+
+def note_lines(rows: Iterable[Any], limit: int = 10) -> list[str]:
+    """Read internal ticket notes out of their stored audit metadata."""
+    lines: list[str] = []
+    for row in list(rows)[: max(1, limit)]:
+        try:
+            payload = json.loads(row_value(row, "metadata", "") or "{}")
+        except (TypeError, ValueError):
+            payload = {}
+        note = str(payload.get("note") or "").strip()
+        if not note:
+            continue
+        lines.append(
+            f"<@{row_value(row, 'actor_id')}> • "
+            f"{relative_age(row_value(row, 'created_at'))} ago — {note}"
+        )
+    return lines
 
 
 def row_value(row: Any, key: str, default: Any = None) -> Any:

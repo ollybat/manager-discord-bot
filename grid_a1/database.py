@@ -7,6 +7,8 @@ from pathlib import Path
 from typing import Any
 from .utils import DEFAULT_PRIORITY, FEEDBACK_SCORES, PRIORITIES, utcnow, safe_json_list
 SCHEMA_VERSION = 21
+NOTE_ACTION = "note"
+MODERATION_ACTIONS = ("kick", "ban", "warn", "timeout")
 class Database:
     def __init__(self, path: Path) -> None:
         self.path = path
@@ -269,6 +271,34 @@ class Database:
                 f"UPDATE tickets SET {assignments} WHERE ticket_id=?",
                 parameters,
             )
+
+    def add_ticket_note(self, ticket_id: str, guild_id: int, actor_id: int, note: str) -> str:
+        """Store an internal staff note on a ticket and return the trimmed text."""
+        text = " ".join(str(note or "").split())[:500]
+        if not text:
+            raise ValueError("a note needs some text")
+        self.audit(guild_id, ticket_id, actor_id, NOTE_ACTION, json.dumps({"note": text}))
+        return text
+
+    def ticket_notes(self, guild_id: int, ticket_id: str, limit: int = 10) -> list[sqlite3.Row]:
+        """Return a ticket's internal notes newest first."""
+        with self.connect() as db:
+            return db.execute(
+                "SELECT actor_id, metadata, created_at FROM audit_log "
+                "WHERE guild_id=? AND ticket_id=? AND action=? ORDER BY id DESC LIMIT ?",
+                (guild_id, ticket_id, NOTE_ACTION, max(1, min(int(limit), 25))),
+            ).fetchall()
+
+    def member_history(self, guild_id: int, member_id: int, limit: int = 10) -> list[sqlite3.Row]:
+        """Return recent moderation actions recorded against one member."""
+        placeholders = ", ".join("?" for _ in MODERATION_ACTIONS)
+        with self.connect() as db:
+            return db.execute(
+                "SELECT actor_id, action, metadata, created_at FROM audit_log "
+                f"WHERE guild_id=? AND action IN ({placeholders}) AND metadata LIKE ? "
+                "ORDER BY id DESC LIMIT ?",
+                (guild_id, *MODERATION_ACTIONS, f"%member={int(member_id)}%", max(1, min(int(limit), 25))),
+            ).fetchall()
 
     def audit(
         self,
