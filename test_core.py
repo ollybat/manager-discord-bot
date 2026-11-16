@@ -340,6 +340,85 @@ class CoreTests(unittest.TestCase):
         self.assertIn("🟠 High", priority_embed("high", actor).title)
         self.assertIn("Priority", priority_embed("weird", actor).title)
 
+    def test_status_endpoint_serves_a_compact_health_document(self):
+        import urllib.error
+        import urllib.request
+        from grid_a1.health import DEFAULT_PORT, HealthServer, health_enabled, resolve_port
+
+        self.assertEqual(resolve_port({}), DEFAULT_PORT)
+        self.assertEqual(resolve_port({"PORT": "1919"}), 1919)
+        self.assertEqual(resolve_port({"PORT": "1919", "HEALTH_PORT": "2020"}), 2020)
+        self.assertEqual(resolve_port({"PORT": "http"}), DEFAULT_PORT)
+        self.assertEqual(resolve_port({"HEALTH_PORT": "70000"}), DEFAULT_PORT)
+        self.assertTrue(health_enabled({}))
+        self.assertFalse(health_enabled({"HEALTH_DISABLED": "TRUE"}))
+
+        server = HealthServer(
+            lambda: {"connected_servers": 2, "uptime_seconds": 15, "schema_version": 21},
+            host="127.0.0.1",
+            port=0,
+        )
+        self.assertTrue(server.start())
+        self.assertTrue(server.running)
+        base = f"http://127.0.0.1:{server.port}"
+        try:
+            with urllib.request.urlopen(f"{base}/health", timeout=5) as response:
+                self.assertEqual(response.status, 200)
+                self.assertEqual(response.headers["Cache-Control"], "no-store")
+                payload = json.loads(response.read().decode("utf-8"))
+            self.assertEqual(payload["status"], "ok")
+            self.assertEqual(payload["connected_servers"], 2)
+            self.assertEqual(payload["schema_version"], 21)
+            with urllib.request.urlopen(f"{base}/", timeout=5) as root_response:
+                self.assertEqual(root_response.status, 200)
+            with self.assertRaises(urllib.error.HTTPError) as missing:
+                urllib.request.urlopen(f"{base}/does-not-exist", timeout=5)
+            self.assertEqual(missing.exception.code, 404)
+            rejected_request = urllib.request.Request(f"{base}/health", data=b"{}", method="POST")
+            with self.assertRaises(urllib.error.HTTPError) as rejected:
+                urllib.request.urlopen(rejected_request, timeout=5)
+            self.assertEqual(rejected.exception.code, 405)
+        finally:
+            server.stop()
+        self.assertFalse(server.running)
+
+    def test_status_endpoint_degrades_when_the_report_fails(self):
+        import urllib.error
+        import urllib.request
+        from grid_a1.health import HealthServer
+
+        def broken():
+            raise RuntimeError("boom")
+
+        server = HealthServer(broken, host="127.0.0.1", port=0)
+        self.assertEqual(
+            server.document(),
+            (503, {"status": "degraded", "detail": "status report unavailable"}),
+        )
+        self.assertTrue(server.start())
+        try:
+            with self.assertRaises(urllib.error.HTTPError) as failure:
+                urllib.request.urlopen(f"http://127.0.0.1:{server.port}/health", timeout=5)
+            self.assertEqual(failure.exception.code, 503)
+            body = json.loads(failure.exception.read().decode("utf-8"))
+            self.assertEqual(body["status"], "degraded")
+        finally:
+            server.stop()
+
+    def test_bot_health_report_keeps_only_coarse_runtime_facts(self):
+        from grid_a1.bot import bot as runtime_bot
+
+        report = runtime_bot.health_report()
+        self.assertEqual(report["status"], "ok")
+        self.assertEqual(report["service"], "grid-a1-manager")
+        self.assertEqual(report["schema_version"], 21)
+        self.assertIsInstance(report["uptime_seconds"], int)
+        self.assertIsInstance(report["connected_servers"], int)
+        self.assertNotIn("token", json.dumps(report).lower())
+        self.assertNotIn("guild_ids", report)
+        runtime_bot.health_server.stop()
+        self.assertFalse(runtime_bot.health_server.running)
+
     def test_feedback_round_trip_replaces_rating_and_audits_it(self):
         from datetime import datetime, timezone
 
