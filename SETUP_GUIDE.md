@@ -18,7 +18,7 @@ The name members see above every message (for example `Spinback | Manager`) is t
 
 ## Publish the rules panel
 
-`/rules post channel: #rules` publishes the rules panel — a cyan container headed "SpinBack Rules ✅" with the welcome text, one line per rule set, and a button inside each line (Discord, Game) that opens that set privately. The starter texts cover Discord conduct and in-game conduct, and `/rules edit section: ...` replaces one set with your own wording; the posted panel refreshes straight away, and `/rules preview` shows it privately first. Buttons keep working after a restart.
+`/rules post channel: #rules` publishes the rules panel — a cyan container headed "SpinBack Rules ✅" with the welcome text, one line per rule set, and a button inside each line (Discord, Game) that opens that set privately. The starter texts cover Discord conduct and in-game conduct, and `/rules edit section: ...` replaces one set with your own wording; the posted panel refreshes straight away, and `/rules preview` shows it privately first. Buttons keep working after a restart. Re-run `/rules post` after updating to replace a panel an older version published, and make sure discord.py is 2.7 or newer (`requirements.txt`).
 
 ## Other commands
 
