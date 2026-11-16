@@ -513,6 +513,14 @@ class Database:
                 (guild_id, max(1, min(int(limit), 25))),
             ).fetchall()
 
+    def guild_polls(self, guild_id: int, limit: int = 25) -> list[sqlite3.Row]:
+        """Return the newest polls in a guild whatever their status, for autocomplete."""
+        with self.connect() as db:
+            return db.execute(
+                "SELECT * FROM polls WHERE guild_id=? ORDER BY created_at DESC LIMIT ?",
+                (guild_id, max(1, min(int(limit), 25))),
+            ).fetchall()
+
     def polls_due(self, now: str) -> list[sqlite3.Row]:
         """Return open polls whose stored end time has passed."""
         with self.connect() as db:
