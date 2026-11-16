@@ -96,7 +96,7 @@ class CoreTests(unittest.TestCase):
             self.assertEqual(database.ticket("ABC123")["issue"], "links")
             self.assertEqual(database.config(42)["owner_role"], 101)
             self.assertEqual(database.config(42)["report_channel"], 9900)
-            self.assertEqual(database.startup_check()["schema_version"], 19)
+            self.assertEqual(database.startup_check()["schema_version"], 20)
 
     def test_ticket_create_rolls_back_when_audit_insert_fails(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -237,6 +237,11 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(stats.top_claimers, ((2, 2), (1, 1)))
         self.assertEqual(format_duration(stats.average_claim_minutes), "17m")
         self.assertEqual(format_duration(None), "—")
+        self.assertEqual((stats.rating_average, stats.rating_count), (None, 0))
+
+        rated = build_stats(tickets, [], now=now, ratings=[5, 4, 4])
+        self.assertEqual(rated.rating_count, 3)
+        self.assertAlmostEqual(rated.rating_average or 0, 4.33, places=2)
 
     def test_ticket_stats_embed_reports_queue_and_empty_states(self):
         from grid_a1.embeds import ticket_stats_embed
@@ -245,9 +250,10 @@ class CoreTests(unittest.TestCase):
         guild = SimpleNamespace(name="Grid A1")
         empty = ticket_stats_embed(guild, TicketStats())
         self.assertIn("Support statistics", empty.title)
-        self.assertEqual(len(empty.fields), 5)
+        self.assertEqual(len(empty.fields), 6)
         self.assertEqual(empty.fields[3].value, "No open tickets right now.")
         self.assertEqual(empty.fields[4].value, "No claims recorded yet.")
+        self.assertEqual(empty.fields[5].value, "No ratings yet. Owners are asked privately after closure.")
 
         busy = ticket_stats_embed(
             guild,
@@ -267,6 +273,11 @@ class CoreTests(unittest.TestCase):
         self.assertIn("Queue: **3**", busy.fields[0].value)
         self.assertIn("1h 35m", busy.fields[2].value)
         self.assertIn("<@77> — **5**", busy.fields[4].value)
+        self.assertIn("No ratings yet", busy.fields[5].value)
+
+        rated = ticket_stats_embed(guild, TicketStats(rating_average=4.5, rating_count=8))
+        self.assertIn("Average: **4.50/5**", rated.fields[5].value)
+        self.assertIn("Ratings: **8**", rated.fields[5].value)
 
     def test_collect_reads_ticket_workload_from_sqlite(self):
         from grid_a1.stats import collect
@@ -281,6 +292,91 @@ class CoreTests(unittest.TestCase):
             self.assertEqual((stats.open_total, stats.claimed, stats.unclaimed), (1, 1, 0))
             self.assertEqual(stats.top_claimers, ((8002, 1),))
             self.assertEqual(stats.regions, (("EU", 1),))
+            self.assertEqual((stats.rating_average, stats.rating_count), (None, 0))
+            database.save_feedback("STAT1", 42, 8001, 5)
+            scored = collect(database, 42)
+            self.assertEqual((scored.rating_average, scored.rating_count), (5.0, 1))
+
+    def test_feedback_round_trip_replaces_rating_and_audits_it(self):
+        from datetime import datetime, timezone
+
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(Path(directory) / "manager.sqlite3")
+            database.migrate()
+            database.create_ticket(ticket_id="FB1", guild_id=42, channel_id=9601, owner_id=8801, issue="general", region="EU", opened_at="2026-11-16T09:00:00+00:00", last_activity_at="2026-11-16T09:00:00+00:00")
+            database.update_ticket("FB1", status="closed", closed_at="2026-11-16T10:00:00+00:00", closed_by=8802)
+            noon = datetime(2026, 11, 16, 12, 0, tzinfo=timezone.utc)
+            self.assertIsNone(database.feedback_for("FB1"))
+            self.assertEqual(database.feedback_pending(now=noon), ["FB1"])
+
+            self.assertEqual(database.save_feedback("FB1", 42, 8801, 5), 5)
+            self.assertEqual(database.save_feedback("FB1", 42, 8801, 4), 4)
+            self.assertEqual(database.feedback_summary(42), (4.0, 1))
+            self.assertEqual(database.feedback_scores(42), [4])
+            self.assertEqual(database.feedback_for("FB1")["score"], 4)
+            self.assertEqual(database.feedback_pending(now=noon), [])
+            self.assertEqual(database.feedback_pending(now=datetime(2026, 11, 30, 12, 0, tzinfo=timezone.utc)), [])
+            self.assertEqual(database.feedback_summary(99), (None, 0))
+            with database.connect() as db:
+                audit = db.execute("SELECT * FROM audit_log WHERE ticket_id='FB1' AND action='feedback_recorded'").fetchall()
+            self.assertEqual(len(audit), 2)
+            with self.assertRaises(ValueError):
+                database.save_feedback("FB1", 42, 8801, 9)
+
+    def test_feedback_view_rejects_strangers_and_records_owner_rating(self):
+        from grid_a1.utils import feedback_custom_id
+        from grid_a1.views import TicketFeedbackView
+
+        self.assertEqual(feedback_custom_id(5, "FB1"), "grid-a1:feedback:FB1:5")
+        self.assertEqual(feedback_custom_id(3, "bad id!/../x"), "grid-a1:feedback:badidx:3")
+        for bad_score, bad_id in ((0, "FB1"), (6, "FB1"), (3, "")):
+            with self.assertRaises(ValueError):
+                feedback_custom_id(bad_score, bad_id)
+
+        class Response:
+            def __init__(self):
+                self.messages = []
+                self.deferred = False
+            def is_done(self):
+                return False
+            async def send_message(self, message, ephemeral=False):
+                self.messages.append(message)
+            async def defer(self, ephemeral=False):
+                self.deferred = True
+
+        class Followup:
+            def __init__(self):
+                self.messages = []
+            async def send(self, message, ephemeral=False):
+                self.messages.append(message)
+
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(Path(directory) / "manager.sqlite3")
+            database.migrate()
+            database.create_ticket(ticket_id="FB1", guild_id=42, channel_id=9601, owner_id=8801, issue="general", region="EU", opened_at="2026-11-16T09:00:00+00:00", last_activity_at="2026-11-16T09:00:00+00:00")
+            database.update_ticket("FB1", status="closed", closed_at="2026-11-16T10:00:00+00:00", closed_by=8802)
+            service = SimpleNamespace(db=database)
+            view = TicketFeedbackView(service, "FB1")
+            self.assertEqual(
+                sorted(item.custom_id for item in view.children),
+                [f"grid-a1:feedback:FB1:{score}" for score in (1, 2, 3, 4, 5)],
+            )
+
+            stranger = SimpleNamespace(user=SimpleNamespace(id=9999), response=Response(), followup=Followup())
+            asyncio.run(view._rate(stranger, 5))
+            self.assertIn("Only the ticket owner", stranger.response.messages[0])
+            self.assertIsNone(database.feedback_for("FB1"))
+
+            owner = SimpleNamespace(user=SimpleNamespace(id=8801), response=Response(), followup=Followup())
+            asyncio.run(view._rate(owner, 5))
+            self.assertTrue(owner.response.deferred)
+            self.assertEqual(database.feedback_for("FB1")["score"], 5)
+            self.assertIn("5/5", owner.followup.messages[0])
+
+            unknown = TicketFeedbackView(service, "NOPE")
+            ghost = SimpleNamespace(user=SimpleNamespace(id=8801), response=Response(), followup=Followup())
+            asyncio.run(unknown._rate(ghost, 3))
+            self.assertIn("Only the ticket owner", ghost.response.messages[0])
 
     def test_ticket_close_request_is_atomic_and_idempotent(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -432,12 +528,13 @@ class CoreTests(unittest.TestCase):
             database = Database(path)
             database.migrate()
             self.assertTrue(database.startup_check()["ok"])
-            self.assertEqual(database.startup_check()["schema_version"], 19)
+            self.assertEqual(database.startup_check()["schema_version"], 20)
             self.assertEqual(database.poll_for_guild(42, "OLDPOLL")["description"], "")
             with database.connect() as db:
                 tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
             self.assertIn("giveaways", tables)
             self.assertIn("giveaway_entries", tables)
+            self.assertIn("ticket_feedback", tables)
 
     def test_poll_storage_configuration_votes_and_removal(self):
         with tempfile.TemporaryDirectory() as directory:
