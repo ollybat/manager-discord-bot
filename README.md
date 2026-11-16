@@ -14,6 +14,10 @@ Server managers can use `/poll config` to open the private Create Poll / View Ac
 
 Server managers can use `/giveaway config` to choose an announcement channel, optionally ping a role, enter a free-text reward, set 1–50 winners, and choose a duration (24 hours by default). Members get one persistent entry per giveaway; the bot draws winners when the timer expires or when staff run `/giveaway end giveaway_id`. Active giveaways and entries survive restarts.
 
+### Support panel
+
+The public ticket panel follows the server's design: the heading **📩 Spinback - Support**, the two guidance lines (with `/help` shown as a code chip), then one bold line per issue type — 📄 Ticket General, 🏠 Ticket Base, 👥 Ticket Clan, 💎 Ticket Shop, ⚠️ Ticket Raid, 🐛 Ticket Bug — each with its description underneath, and the small footer *<logo> Support - <server name> • <year>*. The **Select your issue type ...** menu sits under the panel; picking a type asks for the region and opens the short form. The footer mark is taken from your own server: name an emoji `spinback`, `s`, `support`, or `ticket` and it is used, otherwise the panel falls back to 🏓.
+
 ### Ticket transcripts
 
 Closing a ticket uploads a plain-text transcript to the transcript channel before the channel is deleted: a bordered header with the server, ticket channel, message count, created and closed times, the ticket owner and the staff member who claimed it, then one indented block per message, then a generated-by footer. All times are UTC. Attachments are kept as links, so transcripts stay small and upload quickly.
