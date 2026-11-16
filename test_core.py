@@ -18,13 +18,7 @@ from grid_a1.config import Settings, validate_runtime
 from grid_a1.database import Database
 from grid_a1.embeds import inactivity_indicator
 from grid_a1.utils import anti_link_config_updates, active_ticket_owner, detected_external_links, inactivity_custom_id, is_http_url, safe_json_list, sanitize_channel_name, ticket_status_title
-from grid_a1.commands import (
-    BASE_SERVER_SETUP_HELP,
-    GIVEAWAY_SETUP_HELP,
-    MANAGE_GUILD_HELP,
-    POLL_SETUP_HELP,
-    _validate_image,
-)
+from grid_a1.commands import _validate_image
 from grid_a1.polls import PollVoteView, parse_poll_options, poll_embed
 from grid_a1.views import DashboardView, TicketControls
 
@@ -42,10 +36,17 @@ class CoreTests(unittest.TestCase):
             owner_line = next(line for line in source.splitlines() if line.startswith("OWNER_ID="))
             self.assertEqual(owner_line.partition("=")[2].strip(), "", filename)
 
-    def test_help_sections_fit_discord_embed_field_limits(self):
-        self.assertLessEqual(len(BASE_SERVER_SETUP_HELP + MANAGE_GUILD_HELP), 1024)
-        self.assertLessEqual(len(POLL_SETUP_HELP), 1024)
-        self.assertLessEqual(len(GIVEAWAY_SETUP_HELP), 1024)
+    def test_help_fields_fit_discord_embed_limits_for_the_widest_access(self):
+        from grid_a1.bot import bot as runtime_bot
+        from grid_a1.guides import ACCESS_LABELS, catalog, render_guide
+
+        entries = catalog(runtime_bot.tree)
+        fields = render_guide(entries, list(ACCESS_LABELS))
+        self.assertTrue(fields)
+        for name, value in fields:
+            self.assertLessEqual(len(name), 256)
+            self.assertLessEqual(len(value), 1024)
+        self.assertLessEqual(sum(len(name) + len(value) for name, value in fields), 6000)
 
     def test_custom_embed_image_validation_checks_type_and_extension(self):
         self.assertIsNone(_validate_image(None))
@@ -339,6 +340,227 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(urgent.footer.text, "Set by Saturn Staff")
         self.assertIn("🟠 High", priority_embed("high", actor).title)
         self.assertIn("Priority", priority_embed("weird", actor).title)
+
+
+    def test_guide_catalog_covers_every_runtime_command(self):
+        from grid_a1.bot import bot as runtime_bot
+        from grid_a1.guides import ACCESS_LABELS, COMMAND_ACCESS, catalog
+
+        entries = catalog(runtime_bot.tree)
+        self.assertGreaterEqual(len(entries), 30)
+        self.assertEqual([entry.path for entry in entries if entry.path not in COMMAND_ACCESS], [])
+        for entry in entries:
+            self.assertIn(entry.access, ACCESS_LABELS)
+            self.assertTrue(entry.usage.startswith("/" + entry.path))
+        priority = next(entry for entry in entries if entry.path == "ticket priority")
+        self.assertEqual(priority.options, (("priority", True),))
+        self.assertIn("priority", priority.usage)
+        self.assertEqual(priority.access_label, "Ticket staff")
+        claim = next(entry for entry in entries if entry.path == "ticket claim")
+        self.assertEqual(claim.usage, "/ticket claim")
+
+    def test_guide_shows_only_what_the_viewer_may_use(self):
+        from types import SimpleNamespace
+
+        from grid_a1.bot import bot as runtime_bot
+        from grid_a1.guides import catalog, render_guide, viewer_access
+
+        class FakeDatabase:
+            def config(self, guild_id):
+                return {"owner_role": 10, "co_owner_role": 11}
+
+            def configured_permission_role_ids(self, guild_id):
+                return [12, 13]
+
+        fake_bot = SimpleNamespace(settings_owner_id=999, database=FakeDatabase())
+        guild = SimpleNamespace(id=1, owner_id=5)
+
+        def member(member_id, roles=(), **permissions):
+            granted = {
+                "administrator": False,
+                "manage_guild": False,
+                "manage_messages": False,
+                "manage_channels": False,
+            }
+            granted.update(permissions)
+            return SimpleNamespace(
+                id=member_id,
+                roles=[SimpleNamespace(id=role_id) for role_id in roles],
+                guild_permissions=SimpleNamespace(**granted),
+            )
+
+        entries = catalog(runtime_bot.tree)
+        plain = render_guide(entries, viewer_access(fake_bot, member(7), guild))
+        titles = [name for name, _ in plain]
+        self.assertNotIn("🔧 Bot owner", titles)
+        self.assertNotIn("⚙️ Server setup", titles)
+        self.assertIn("🚀 Start here", titles)
+        self.assertTrue(any("info server" in value for _, value in plain))
+        self.assertFalse(any("/sync" in value for _, value in plain))
+
+        staff = render_guide(entries, viewer_access(fake_bot, member(7, roles=(12,)), guild))
+        self.assertIn("🛡️ Moderation", [name for name, _ in staff])
+        self.assertFalse(any("/giveaway config" in value for _, value in staff))
+
+        admin = render_guide(entries, viewer_access(fake_bot, member(7, manage_guild=True), guild))
+        admin_values = "\n".join(value for _, value in admin)
+        self.assertIn("⚙️ Server setup", [name for name, _ in admin])
+        self.assertIn("/giveaway config", admin_values)
+        self.assertNotIn("/sync", admin_values)
+
+        owner = render_guide(entries, viewer_access(fake_bot, member(5), guild))
+        self.assertIn("⚙️ Server setup", [name for name, _ in owner])
+
+        full = render_guide(entries, viewer_access(fake_bot, member(999), guild), max_total=6000)
+        self.assertLessEqual(sum(len(name) + len(value) for name, value in full), 6000)
+        for name, value in full:
+            self.assertLessEqual(len(value), 1024)
+
+    def test_guide_autocomplete_and_detail_helpers(self):
+        from grid_a1.bot import bot as runtime_bot
+        from grid_a1.guides import build_choices, catalog, command_detail, match_entries
+
+        entries = catalog(runtime_bot.tree)
+        matched = match_entries(entries, "ticket")
+        self.assertTrue(all(entry.path.startswith("ticket") for entry in matched[:4]))
+        self.assertIn("ban", [entry.path for entry in match_entries(entries, "ba")])
+        self.assertLessEqual(len(match_entries(entries, "")), 25)
+        self.assertEqual(match_entries(entries, "nothing-like-this"), [])
+
+        detail = command_detail(next(entry for entry in entries if entry.path == "help"))
+        self.assertIn("Usage: `/help [command]`", detail)
+        self.assertIn("Access: Everyone", detail)
+
+        rows = [
+            {"question": "Which map?", "poll_id": "POLL1", "status": "open"},
+            {"question": "Which mode?", "poll_id": "POLL2", "status": "ended"},
+            {"question": "Hidden", "poll_id": None, "status": "open"},
+        ]
+        labelled = build_choices(rows, ("question", "poll_id", "status"), "poll_id", "")
+        self.assertEqual(labelled[0], ("Which map? • POLL1 • open", "POLL1"))
+        self.assertEqual(len(labelled), 2)
+        self.assertEqual(build_choices(rows, ("question", "poll_id"), "poll_id", "mode"), [("Which mode? • POLL2", "POLL2")])
+        self.assertEqual(build_choices(rows, ("question", "poll_id"), "poll_id", "missing"), [])
+        long_labels = build_choices(
+            [{"question": "x" * 400, "poll_id": "P" * 40}], ("question", "poll_id"), "poll_id", ""
+        )
+        self.assertEqual(len(long_labels[0][0]), 100)
+        self.assertEqual(len(rows), 3)
+
+    def test_error_helper_text_and_command_paths(self):
+        from grid_a1.bot import _wait_text, command_path
+        from grid_a1.bot import ticket_group
+
+        self.assertEqual(_wait_text(0), "1s")
+        self.assertEqual(_wait_text(45.4), "45s")
+        self.assertEqual(_wait_text(75), "1m 15s")
+        self.assertEqual(command_path(ticket_group.get_command("priority")), "ticket priority")
+        self.assertEqual(command_path(ticket_group), "ticket")
+
+    def test_guild_polls_lists_every_status_for_autocomplete(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(Path(directory) / "manager.sqlite3")
+            database.migrate()
+            database.create_poll(
+                poll_id="POLLOLD", guild_id=42, channel_id=9200, creator_id=7001, question="Which map?",
+                options_json='["Island", "Ragnarok"]', created_at="2026-01-01T00:00:00+00:00",
+                ends_at="2026-01-02T00:00:00+00:00",
+            )
+            database.create_poll(
+                poll_id="POLLNEW", guild_id=42, channel_id=9200, creator_id=7001, question="Which mode?",
+                options_json='["Casual", "Hardcore"]', created_at="2026-02-01T00:00:00+00:00",
+                ends_at="2026-02-02T00:00:00+00:00",
+            )
+            database.create_poll(
+                poll_id="POLLOTHER", guild_id=99, channel_id=9201, creator_id=7001, question="Other server",
+                options_json='["A", "B"]', created_at="2026-03-01T00:00:00+00:00",
+                ends_at="2026-03-02T00:00:00+00:00",
+            )
+            database.end_poll("POLLOLD", 7001, "2026-01-03T00:00:00+00:00")
+            polls = database.guild_polls(42)
+            self.assertEqual([row["poll_id"] for row in polls], ["POLLNEW", "POLLOLD"])
+            self.assertEqual({row["status"] for row in polls}, {"open", "ended"})
+            self.assertEqual(database.guild_polls(42, limit=1)[0]["poll_id"], "POLLNEW")
+            self.assertEqual([row["poll_id"] for row in database.active_polls(42)], ["POLLNEW"])
+
+
+    def test_identifier_commands_offer_live_autocomplete(self):
+        import asyncio
+        from types import SimpleNamespace
+
+        import grid_a1.bot as bot_module
+
+        for command, parameter in (
+            (bot_module.giveaway_end, "giveaway_id"),
+            (bot_module.poll_end, "poll_id"),
+            (bot_module.poll_remove, "poll_id"),
+        ):
+            self.assertIsNotNone(command._params[parameter].autocomplete, command.name)
+        help_command = bot_module.bot.tree.get_command("help")
+        self.assertIsNotNone(help_command._params["command"].autocomplete)
+        self.assertEqual(
+            asyncio.run(
+                bot_module.giveaway_end_autocomplete(SimpleNamespace(guild_id=None), "ni")
+            ),
+            [],
+        )
+        self.assertEqual(
+            asyncio.run(bot_module.poll_remove_autocomplete(SimpleNamespace(guild_id=None), "")),
+            [],
+        )
+
+    def test_error_handler_answers_with_one_clear_ephemeral_message(self):
+        import asyncio
+        from types import SimpleNamespace
+
+        from discord import app_commands
+
+        import grid_a1.bot as bot_module
+
+        class Recorder:
+            def __init__(self):
+                self.messages = []
+
+            async def send_message(self, content=None, **kwargs):
+                self.messages.append(content)
+
+            async def send(self, content=None, **kwargs):
+                self.messages.append(content)
+
+            def is_done(self):
+                return False
+
+        def answer(error):
+            target = SimpleNamespace(
+                response=Recorder(),
+                followup=Recorder(),
+                guild_id=1,
+                user=SimpleNamespace(id=2),
+            )
+            asyncio.run(bot_module.on_app_command_error(target, error))
+            return " ".join(str(item) for item in target.response.messages)
+
+        self.assertIn("42s", answer(app_commands.CommandOnCooldown(app_commands.Cooldown(1, 30.0), 42.0)))
+        failure = app_commands.CheckFailure("no access")
+        failure.command = bot_module.ticket_group.get_command("stats")
+        self.assertIn("/help command:ticket stats", answer(failure))
+        self.assertIn("manage_messages", answer(app_commands.BotMissingPermissions(["manage_messages"])))
+        self.assertIn("inside a server", answer(app_commands.NoPrivateMessage()))
+
+    def test_destructive_and_expensive_commands_are_rate_limited(self):
+        import grid_a1.bot as bot_module
+        from grid_a1.bot import bot as runtime_bot
+
+        limited = {
+            "report": runtime_bot.tree.get_command("report"),
+            "ticket stats": bot_module.ticket_group.get_command("stats"),
+            "ticket transcript": bot_module.ticket_group.get_command("transcript"),
+            "info server": bot_module.info_group.get_command("server"),
+        }
+        for label, command in limited.items():
+            self.assertGreaterEqual(len(command.checks), 1, label)
+        unlimited = bot_module.ticket_group.get_command("claim")
+        self.assertEqual([check for check in unlimited.checks], list(unlimited.checks))
 
     def test_status_endpoint_serves_a_compact_health_document(self):
         import urllib.error
@@ -1166,18 +1388,32 @@ class CoreTests(unittest.TestCase):
                         parameters = {argument.arg for argument in node.args.args[1:]}
                         self.assertTrue(parameters <= described, f"{path}:{node.name} needs descriptions for every slash option")
 
-    def test_help_lists_all_command_groups(self):
-        source = (ROOT / "grid_a1" / "commands.py").read_text(encoding="utf-8")
-        for section in ("🌐 Everyone", "🎛️ Easy private dashboard", "👑 Server owner setup", "⚙️ Server setup & safety", "📊 Poll setup", "🎁 Giveaways", "🛡️ Staff tools", "🔧 Bot owner"):
-            self.assertIn(section, source)
-        for command in ("/report", "/setup tickets", "/setup welcomer", "/ticket transfer", "/ticket close", "/poll config", "/giveaway config", "/anti-links", "/embed-edit", "/sync"):
-            self.assertIn(command, source)
+    def test_help_lists_every_section_and_command_from_the_live_tree(self):
+        from grid_a1.bot import bot as runtime_bot
+        from grid_a1.guides import ACCESS_LABELS, SECTIONS, catalog, render_guide
 
-    def test_help_does_not_advertise_removed_commands_or_anti_link_options(self):
-        source = (ROOT / "grid_a1" / "commands.py").read_text(encoding="utf-8")
-        for stale in ("`/staff`", "whitelist domains", "bypass roles", "allowed link roles"):
-            self.assertNotIn(stale, source)
-        self.assertIn("configure enabled, action, and log channel", source)
+        entries = catalog(runtime_bot.tree)
+        rendered = "\n".join(value for _, value in render_guide(entries, list(ACCESS_LABELS)))
+        titles = {title for title, _ in SECTIONS}
+        self.assertEqual(len(titles), len(SECTIONS))
+        for title in titles:
+            self.assertTrue(
+                any(title in name for name, _ in render_guide(entries, list(ACCESS_LABELS))),
+                title,
+            )
+        for command in ("/help", "/report", "/dashboard", "/info server", "/setup tickets", "/setup welcomer", "/ticket transfer", "/ticket close", "/ticket priority", "/ticket stats", "/poll config", "/giveaway config", "/giveaway end", "/anti-links", "/embed-edit", "/sync"):
+            self.assertIn(command, rendered)
+
+    def test_help_never_advertises_removed_commands_or_stale_options(self):
+        from grid_a1.bot import bot as runtime_bot
+        from grid_a1.guides import ACCESS_LABELS, catalog, render_guide
+
+        rendered = "\n".join(
+            value for _, value in render_guide(catalog(runtime_bot.tree), list(ACCESS_LABELS))
+        )
+        for stale in ("`/staff`", "whitelist domains", "bypass roles", "allowed link roles", "/setup staff"):
+            self.assertNotIn(stale, rendered)
+        self.assertIn("/anti-links", rendered)
 
     def test_anti_links_ignores_sentence_periods_and_numeric_versions(self):
         for sentence in (
