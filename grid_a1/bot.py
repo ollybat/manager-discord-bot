@@ -12,6 +12,7 @@ from .database import SCHEMA_VERSION, Database
 from .embeds import embed, support_panel, inactivity_indicator, priority_embed, ticket_stats_embed
 from .tickets import TicketService, claim
 from .giveaways import GiveawayDashboardView, GiveawayEntryView, GiveawayService
+from .guides import build_choices
 from .health import HealthServer
 from .polls import (
     DEFAULT_POLL_DURATION_HOURS,
@@ -431,6 +432,7 @@ async def anti_links(
 
 @bot.tree.command(name="report", description="🚩 Privately report a server member to staff")
 @app_commands.guild_only()
+@app_commands.checks.cooldown(3, 60.0, key=lambda i: (i.guild_id, i.user.id))
 @app_commands.describe(member="Member being reported", reason="What happened?", proof_link="Optional link to supporting evidence", proof_file="Optional screenshot or evidence file")
 async def report_member(i: discord.Interaction, member: discord.Member, reason: str | None = None, proof_link: str | None = None, proof_file: discord.Attachment | None = None):
     guild = i.guild
@@ -618,6 +620,7 @@ info_group = app_commands.Group(name="info", description="🌐 View server infor
 bot.tree.add_command(info_group)
 
 @info_group.command(name="server", description="🏰 View server members, channels, roles, and settings")
+@app_commands.checks.cooldown(5, 60.0, key=lambda i: (i.guild_id, i.user.id))
 async def info_server(i: discord.Interaction):
     g = i.guild
     if not g: return await i.response.send_message("❌ This command can only be used inside a server.", ephemeral=True)
@@ -746,6 +749,7 @@ async def ticket_priority(i: discord.Interaction, priority: app_commands.Choice[
     await i.response.send_message(embed=priority_embed(priority.value, i.user))
 @ticket_group.command(name="stats", description="📊 Show ticket workload, response times, and top claimers")
 @staff()
+@app_commands.checks.cooldown(5, 60.0, key=lambda i: (i.guild_id, i.user.id))
 async def ticket_stats(i: discord.Interaction):
     g = guild(i)
     if g is None: return await i.response.send_message("❌ Statistics are only available inside a server.", ephemeral=True)
@@ -753,6 +757,7 @@ async def ticket_stats(i: discord.Interaction):
     await i.followup.send(embed=ticket_stats_embed(g, collect_ticket_stats(bot.database, g.id)), ephemeral=True)
 @ticket_group.command(name="transcript", description="📄 Get a plain-text transcript without closing the ticket")
 @staff()
+@app_commands.checks.cooldown(3, 60.0, key=lambda i: (i.guild_id, i.user.id))
 async def ticket_transcript(i: discord.Interaction):
     if not isinstance(i.channel, discord.TextChannel) or not is_ticket(i.channel): return await i.response.send_message("❌ This command only works inside an active ticket.", ephemeral=True)
     await i.response.defer(ephemeral=True)
@@ -789,7 +794,7 @@ async def giveaway_config(interaction: discord.Interaction) -> None:
 )
 @app_commands.guild_only()
 @admin()
-@app_commands.describe(giveaway_id="Giveaway ID shown in its public panel")
+@app_commands.describe(giveaway_id="Start typing to pick an active giveaway, or paste its ID")
 async def giveaway_end(interaction: discord.Interaction, giveaway_id: str) -> None:
     guild = interaction.guild
     if guild is None:
@@ -828,6 +833,26 @@ def _may_manage_poll(interaction: discord.Interaction, poll) -> bool:
             or _privileged(interaction)
         )
     )
+
+
+@giveaway_end.autocomplete("giveaway_id")
+async def giveaway_end_autocomplete(
+    interaction: discord.Interaction,
+    current: str,
+) -> list[app_commands.Choice[str]]:
+    """Offer this server's active giveaways instead of a raw identifier."""
+    if interaction.guild_id is None:
+        return []
+    rows = bot.database.active_giveaways(interaction.guild_id)
+    return [
+        app_commands.Choice(name=label, value=value)
+        for label, value in build_choices(
+            rows,
+            ("reward_type", "giveaway_id"),
+            "giveaway_id",
+            current,
+        )
+    ]
 
 
 @poll_group.command(
@@ -1018,7 +1043,7 @@ async def poll_create(
     description="🔒 End a poll and publish its final results",
 )
 @app_commands.guild_only()
-@app_commands.describe(poll_id="Poll ID shown in the poll panel footer")
+@app_commands.describe(poll_id="Start typing to pick an open poll, or paste its ID")
 async def poll_end(interaction: discord.Interaction, poll_id: str) -> None:
     """End a poll if the caller created it or manages the server."""
     guild = interaction.guild
@@ -1077,12 +1102,32 @@ async def poll_end(interaction: discord.Interaction, poll_id: str) -> None:
     await interaction.followup.send(embed=result_embed, ephemeral=True)
 
 
+@poll_end.autocomplete("poll_id")
+async def poll_end_autocomplete(
+    interaction: discord.Interaction,
+    current: str,
+) -> list[app_commands.Choice[str]]:
+    """Offer this server's open polls with their questions."""
+    if interaction.guild_id is None:
+        return []
+    rows = bot.database.active_polls(interaction.guild_id)
+    return [
+        app_commands.Choice(name=label, value=value)
+        for label, value in build_choices(
+            rows,
+            ("question", "poll_id"),
+            "poll_id",
+            current,
+        )
+    ]
+
+
 @poll_group.command(
     name="remove",
     description="🗑️ Remove a poll message and its stored votes",
 )
 @app_commands.guild_only()
-@app_commands.describe(poll_id="Poll ID shown in the poll panel footer")
+@app_commands.describe(poll_id="Start typing to pick any of this server's polls, or paste its ID")
 async def poll_remove(interaction: discord.Interaction, poll_id: str) -> None:
     """Delete the poll message and its stored votes for its creator or a manager."""
     guild = interaction.guild
@@ -1150,6 +1195,26 @@ async def poll_remove(interaction: discord.Interaction, poll_id: str) -> None:
     )
 
 
+@poll_remove.autocomplete("poll_id")
+async def poll_remove_autocomplete(
+    interaction: discord.Interaction,
+    current: str,
+) -> list[app_commands.Choice[str]]:
+    """Offer every poll in this server, with its status, for removal."""
+    if interaction.guild_id is None:
+        return []
+    rows = bot.database.guild_polls(interaction.guild_id)
+    return [
+        app_commands.Choice(name=label, value=value)
+        for label, value in build_choices(
+            rows,
+            ("question", "poll_id", "status"),
+            "poll_id",
+            current,
+        )
+    ]
+
+
 @bot.event
 async def on_command_error(ctx, error):
     if isinstance(error, commands.CommandNotFound):
@@ -1210,27 +1275,74 @@ async def on_member_remove(member):
     ticket_ids = bot.database.mark_owner_left(member.guild.id, member.id)
     for ticket_id in ticket_ids: bot.database.audit(member.guild.id, ticket_id, 0, 'owner_left')
 
+def _wait_text(seconds: float) -> str:
+    """Short human duration used by cooldown feedback."""
+    total = max(1, int(round(seconds)))
+    minutes, remaining = divmod(total, 60)
+    return f"{minutes}m {remaining}s" if minutes else f"{remaining}s"
+
+
+def command_path(command) -> str:
+    """Full slash path of a command object, including its parent groups."""
+    names = [getattr(command, "name", "") or ""]
+    parent = getattr(command, "parent", None)
+    while parent is not None:
+        names.append(getattr(parent, "name", "") or "")
+        parent = getattr(parent, "parent", None)
+    return " ".join(name for name in reversed(names) if name)
+
+
+def _help_pointer(error) -> str:
+    """Link a failed command to its own help entry when the command is known."""
+    command = getattr(error, "command", None)
+    path = command_path(command) if command is not None else ""
+    if path:
+        return f" Run `/help command:{path}` for what it needs."
+    return " Run `/help` to see what you can use."
+
+
 @bot.tree.error
-async def on_app_command_error(i,error):
+async def on_app_command_error(i, error):
+    """Answer every failed application command with one clear, ephemeral message."""
     original = getattr(error, "original", error)
     if isinstance(original, discord.NotFound) and getattr(original, "code", None) == 10062:
         log.warning("Application interaction expired or is unknown; response could not be delivered")
         return
-    log.exception("Application command failed", exc_info=error)
-    if isinstance(original, discord.HTTPException) and original.status == 429:
+    expected = (
+        app_commands.CommandOnCooldown,
+        app_commands.MissingPermissions,
+        app_commands.BotMissingPermissions,
+        app_commands.NoPrivateMessage,
+        app_commands.CheckFailure,
+        OwnerConfigurationError,
+        OwnerOnlyError,
+    )
+    if isinstance(error, expected):
+        log.info("Application command declined: %s", error)
+    else:
+        log.exception("Application command failed", exc_info=error)
+    if isinstance(error, app_commands.CommandOnCooldown):
+        msg = f"⏳ That command is on cooldown. Try again in {_wait_text(error.retry_after)}."
+    elif isinstance(original, discord.HTTPException) and original.status == 429:
         msg = "⏳ Discord rate-limited this request. Please wait a moment and try again."
+    elif isinstance(error, app_commands.BotMissingPermissions):
+        needed = ", ".join(error.missing_permissions) or "the required permission"
+        msg = f"🔒 I am missing **{needed}** here, so I cannot do that. A server administrator can grant it." + _help_pointer(error)
+    elif isinstance(error, app_commands.NoPrivateMessage):
+        msg = "❌ That command only works inside a server."
     elif isinstance(error, app_commands.MissingPermissions):
-        msg = "🔒 You do not have the Discord permissions required for that command. Run `/help` to see access requirements."
+        msg = "🔒 You do not have the Discord permissions required for that command." + _help_pointer(error)
     elif isinstance(error, (OwnerConfigurationError, OwnerOnlyError)):
         msg = f"⚠️ {error}"
     elif isinstance(error, app_commands.CheckFailure) and getattr(error, "command", None) and error.command.name == "dashboard":
         msg = "🔒 Dashboard access requires the configured Owner or Co-owner role. The server owner can initialize them with `/setup roles`."
     elif isinstance(error, app_commands.CheckFailure):
-        msg = "🔒 You do not have access to this command. Run `/help` to see which roles or permissions are required."
+        msg = "🔒 You do not have access to this command." + _help_pointer(error)
     elif isinstance(original, RuntimeError):
         msg = f"⚠️ {error}"
     else:
-        msg = "❌ That command could not be completed. Check its setup, your permissions, and the bot's channel/role permissions; run `/help` for guidance."
+        msg = ("❌ That command could not be completed. Check its setup, your permissions, and the bot's "
+               "channel/role permissions; run `/help` for guidance.")
     try:
         if i.response.is_done(): await i.followup.send(msg, ephemeral=True)
         else: await i.response.send_message(msg, ephemeral=True)
