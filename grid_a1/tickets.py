@@ -567,6 +567,7 @@ class TicketService:
             data.get("issue", "unknown"),
             interaction.user,
             reason,
+            priority=row["priority"],
         )
 
         try:
