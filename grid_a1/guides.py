@@ -109,7 +109,7 @@ PREFIX_COMMANDS: tuple[tuple[str, str, str], ...] = (
     ("unban", "!unban <user ID> [reason]", "Staff role"),
     ("modlog", "!modlog <member>", "Staff role"),
     ("stats", "!stats", "Staff role"),
-    ("clear", "!clear <1-100> [reason]", "Staff role"),
+    ("clear", "!clear [count] [reason]", "Staff role"),
     ("slowmode", "!slowmode <seconds> [reason]", "Staff role"),
     ("lock", "!lock", "Staff role"),
     ("unlock", "!unlock", "Staff role"),
