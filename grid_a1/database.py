@@ -322,6 +322,17 @@ class Database:
                 (guild_id, *MODERATION_ACTIONS, f"%member={int(member_id)}%", max(1, min(int(limit), 25))),
             ).fetchall()
 
+    def moderation_activity(self, guild_id: int, since: str, limit: int = 500) -> list[sqlite3.Row]:
+        """Return every recorded moderation action for one server since an ISO-8601 timestamp."""
+        placeholders = ", ".join("?" for _ in MODERATION_ACTIONS)
+        with self.connect() as db:
+            return db.execute(
+                "SELECT actor_id, action, metadata, created_at FROM audit_log "
+                f"WHERE guild_id=? AND action IN ({placeholders}) AND created_at >= ? "
+                "ORDER BY id DESC LIMIT ?",
+                (guild_id, *MODERATION_ACTIONS, since, max(1, min(int(limit), 1000))),
+            ).fetchall()
+
     def audit(
         self,
         guild_id: int,
@@ -587,8 +598,8 @@ class Database:
             row = db.execute(
                 "SELECT options_json FROM polls WHERE poll_id=?",
                 (poll_id,),
-            ).fetchone()
-        return safe_json_list(row["options_json"] if row else "[]", str)
+
+[935 more lines in R2 object. Use offset=601 to continue.]
 
     def poll_results(self, poll_id: str) -> dict[int, int]:
         """Return vote counts keyed by the stored option index."""
@@ -1189,8 +1200,8 @@ class Database:
                 return dict(final_row), winners, "ended"
             except Exception:
                 db.execute("ROLLBACK")
-                raise
 
+[333 more lines in R2 object. Use offset=1203 to continue.]
     def mark_owner_left(self,guild_id,owner_id):
         with self.connect() as db:
             rows=db.execute("SELECT ticket_id FROM tickets WHERE guild_id=? AND owner_id=? AND status IN ('open','close_requested')",(guild_id,owner_id)).fetchall();db.execute("UPDATE tickets SET owner_left=1,auto_close_reason='owner_left' WHERE guild_id=? AND owner_id=? AND status IN ('open','close_requested')",(guild_id,owner_id));return [r['ticket_id'] for r in rows]
