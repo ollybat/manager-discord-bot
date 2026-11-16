@@ -12,11 +12,23 @@ RULES_INTRO = (
     "offering you the best competitive server."
 )
 
+RULES_TITLE = "Spinback Rules ✅"
+RULES_FOOTER = "Powered by Spinback"
+
 RULES_SECTIONS: tuple[tuple[str, str, str, str], ...] = (
-    ("discord", "Discord", "🎧", "All discord related rules."),
+    ("discord", "Discord", "💬", "All discord related rules."),
     ("game", "Game", "🎮", "General in-game rules."),
 )
-"""Section key, button/label text, emoji, and the one-line summary on the panel."""
+"""Section key, button/label text, fallback emoji, and the one-line summary on the panel."""
+
+RULES_EMOJI_NAMES: dict[str, tuple[str, ...]] = {
+    "discord": ("discord", "discordlogo", "discord_logo"),
+    "game": ("game", "controller", "gamepad"),
+}
+"""Server emoji names searched for each section, in order, before the fallback emoji is used."""
+
+RULES_EMBLEM_NAMES: tuple[str, ...] = ("spinback", "spinbacklogo", "spinback_logo", "s")
+"""Server emoji names searched for the footer logo."""
 
 RULES_DEFAULTS: dict[str, str] = {
     "discord": (

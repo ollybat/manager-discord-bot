@@ -15,7 +15,7 @@ from .tickets import ReimburseModal, TicketService, claim
 from .giveaways import GiveawayDashboardView, GiveawayEntryView, GiveawayService
 from .suggestions import SuggestionModal, SuggestionService, SuggestionVoteView, suggestion_line
 from .brand import BRAND_NAME, BRAND_SHORT, RULES_SECTIONS
-from .rules import RulesEditModal, RulesService, RulesView, rules_panel_embed
+from .rules import RulesEditModal, RulesService, rules_panel_view
 from .guides import build_choices, prefix_guide_lines
 from .health import HealthServer
 from .polls import (
@@ -113,7 +113,7 @@ class GridA1Bot(commands.Bot):
             self.add_view(GiveawayEntryView(self.giveaways, giveaway["giveaway_id"]))
         for row in self.database.published_suggestions_all():
             self.add_view(SuggestionVoteView(self.suggestions, row["suggestion_id"]))
-        self.add_view(RulesView(self.rules))
+        self.add_view(self.rules.panel())
         self.refresh_panels.start()
         self.inactivity_loop.start()
         self.poll_expiration_loop.start()
@@ -2149,7 +2149,7 @@ async def rules_edit(i: discord.Interaction, section: app_commands.Choice[str]):
 @admin()
 @app_commands.guild_only()
 async def rules_preview(i: discord.Interaction):
-    await i.response.send_message(embed=rules_panel_embed(), view=RulesView(bot.rules), ephemeral=True)
+    await i.response.send_message(view=bot.rules.panel(), ephemeral=True)
 
 
 def run():
