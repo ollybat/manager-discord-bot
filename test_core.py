@@ -342,6 +342,91 @@ class CoreTests(unittest.TestCase):
         self.assertIn("Priority", priority_embed("weird", actor).title)
 
 
+
+    def test_ticket_queue_overview_orders_by_priority_then_age(self):
+        from grid_a1.stats import queue_overview, sort_open_queue
+
+        rows = [
+            {"ticket_id": "LOW", "channel_id": 1, "priority": "low", "claimed_by": None, "opened_at": "2026-11-16T08:00:00+00:00"},
+            {"ticket_id": "URGENT", "channel_id": 2, "priority": "urgent", "claimed_by": 42, "opened_at": "2026-11-16T11:00:00+00:00"},
+            {"ticket_id": "LOW2", "channel_id": 3, "priority": "low", "claimed_by": 7, "opened_at": "2026-11-16T07:00:00+00:00"},
+        ]
+        self.assertEqual([row["ticket_id"] for row in sort_open_queue(rows)], ["URGENT", "LOW2", "LOW"])
+        lines, hidden = queue_overview(rows, limit=2)
+        self.assertEqual(hidden, 1)
+        self.assertIn("🔴 Urgent", lines[0])
+        self.assertIn("<@42>", lines[0])
+        self.assertIn("<#3>", lines[1])
+        self.assertIn("unclaimed", [line for line in queue_overview(rows, limit=3)[0] if "<#1>" in line][0])
+        empty_lines, empty_hidden = queue_overview([])
+        self.assertEqual((empty_lines, empty_hidden), ([], 0))
+
+    def test_moderation_history_and_note_lines_render_stored_records(self):
+        from grid_a1.stats import history_detail, moderation_history_lines, note_lines
+
+        rows = [
+            {"actor_id": 99, "action": "warn", "metadata": "member=12345; spamming chat", "created_at": "2026-11-16T11:00:00+00:00"},
+            {"actor_id": 98, "action": "ban", "metadata": "member=12345; raiding", "created_at": "2026-11-16T10:00:00+00:00"},
+        ]
+        lines = moderation_history_lines(rows)
+        self.assertIn("**warn**", lines[0])
+        self.assertIn("by <@99>", lines[0])
+        self.assertIn("spamming chat", lines[0])
+        self.assertNotIn("member=12345", lines[0])
+        self.assertEqual(history_detail(None), "no details recorded")
+        self.assertEqual(len(history_detail("x" * 400)), 140)
+        notes = note_lines(
+            [
+                {"actor_id": 5, "metadata": json.dumps({"note": "Refund approved"}), "created_at": "2026-11-16T11:00:00+00:00"},
+                {"actor_id": 6, "metadata": "not json", "created_at": "2026-11-16T11:00:00+00:00"},
+                {"actor_id": 7, "metadata": json.dumps({"note": "   "}), "created_at": "2026-11-16T11:00:00+00:00"},
+            ]
+        )
+        self.assertEqual(len(notes), 1)
+        self.assertIn("Refund approved", notes[0])
+        self.assertIn("<@5>", notes[0])
+
+    def test_ticket_notes_and_member_history_read_from_sqlite(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(Path(directory) / "manager.sqlite3")
+            database.migrate()
+            database.create_ticket(ticket_id="NOTE1", guild_id=42, channel_id=9801, owner_id=8801, issue="general", region="EU", opened_at="2026-11-16T09:00:00+00:00", last_activity_at="2026-11-16T09:00:00+00:00")
+            stored = database.add_ticket_note("NOTE1", 42, 8802, "  Customer   asked for a refund  ")
+            self.assertEqual(stored, "Customer asked for a refund")
+            with self.assertRaises(ValueError):
+                database.add_ticket_note("NOTE1", 42, 8802, "   ")
+            self.assertEqual(len(database.add_ticket_note("NOTE1", 42, 8802, "second note")), len("second note"))
+            notes = database.ticket_notes(42, "NOTE1")
+            self.assertEqual(len(notes), 2)
+            self.assertEqual(notes[0]["actor_id"], 8802)
+            self.assertIn("second note", notes[0]["metadata"])
+            self.assertEqual(database.ticket_notes(99, "NOTE1"), [])
+            database.audit(42, None, 777, "warn", "member=8801; posted spam")
+            database.audit(42, None, 777, "warn", "member=8802; unrelated member")
+            database.audit(42, None, 777, "note", "member=8801; not a moderation record")
+            history = database.member_history(42, 8801)
+            self.assertEqual(len(history), 1)
+            self.assertEqual(history[0]["action"], "warn")
+            self.assertEqual(history[0]["actor_id"], 777)
+            self.assertEqual(database.member_history(42, 8801, limit=0)[0]["action"], "warn")
+            self.assertEqual(database.member_history(99, 8801), [])
+
+    def test_new_staff_commands_are_registered_and_guided(self):
+        import grid_a1.bot as bot_module
+        from grid_a1.guides import ACCESS_LABELS, COMMAND_ACCESS, catalog, render_guide
+
+        tickets = bot_module.ticket_group
+        for name in ("list", "note", "notes"):
+            self.assertIsNotNone(tickets.get_command(name), name)
+        self.assertIsNotNone(bot_module.bot.tree.get_command("modlog"))
+        entries = catalog(bot_module.bot.tree)
+        rendered = "\n".join(value for _, value in render_guide(entries, list(ACCESS_LABELS)))
+        for command in ("/ticket list", "/ticket note", "/ticket notes", "/modlog"):
+            self.assertIn(command, rendered)
+            self.assertEqual(COMMAND_ACCESS[command.lstrip("/")], "staff")
+        for flag in ("list", "note", "notes"):
+            self.assertIsNotNone(tickets.get_command(flag)._params["text"] if flag == "note" else tickets.get_command(flag))
+
     def test_guide_catalog_covers_every_runtime_command(self):
         from grid_a1.bot import bot as runtime_bot
         from grid_a1.guides import ACCESS_LABELS, COMMAND_ACCESS, catalog
@@ -1393,14 +1478,12 @@ class CoreTests(unittest.TestCase):
         from grid_a1.guides import ACCESS_LABELS, SECTIONS, catalog, render_guide
 
         entries = catalog(runtime_bot.tree)
-        rendered = "\n".join(value for _, value in render_guide(entries, list(ACCESS_LABELS)))
+        fields = render_guide(entries, list(ACCESS_LABELS), max_total=6000)
+        rendered = "\n".join(value for _, value in fields)
         titles = {title for title, _ in SECTIONS}
         self.assertEqual(len(titles), len(SECTIONS))
         for title in titles:
-            self.assertTrue(
-                any(title in name for name, _ in render_guide(entries, list(ACCESS_LABELS))),
-                title,
-            )
+            self.assertTrue(any(title in name for name, _ in fields), title)
         for command in ("/help", "/report", "/dashboard", "/info server", "/setup tickets", "/setup welcomer", "/ticket transfer", "/ticket close", "/ticket priority", "/ticket stats", "/poll config", "/giveaway config", "/giveaway end", "/anti-links", "/embed-edit", "/sync"):
             self.assertIn(command, rendered)
 
