@@ -11,7 +11,14 @@ import discord
 from discord import app_commands
 
 from .embeds import embed
-from .guides import catalog, command_detail, match_entries, render_guide, viewer_access
+from .guides import (
+    catalog,
+    command_detail,
+    match_entries,
+    prefix_guide_lines,
+    render_guide,
+    viewer_access,
+)
 
 IMAGE_EXTENSIONS = frozenset({".jpg", ".jpeg", ".png", ".gif", ".webp"})
 
@@ -84,12 +91,17 @@ def register_commands(bot: discord.Client) -> None:
             "💜 Grid A1 • Command Guide",
             "✨ Built from the live command tree, so it always matches this bot. Discord shows "
             "each command's options as you type, and protected commands only answer members "
-            "with the access listed beside them.\n\n🔎 For one command in full, run "
-            "`/help command:` and pick it.",
+            "holding one of the staff roles saved by `/setup roles`.\n\n🔎 For one command in full, "
+            "run `/help command:` and pick it.",
             discord.Colour.from_rgb(177, 77, 255),
         )
         for name, value in fields:
             guide.add_field(name=name, value=value, inline=False)
+        guide.add_field(
+            name="⌨️ Prefix commands",
+            value="\n".join(prefix_guide_lines())[:1024],
+            inline=False,
+        )
         if not fields:
             guide.add_field(
                 name="🌐 Nothing to list yet",

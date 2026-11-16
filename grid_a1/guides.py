@@ -27,8 +27,8 @@ POLL_CREATOR = "poll_creator"
 ACCESS_LABELS: dict[str, str] = {
     EVERYONE: "Everyone",
     MANAGE_MESSAGES: "Manage Messages",
-    ADMIN: "Admin or Manage Server",
-    STAFF: "Ticket staff",
+    ADMIN: "Senior staff role or server owner",
+    STAFF: "Configured staff role",
     DASHBOARD: "Dashboard role",
     SERVER_OWNER: "Server owner",
     BOT_OWNER: "Bot owner",
@@ -68,6 +68,7 @@ SECTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
         "⚙️ Server setup",
         (
             "setup roles",
+            "setup status",
             "setup tickets",
             "setup welcomer",
             "verifypanel",
@@ -94,6 +95,36 @@ SECTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("🔧 Bot owner", ("ping", "sync")),
 )
 OTHER_SECTION = "🧩 Other commands"
+
+PREFIX_COMMANDS: tuple[tuple[str, str, str], ...] = (
+    ("help", "!help", "Everyone"),
+    ("ping", "!ping", "Everyone"),
+    ("whois", "!whois <member>", "Everyone"),
+    ("serverinfo", "!serverinfo", "Everyone"),
+    ("warn", "!warn <member> <reason>", "Staff role"),
+    ("timeout", "!timeout <member> <minutes> [reason]", "Staff role"),
+    ("untimeout", "!untimeout <member> [reason]", "Staff role"),
+    ("kick", "!kick <member> [reason]", "Staff role"),
+    ("ban", "!ban <member> [reason]", "Staff role"),
+    ("unban", "!unban <user ID> [reason]", "Staff role"),
+    ("modlog", "!modlog <member>", "Staff role"),
+    ("stats", "!stats", "Staff role"),
+    ("clear", "!clear <1-100> [reason]", "Staff role"),
+    ("slowmode", "!slowmode <seconds> [reason]", "Staff role"),
+    ("lock", "!lock", "Staff role"),
+    ("unlock", "!unlock", "Staff role"),
+)
+"""Prefix commands, in the order the guide lists them."""
+
+
+def prefix_guide_lines() -> list[str]:
+    """Render the prefix command list for the help embed."""
+    return [f"`{usage}` — {access}" for _, usage, access in PREFIX_COMMANDS]
+
+
+def prefix_command_names() -> set[str]:
+    """Every prefix command name the guide promises to document."""
+    return {name for name, _, _ in PREFIX_COMMANDS}
 
 COMMAND_ACCESS: dict[str, str] = {
     "help": EVERYONE,
@@ -123,6 +154,7 @@ COMMAND_ACCESS: dict[str, str] = {
     "untimeout": STAFF,
     "purge": MANAGE_MESSAGES,
     "setup roles": SERVER_OWNER,
+    "setup status": ADMIN,
     "setup tickets": ADMIN,
     "setup welcomer": ADMIN,
     "verifypanel": ADMIN,
@@ -231,6 +263,9 @@ def _configured_role_ids(bot: Any, guild: Any, keys: Sequence[str]) -> set[int]:
     return role_ids
 
 
+_SENIOR_ROLE_KEYS = ("owner_role", "co_owner_role", "head_admin_role", "admin_role")
+
+
 def _staff_role_ids(bot: Any, guild: Any) -> set[int]:
     try:
         return {int(role_id) for role_id in bot.database.configured_permission_role_ids(guild.id)}
@@ -255,15 +290,12 @@ def viewer_access(bot: Any, member: Any, guild: Any) -> frozenset[str]:
         rights.add(BOT_OWNER)
     if server_owner:
         rights.add(SERVER_OWNER)
-    if server_owner or bot_owner or bool(getattr(permissions, "administrator", False)) or bool(
-        getattr(permissions, "manage_guild", False)
-    ):
+    senior = role_ids & _configured_role_ids(bot, guild, _SENIOR_ROLE_KEYS)
+    if server_owner or bot_owner or senior:
         rights.add(ADMIN)
     if ADMIN in rights or bool(getattr(permissions, "manage_messages", False)):
         rights.add(MANAGE_MESSAGES)
-    if ADMIN in rights or bool(getattr(permissions, "manage_channels", False)) or (
-        role_ids & _staff_role_ids(bot, guild)
-    ):
+    if ADMIN in rights or (role_ids & _staff_role_ids(bot, guild)):
         rights.add(STAFF)
     if server_owner or (role_ids & _configured_role_ids(bot, guild, ("owner_role", "co_owner_role"))):
         rights.add(DASHBOARD)
