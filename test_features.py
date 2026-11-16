@@ -279,14 +279,14 @@ class SpinBackFeatureTests(unittest.TestCase):
 
         walk = list(view.walk_children())
         texts = [item.content for item in walk if isinstance(item, discord.ui.TextDisplay)]
-        self.assertEqual(texts[0], "# SpinBack Rules ✅")
+        self.assertEqual(texts[0], "# Spinback Rules ✅")
         self.assertIn("Thank you all for reading and respecting these rules.", texts[1])
         self.assertIn("best competitive server", texts[1])
-        self.assertIn("**Discord 🎧**", texts[2])
+        self.assertIn("**Discord", texts[2])
         self.assertIn("All discord related rules.", texts[2])
         self.assertIn("**Game 🎮**", texts[3])
         self.assertIn("General in-game rules.", texts[3])
-        self.assertIn("Powered by SpinBack", texts[-1])
+        self.assertIn("Powered by Spinback", texts[-1])
 
         separators = [item for item in walk if isinstance(item, discord.ui.Separator)]
         self.assertEqual(len(separators), 1)
@@ -378,9 +378,12 @@ class SpinBackFeatureTests(unittest.TestCase):
 
             self.assertEqual(rules_section_meta("nope")[0], "discord")
             modal = RulesEditModal(service, "discord")
-            self.assertEqual(len(modal.children), 1)
+            self.assertEqual(len(modal.children), 3)
             self.assertEqual(modal.children[0].style, discord.TextStyle.paragraph)
             self.assertEqual(modal.children[0].max_length, 4000)
+            self.assertEqual(modal.children[1].label, "Discord icon (optional)")
+            self.assertEqual(modal.children[2].label, "Footer logo (optional)")
+            self.assertFalse(modal.children[1].required)
             self.assertEqual(modal.with_current_text("old rules").children[0].default, "old rules")
 
     def test_rules_post_replaces_the_previous_panel_and_restart_refreshes_it(self):
@@ -482,6 +485,130 @@ class SpinBackFeatureTests(unittest.TestCase):
         rendered = "\n".join(value for _, value in render_guide(entries, list(ACCESS_LABELS), max_total=6000))
         for command in ("/rules post", "/rules edit", "/rules preview"):
             self.assertIn(command, rendered)
+
+    def test_rules_panel_icons_prefer_overrides_then_the_server_emoji(self):
+        from grid_a1.brand import RULES_INTRO
+        from grid_a1.rules import RulesService, resolved_emojis, rules_panel_view, server_emoji
+
+        class FakeEmoji:
+            def __init__(self, name, emoji_id):
+                self.name = name
+                self.id = emoji_id
+
+            def __str__(self):
+                return f"<:{self.name}:{self.id}>"
+
+        class FakeDatabase:
+            def __init__(self, overrides=None):
+                self.overrides = overrides or {}
+
+            def rules_emojis(self, guild_id):
+                return dict(self.overrides)
+
+            def rule_text(self, guild_id, section):
+                return None
+
+            def rule_row(self, guild_id, section):
+                return None
+
+        guild = SimpleNamespace(id=7, emojis=[FakeEmoji("discord", 111), FakeEmoji("spinback", 222)])
+        service = RulesService(FakeDatabase())
+
+        self.assertEqual(server_emoji(None, ("discord",)), "")
+        self.assertEqual(server_emoji(guild, ("discord", "discord_logo")), "<:discord:111>")
+        self.assertEqual(server_emoji(guild, ("game",)), "")
+
+        resolved = resolved_emojis(service, guild)
+        self.assertEqual(resolved["discord"], "<:discord:111>")
+        self.assertEqual(resolved["game"], "🎮")
+        self.assertEqual(resolved["emblem"], "<:spinback:222>")
+
+        texts = [
+            item.content
+            for item in rules_panel_view(service, guild).walk_children()
+            if isinstance(item, discord.ui.TextDisplay)
+        ]
+        self.assertEqual(texts[0], "# Spinback Rules ✅")
+        self.assertEqual(texts[1], RULES_INTRO)
+        self.assertIn("**Discord <:discord:111>**", texts[2])
+        self.assertIn("**Game 🎮**", texts[3])
+        self.assertEqual(texts[-1], "***<:spinback:222> Powered by Spinback***")
+
+        overridden = RulesService(FakeDatabase({"discord": "<:custom:999>", "game": "<:pad:5>"}))
+        chosen = resolved_emojis(overridden, guild)
+        self.assertEqual(chosen["discord"], "<:custom:999>")
+        self.assertEqual(chosen["game"], "<:pad:5>")
+        self.assertEqual(chosen["emblem"], "<:spinback:222>")
+
+        bare = resolved_emojis(RulesService(FakeDatabase()), None)
+        self.assertEqual((bare["discord"], bare["game"], bare["emblem"]), ("💬", "🎮", ""))
+        plain = [
+            item.content
+            for item in rules_panel_view(RulesService(FakeDatabase()), None).walk_children()
+            if isinstance(item, discord.ui.TextDisplay)
+        ]
+        self.assertEqual(plain[-1], "***Powered by Spinback***")
+
+    def test_saving_rules_from_the_modal_can_set_the_panel_icon(self):
+        from grid_a1.rules import RulesService
+
+        class Recorder:
+            def __init__(self):
+                self.calls = []
+
+            async def __call__(self, *args, **kwargs):
+                self.calls.append((args, kwargs))
+
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(Path(directory) / "manager.sqlite3")
+            database.migrate()
+            service = RulesService(database)
+
+            class FakeInteraction:
+                def __init__(self):
+                    self.guild = SimpleNamespace(id=3, name="Grid A1", emojis=[])
+                    self.user = SimpleNamespace(id=4)
+                    self.response = SimpleNamespace(send_message=Recorder(), is_done=lambda: False)
+
+            interaction = FakeInteraction()
+            asyncio.run(service.save(interaction, "game", "1. No cheating or macros.", icon="<:game:42>"))
+            message = interaction.response.send_message.calls[0][0][0]
+            self.assertIn("Saved the Game", message)
+            self.assertIn("panel icon was updated too", message)
+            self.assertIn("No rules panel is posted yet", message)
+            self.assertEqual(database.rule_text(3, "game"), "1. No cheating or macros.")
+            self.assertEqual(database.rules_emojis(3), {"game": "<:game:42>"})
+            self.assertIn("**Game <:game:42>**", [
+                item.content
+                for item in service.panel(interaction.guild).walk_children()
+                if isinstance(item, discord.ui.TextDisplay)
+            ][3])
+
+            asyncio.run(service.save(interaction, "game", "2. No teaming with other clans.", emblem="<:spinback:7>"))
+            self.assertEqual(database.rules_emojis(3), {"game": "<:game:42>", "emblem": "<:spinback:7>"})
+            self.assertIn("panel icon was updated too", interaction.response.send_message.calls[1][0][0])
+
+            asyncio.run(service.save(interaction, "game", "3. Play fair with the loot economy."))
+            self.assertEqual(database.rules_emojis(3), {"game": "<:game:42>", "emblem": "<:spinback:7>"})
+            self.assertNotIn("panel icon", interaction.response.send_message.calls[2][0][0])
+
+    def test_rules_emoji_overrides_are_stored_per_guild(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(Path(directory) / "manager.sqlite3")
+            database.migrate()
+
+            self.assertEqual(database.rules_emojis(3), {})
+            self.assertEqual(
+                database.set_rules_emojis(3, discord="<:discord:1>", emblem="<:spinback:2>"),
+                {"discord": "<:discord:1>", "emblem": "<:spinback:2>"},
+            )
+            self.assertEqual(database.rules_emojis(3), {"discord": "<:discord:1>", "emblem": "<:spinback:2>"})
+            self.assertEqual(database.set_rules_emojis(3, discord=""), {"emblem": "<:spinback:2>"})
+            self.assertEqual(database.rules_emojis(3), {"emblem": "<:spinback:2>"})
+            self.assertEqual(database.rules_emojis(99), {})
+            self.assertEqual(database.rules_emojis(0), {})
+            database.upsert_config(3, rules_emojis="not json")
+            self.assertEqual(database.rules_emojis(3), {})
 
     def test_every_shipped_file_uses_the_spinback_brand(self):
         stale = ("Grid A1", "grid-a1-manager")
