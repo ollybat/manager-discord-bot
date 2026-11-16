@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 from .utils import DEFAULT_PRIORITY, FEEDBACK_SCORES, PRIORITIES, utcnow, safe_json_list
-SCHEMA_VERSION = 24
+SCHEMA_VERSION = 25
 
 PERMISSION_ROLE_FIELDS = (
     "owner_role",
@@ -41,7 +41,7 @@ class Database:
             db.execute('''CREATE TABLE IF NOT EXISTS tickets (ticket_id TEXT PRIMARY KEY, guild_id INTEGER NOT NULL, channel_id INTEGER UNIQUE NOT NULL, owner_id INTEGER NOT NULL, issue TEXT NOT NULL, region TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'open', claimed_by INTEGER, close_requested_by INTEGER, opened_at TEXT NOT NULL, last_activity_at TEXT NOT NULL, inactivity_notice_at TEXT, owner_left INTEGER NOT NULL DEFAULT 0, auto_close_at TEXT, auto_close_reason TEXT, closed_at TEXT, closed_by INTEGER, close_reason TEXT, transcript_filename TEXT, urgent_at TEXT, urgent_by INTEGER)''')
             existing={r[1] for r in db.execute('PRAGMA table_info(guild_config)')}
             if 'panel_fingerprint' not in existing: db.execute("ALTER TABLE guild_config ADD COLUMN panel_fingerprint TEXT")
-            cols={**{n:'INTEGER' for n in ('report_channel','verify_panel_channel','verify_panel_message','verify_role',*[f'staff_role_{x}' for x in range(1,11)],'urgent_by','owner_role','moderator_role','admin_role','co_owner_role','head_admin_role','anti_links_enabled','anti_links_log_channel','wipe_channel','wipe_ping_role','wipe_announce_enabled','suggestion_channel','rules_channel','rules_message')},'urgent_at':'TEXT','anti_links_action':"TEXT NOT NULL DEFAULT 'delete_warn'",'anti_links_whitelist_domains':"TEXT NOT NULL DEFAULT '[]'",'anti_links_bypass_roles':"TEXT NOT NULL DEFAULT '[]'",'anti_links_allowed_roles':"TEXT NOT NULL DEFAULT '[]'"}
+            cols={**{n:'INTEGER' for n in ('report_channel','verify_panel_channel','verify_panel_message','verify_role',*[f'staff_role_{x}' for x in range(1,11)],'urgent_by','owner_role','moderator_role','admin_role','co_owner_role','head_admin_role','anti_links_enabled','anti_links_log_channel','wipe_channel','wipe_ping_role','wipe_announce_enabled','suggestion_channel','rules_channel','rules_message')},'urgent_at':'TEXT','rules_emojis':'TEXT','anti_links_action':"TEXT NOT NULL DEFAULT 'delete_warn'",'anti_links_whitelist_domains':"TEXT NOT NULL DEFAULT '[]'",'anti_links_bypass_roles':"TEXT NOT NULL DEFAULT '[]'",'anti_links_allowed_roles':"TEXT NOT NULL DEFAULT '[]'"}
             for n,d in cols.items():
                 if n not in existing: db.execute(f'ALTER TABLE guild_config ADD COLUMN {n} {d}')
             db.execute('''CREATE TABLE IF NOT EXISTS wipes (wipe_id TEXT PRIMARY KEY, guild_id INTEGER NOT NULL, region TEXT NOT NULL, title TEXT NOT NULL, scheduled_at TEXT NOT NULL, created_by INTEGER, created_at TEXT NOT NULL, announced_at TEXT, message_id INTEGER, channel_id INTEGER, status TEXT NOT NULL DEFAULT 'scheduled')''')
@@ -176,7 +176,7 @@ class Database:
             "staff_role_2", "staff_role_3", "staff_role_4", "staff_role_5", "staff_role_6",
             "staff_role_7", "staff_role_8", "staff_role_9", "staff_role_10",
             "wipe_announce_enabled", "wipe_channel", "wipe_ping_role", "suggestion_channel",
-            "rules_channel", "rules_message",
+            "rules_channel", "rules_message", "rules_emojis",
             "owner_role", "moderator_role",
             "admin_role", "co_owner_role", "head_admin_role", "anti_links_enabled",
             "anti_links_log_channel", "anti_links_action", "anti_links_whitelist_domains",
@@ -934,6 +934,32 @@ class Database:
     def set_rules_panel(self, guild_id: int, channel_id: int, message_id: int) -> None:
         """Remember where the rules panel was posted so edits can refresh it."""
         self.upsert_config(guild_id, rules_channel=int(channel_id), rules_message=int(message_id))
+
+    def rules_emojis(self, guild_id: int) -> dict[str, str]:
+        """Emoji overrides for the rules panel: {"discord": ..., "game": ..., "emblem": ...}."""
+        config = self.config(guild_id) if guild_id else None
+        raw = config["rules_emojis"] if config and "rules_emojis" in config.keys() else None
+        if not raw:
+            return {}
+        try:
+            stored = json.loads(raw)
+        except (TypeError, ValueError):
+            return {}
+        if not isinstance(stored, dict):
+            return {}
+        return {str(key): str(value) for key, value in stored.items() if value}
+
+    def set_rules_emojis(self, guild_id: int, **values: Any) -> dict[str, str]:
+        """Merge emoji overrides into one guild's config; an empty value clears that override."""
+        merged = self.rules_emojis(guild_id)
+        for key, value in values.items():
+            text = (value or "").strip()
+            if text:
+                merged[str(key)] = text[:120]
+            else:
+                merged.pop(str(key), None)
+        self.upsert_config(guild_id, rules_emojis=json.dumps(merged, sort_keys=True))
+        return merged
 
     def published_suggestions_all(self) -> list[sqlite3.Row]:
         """Every published suggestion across guilds, for persistent vote buttons."""
