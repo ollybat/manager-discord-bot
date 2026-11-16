@@ -130,6 +130,15 @@ def feedback_custom_id(score: int, ticket_id: str) -> str:
     return f"grid-a1:feedback:{safe_ticket_id}:{score}"[:100]
 
 
+def rules_custom_id(section: str) -> str:
+    """Give each rules panel button a persistent ID tied to its section."""
+    safe_section = re.sub(r"[^A-Za-z0-9_-]", "", str(section)).lower()[:32]
+    if not safe_section:
+        raise ValueError("section is required")
+
+    return f"grid-a1:rules:{safe_section}"[:100]
+
+
 def suggestion_custom_id(vote: str, suggestion_id: str) -> str:
     """Give each suggestion vote button a persistent ID tied to its suggestion."""
     if vote not in ("up", "down"):
@@ -172,7 +181,7 @@ def parse_ticket_topic(
 
 
 def is_ticket(channel: discord.abc.GuildChannel | None) -> bool:
-    """Return whether a channel carries the Grid A1 ticket topic marker."""
+    """Return whether a channel carries the SpinBack ticket topic marker."""
     return bool(parse_ticket_topic(channel))
 
 
