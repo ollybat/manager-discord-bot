@@ -624,23 +624,20 @@ async def moderation_untimeout(i: discord.Interaction, member: discord.Member, r
     bot.database.audit(i.guild.id, None, i.user.id, "untimeout", f"member={member.id}; {discord.utils.escape_markdown(reason)[:450]}")
     await i.followup.send(embed=embed("💜 Timeout lifted", f"🔓 {member.mention} can talk again.\n\n**Reason:** {discord.utils.escape_markdown(reason)[:500]}"), ephemeral=True)
 
-@bot.tree.command(name="purge", description="🧹 Bulk-delete recent messages in this channel")
+@bot.tree.command(name="purge", description="🧹 Bulk-delete recent messages, or empty the channel")
 @app_commands.guild_only()
 @app_commands.checks.has_permissions(manage_messages=True)
 @app_commands.checks.cooldown(3, 60.0, key=lambda i: (i.guild_id, i.user.id))
-@app_commands.describe(count="How many recent messages to delete (1–100)", reason="Why the messages are being removed")
-async def moderation_purge(i: discord.Interaction, count: app_commands.Range[int, 1, 100], reason: str = "No reason provided"):
+@app_commands.describe(
+    count="How many recent messages to delete (1–100); ignored when everything is True",
+    everything="Set to True to empty the channel instead of using count",
+    reason="Why the messages are being removed",
+)
+async def moderation_purge(i: discord.Interaction, count: app_commands.Range[int, 1, 100], everything: bool = False, reason: str = "No reason provided"):
     if not isinstance(i.channel, discord.TextChannel): return await i.response.send_message("❌ Purge needs a normal text channel.", ephemeral=True)
     await i.response.defer(ephemeral=True)
-    try: deleted = await i.channel.purge(limit=int(count), reason=f"{reason} • Moderator: {i.user}")
-    except discord.Forbidden: return await i.followup.send("❌ I need the Manage Messages permission in this channel to delete anything.", ephemeral=True)
-    except discord.HTTPException:
-        log.exception("Bulk delete failed in channel %s", i.channel.id)
-        return await i.followup.send("❌ Discord rejected that bulk delete. Try a smaller count.", ephemeral=True)
-    bot.database.audit(i.guild.id, None, i.user.id, "purge", f"channel={i.channel.id}; deleted={len(deleted)}; {discord.utils.escape_markdown(reason)[:400]}")
-    result = embed("🧹 Messages removed", f"Deleted **{len(deleted)}** message(s) in {i.channel.mention}.\n\n**Reason:** {discord.utils.escape_markdown(reason)[:500]}")
-    result.set_footer(text="Discord skips messages older than 14 days, so fewer may be removed than requested.")
-    await i.followup.send(embed=result, ephemeral=True)
+    async def reply(embed=None, **kwargs): await i.followup.send(embed=embed, ephemeral=True, **kwargs)
+    await _report_clear(reply, i.channel, i.user, None if everything else int(count), reason)
 
 @bot.command(name="lock", help="🔒 Prevent members from sending messages in this channel (staff only).")
 async def prefix_lock(ctx):
@@ -655,6 +652,30 @@ async def prefix_unlock(ctx):
     try: await ctx.channel.set_permissions(ctx.guild.default_role, send_messages=None, reason=f"Channel unlocked by {ctx.author}")
     except discord.Forbidden: return await ctx.send("❌ I cannot unlock this channel. Check Manage Channels and Manage Permissions.")
     await ctx.send("🔓 This channel is now unlocked for members.")
+
+_CLEAR_BATCH = 100
+_CLEAR_SECONDS = 20.0
+
+async def _clear_channel(channel, *, count: int | None, reason: str, seconds: float = _CLEAR_SECONDS) -> tuple[int, bool]:
+    """Delete messages in batches. Returns (deleted, stopped_early).
+
+    A count of None empties the channel, stopping when Discord returns a short batch,
+    when the time budget runs out, or on the first refusal so the caller can report it.
+    """
+    deleted = 0
+    deadline = time.monotonic() + seconds
+    while True:
+        want = _CLEAR_BATCH if count is None else min(_CLEAR_BATCH, count - deleted)
+        if want <= 0:
+            return deleted, False
+        batch = await channel.purge(limit=want, reason=reason)
+        if not batch:
+            return deleted, False
+        deleted += len(batch)
+        if len(batch) < want:
+            return deleted, False
+        if time.monotonic() >= deadline:
+            return deleted, True
 
 async def _require_staff_prefix(ctx, require_staff: bool = True) -> bool:
     """Gate a prefix command on the roles selected by /setup roles."""
@@ -800,21 +821,58 @@ async def prefix_stats(ctx):
     if not await _require_staff_prefix(ctx): return
     await ctx.send(embed=ticket_stats_embed(ctx.guild, collect_ticket_stats(bot.database, ctx.guild.id)))
 
-@bot.command(name="clear", help="🧹 Bulk-delete recent messages (staff only, 1–100).")
-@commands.cooldown(3, 60.0, commands.BucketType.user)
-async def prefix_clear(ctx, count: int, *, reason: str = "No reason provided"):
+async def _report_clear(respond, channel, actor, count: int | None, reason: str) -> None:
+    """Run a clear and reply with exactly what happened."""
+    try:
+        deleted, stopped = await _clear_channel(channel, count=count, reason=f"{reason} • Moderator: {actor}")
+    except discord.Forbidden:
+        return await respond("❌ I need the Manage Messages permission in this channel to delete anything.")
+    except discord.HTTPException:
+        log.exception("Bulk delete failed in channel %s", channel.id)
+        return await respond("❌ Discord rejected that delete. Try again in a moment, or clear a smaller number.")
+    bot.database.audit(
+        channel.guild.id,
+        channel.id,
+        actor.id,
+        "purge",
+        f"channel={channel.id}; deleted={deleted}; {'everything' if count is None else f'limit={count}'}; {discord.utils.escape_markdown(reason)[:360]}",
+    )
+    if count is None:
+        summary = f"Deleted **{deleted}** message(s) in {channel.mention} — the channel is clear." if not stopped else (
+            f"Deleted **{deleted}** message(s) in {channel.mention} and stopped after {int(_CLEAR_SECONDS)} seconds "
+            "to stay responsive. Run the command again to continue."
+        )
+    else:
+        summary = f"Deleted **{deleted}** message(s) in {channel.mention}."
+    result = embed("🧹 Messages removed", summary)
+    result.set_footer(text="Messages older than 14 days cannot be bulk-deleted, so those are removed one at a time.")
+    await respond(embed=result)
+
+@bot.command(name="clear", help="🧹 Delete the newest messages, or the whole channel when you give no count (staff only).")
+@commands.cooldown(2, 60.0, commands.BucketType.user)
+async def prefix_clear(ctx, count: int | None = None, *, reason: str = "No reason provided"):
     if not await _require_staff_prefix(ctx): return
     if not isinstance(ctx.channel, discord.TextChannel): return await ctx.send("❌ Clear needs a normal text channel.")
-    if not 1 <= count <= 100: return await ctx.send("❌ Clear takes a count between 1 and 100.")
-    try: deleted = await ctx.channel.purge(limit=count, reason=f"{reason} • Moderator: {ctx.author}")
-    except discord.Forbidden: return await ctx.send("❌ I need the Manage Messages permission in this channel to delete anything.")
-    except discord.HTTPException:
-        log.exception("Prefix bulk delete failed in channel %s", ctx.channel.id)
-        return await ctx.send("❌ Discord rejected that bulk delete. Try a smaller count.")
-    bot.database.audit(ctx.guild.id, ctx.channel.id, ctx.author.id, "purge", f"channel={ctx.channel.id}; deleted={len(deleted)}; {discord.utils.escape_markdown(reason)[:400]}")
-    result = embed("🧹 Messages removed", f"Deleted **{len(deleted)}** message(s) in {ctx.channel.mention}.")
-    result.set_footer(text="Discord skips messages older than 14 days, so fewer may be removed than requested.")
-    await ctx.send(embed=result)
+    if count is not None and not 1 <= count <= 10000:
+        return await ctx.send("❌ Give a count between 1 and 10000, or leave the count out to empty the channel completely.")
+    if count is not None:
+        return await _report_clear(ctx.send, ctx.channel, ctx.author, count, reason)
+    prompt = embed(
+        "🧹 Clear this channel?",
+        f"This deletes **every** message in {ctx.channel.mention}, including this prompt. Discord cannot bulk-delete "
+        f"messages older than 14 days, so those are removed one at a time and the job stops after about "
+        f"{int(_CLEAR_SECONDS)} seconds, reporting what is left.\n\nThis cannot be undone.",
+    )
+    prompt.set_footer(text="Only you can answer this prompt, and it expires after 90 seconds.")
+    async def confirmed(interaction: discord.Interaction) -> None:
+        await interaction.response.edit_message(
+            embed=embed("🧹 Clearing…", f"Deleting every message in {ctx.channel.mention}."), view=None
+        )
+        async def reply(embed=None, **kwargs):
+            await interaction.followup.send(embed=embed, ephemeral=True, **kwargs)
+        await _report_clear(reply, ctx.channel, ctx.author, None, reason)
+    view = ConfirmView(confirmed, author_id=ctx.author.id, confirm_label="Delete everything")
+    view.message = await ctx.send(embed=prompt, view=view)
 
 @bot.command(name="slowmode", help="🐌 Set this channel's slowmode in seconds (staff only, 0 disables).")
 async def prefix_slowmode(ctx, seconds: int, *, reason: str = "No reason provided"):
