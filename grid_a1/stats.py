@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from .database import Database
-from .utils import utcnow
+from .utils import DEFAULT_PRIORITY, PRIORITIES, PRIORITY_LABELS, utcnow
 
 RECENT_WINDOW_DAYS = 7
 MONTH_WINDOW_DAYS = 30
@@ -31,7 +32,10 @@ class TicketStats:
     average_claim_minutes: float | None = None
     average_close_minutes: float | None = None
     regions: tuple[tuple[str, int], ...] = ()
-    top_claimers: tuple[tuple[int, int], ...] = ()
+    priorities: tuple[tuple[str, int], ...] = ()
+    top_claimers: tuple[tuple[int, int, float | None], ...] = ()
+    rating_average: float | None = None
+    rating_count: int = 0
 
 
 def parse_time(value: Any) -> datetime | None:
@@ -76,6 +80,97 @@ def format_duration(minutes: float | None) -> str:
     return f"{days}d {remaining_hours}h"
 
 
+PRIORITY_ORDER = {
+    priority: index for index, priority in enumerate(reversed(PRIORITIES))
+}
+_MEMBER_PREFIX = re.compile(r"^member=\d+;?\s*")
+
+
+def timestamp_marker(timestamp: Any) -> str:
+    """Discord relative timestamp marker for a stored UTC timestamp."""
+    moment = parse_time(timestamp)
+    return f"<t:{int(moment.timestamp())}:R>" if moment else "an unknown time"
+
+
+def relative_age(timestamp: Any, now: datetime | None = None) -> str:
+    """Human age of a stored UTC timestamp, such as '3h 20m'."""
+    minutes = minutes_between(timestamp, (now or utcnow()).isoformat())
+    return format_duration(minutes) if minutes is not None else "unknown age"
+
+
+def sort_open_queue(rows: Iterable[Any]) -> list[Any]:
+    """Order open tickets by priority (most urgent first) then oldest first."""
+    return sorted(
+        rows,
+        key=lambda row: (
+            PRIORITY_ORDER.get(row_value(row, "priority", DEFAULT_PRIORITY), len(PRIORITIES)),
+            str(row_value(row, "opened_at", "") or ""),
+        ),
+    )
+
+
+def queue_overview(rows: Iterable[Any], limit: int = 15) -> tuple[list[str], int]:
+    """One line per open ticket plus the number that did not fit."""
+    ordered = sort_open_queue(rows)
+    lines: list[str] = []
+    for row in ordered[: max(1, limit)]:
+        priority = row_value(row, "priority", DEFAULT_PRIORITY)
+        claimed = row_value(row, "claimed_by")
+        claimer = f"<@{claimed}>" if claimed else "unclaimed"
+        label = PRIORITY_LABELS.get(priority, str(priority).title())
+        lines.append(
+            f"{label} • <#{row_value(row, 'channel_id')}> • {claimer} • "
+            f"{relative_age(row_value(row, 'opened_at'))} old"
+        )
+    return lines, max(0, len(ordered) - len(lines))
+
+
+def history_detail(metadata: Any, limit: int = 140) -> str:
+    """Trim stored audit metadata into one readable moderation detail."""
+    text = _MEMBER_PREFIX.sub("", str(metadata or "").strip()) or "no details recorded"
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def moderation_history_lines(rows: Iterable[Any], limit: int = 10) -> list[str]:
+    """One line per recorded moderation action, newest first."""
+    lines: list[str] = []
+    for row in list(rows)[: max(1, limit)]:
+        actor = row_value(row, "actor_id")
+        byline = f" by <@{actor}>" if actor else ""
+        lines.append(
+            f"**{row_value(row, 'action', 'action')}** • "
+            f"{relative_age(row_value(row, 'created_at'))} ago{byline} — "
+            f"{history_detail(row_value(row, 'metadata'))}"
+        )
+    return lines
+
+
+def note_lines(rows: Iterable[Any], limit: int = 10) -> list[str]:
+    """Read internal ticket notes out of their stored audit metadata."""
+    lines: list[str] = []
+    for row in list(rows)[: max(1, limit)]:
+        try:
+            payload = json.loads(row_value(row, "metadata", "") or "{}")
+        except (TypeError, ValueError):
+            payload = {}
+        note = str(payload.get("note") or "").strip()
+        if not note:
+            continue
+        lines.append(
+            f"<@{row_value(row, 'actor_id')}> • "
+            f"{relative_age(row_value(row, 'created_at'))} ago — {note}"
+        )
+    return lines
+
+
+def row_value(row: Any, key: str, default: Any = None) -> Any:
+    """Read one column from a sqlite3.Row or a plain mapping."""
+    try:
+        return row[key]
+    except (IndexError, KeyError, TypeError):
+        return default
+
+
 def _count(values: Iterable[Any]) -> dict[Any, int]:
     """Count repeated values while ignoring empty ones."""
     counts: dict[Any, int] = {}
@@ -112,8 +207,14 @@ def claim_assignee(event: Any) -> int | None:
     return actor if isinstance(actor, int) else None
 
 
-def build_stats(tickets: Sequence[Any], claims: Sequence[Any], *, now: datetime) -> TicketStats:
-    """Summarise ticket rows and claim events without touching the database."""
+def build_stats(
+    tickets: Sequence[Any],
+    claims: Sequence[Any],
+    *,
+    now: datetime,
+    ratings: Sequence[int] = (),
+) -> TicketStats:
+    """Summarise ticket rows, claim events, and ratings without touching the database."""
     now = parse_time(now) or utcnow()
     recent = now - timedelta(days=RECENT_WINDOW_DAYS)
     month = now - timedelta(days=MONTH_WINDOW_DAYS)
@@ -131,9 +232,18 @@ def build_stats(tickets: Sequence[Any], claims: Sequence[Any], *, now: datetime)
         ((region, count) for region, count in _count(row["region"] for row in open_tickets).items()),
         key=lambda item: (-item[1], str(item[0])),
     )
+    priority_counts = _count(row_value(row, "priority", DEFAULT_PRIORITY) for row in open_tickets)
+    priorities = tuple((priority, priority_counts.get(priority, 0)) for priority in PRIORITIES)
+    opened_by_ticket = {row["ticket_id"]: row["opened_at"] for row in tickets}
+    staff_minutes: dict[int, list[float]] = {}
+    for event in first_claims.values():
+        assignee = claim_assignee(event)
+        minutes = minutes_between(opened_by_ticket.get(event["ticket_id"]), event["created_at"])
+        if assignee is not None and minutes is not None:
+            staff_minutes.setdefault(assignee, []).append(minutes)
     leaderboard = sorted(
         (
-            (assignee, count)
+            (assignee, count, average(staff_minutes.get(assignee, [])))
             for assignee, count in _count(claim_assignee(event) for event in claims).items()
         ),
         key=lambda item: (-item[1], item[0]),
@@ -157,7 +267,10 @@ def build_stats(tickets: Sequence[Any], claims: Sequence[Any], *, now: datetime)
         average_claim_minutes=average(claim_minutes),
         average_close_minutes=average(close_minutes),
         regions=tuple(regions),
+        priorities=priorities,
         top_claimers=tuple(leaderboard),
+        rating_average=average(float(score) for score in ratings),
+        rating_count=len(ratings),
     )
 
 
@@ -165,7 +278,7 @@ def collect(database: Database, guild_id: int, *, now: datetime | None = None) -
     """Read one guild's tickets and claim history, then summarise them."""
     with database.connect() as db:
         tickets = db.execute(
-            "SELECT ticket_id, status, region, opened_at, closed_at, claimed_by "
+            "SELECT ticket_id, status, region, opened_at, closed_at, claimed_by, priority "
             "FROM tickets WHERE guild_id=?",
             (guild_id,),
         ).fetchall()
@@ -176,4 +289,9 @@ def collect(database: Database, guild_id: int, *, now: datetime | None = None) -
             (guild_id, *CLAIM_ACTIONS),
         ).fetchall()
 
-    return build_stats(tickets, claims, now=now or utcnow())
+    return build_stats(
+        tickets,
+        claims,
+        now=now or utcnow(),
+        ratings=database.feedback_scores(guild_id),
+    )

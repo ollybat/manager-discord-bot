@@ -11,35 +11,16 @@ import discord
 from discord import app_commands
 
 from .embeds import embed
+from .guides import (
+    catalog,
+    command_detail,
+    match_entries,
+    prefix_guide_lines,
+    render_guide,
+    viewer_access,
+)
 
 IMAGE_EXTENSIONS = frozenset({".jpg", ".jpeg", ".png", ".gif", ".webp"})
-
-BASE_SERVER_SETUP_HELP = (
-    "`/setup tickets panel_channel logs_channel category inactivity_hours` — "
-    "Save ticket locations and publish the support panel.\n"
-    "`/setup welcomer welcome_channel link_channel bot_commands_channel "
-    "shop_channel verify_channel` — Save community channels.\n"
-    "`/welcomer preview` / `/welcomer test` — Preview privately or send a "
-    "test greeting."
-)
-MANAGE_GUILD_HELP = (
-    "\n`/verifypanel channel role` — Publish a verification panel; the bot "
-    "role must be above the assigned role.\n"
-    "`/anti-links enabled action log_channel` — configure enabled, action, and log channel. "
-    "The bot needs Message Content Intent and Manage Messages.\n"
-    "`/wipefeed enable enabled` / `/wipefeed send timestamp channel` — "
-    "Configure and post wipe announcements.\n"
-    "`/roles setchannel channel` — Publish the role directory."
-)
-GIVEAWAY_SETUP_HELP = (
-    "`/giveaway config` — Configure a giveaway's channel, optional ping role, free-text reward, duration, and winner count.\n"
-    "`/giveaway end giveaway_id` — End early and draw winners. Giveaways otherwise draw automatically when their timer expires."
-)
-POLL_SETUP_HELP = (
-    "`/poll config` — Open the private Create Poll / View Active panel; use Poll Settings to set the default channel and duration.\n"
-    "`/poll create question options [duration_hours]` — Create a poll with "
-    "2–10 choices separated by `|`; duration defaults to your saved setting."
-)
 
 
 class OwnerConfigurationError(app_commands.CheckFailure):
@@ -75,158 +56,73 @@ def register_commands(bot: discord.Client) -> None:
 
     @bot.tree.command(
         name="help",
-        description="📚 Open the complete, permission-aware command guide",
+        description="📚 Browse every command you can use, with usage and access",
     )
-    async def help_command(interaction: discord.Interaction) -> None:
-        """Show only the command groups the current member can use."""
-        guide = embed(
-            "💜 Grid A1 • Command Guide",
-            "✨ Here’s what you can do. Discord shows each command’s options as you type; "
-            "protected actions only work for members with the required access.",
-            discord.Colour.from_rgb(177, 77, 255),
-        )
-        guide.add_field(
-            name="🌐 Everyone",
-            value=(
-                "`/help` — Open this guide\n"
-                "`/info server` — View server details\n"
-                "`/report member reason proof_link proof_file` — Privately report a member; "
-                "reason and HTTP(S) link or upload are optional. Staff must configure a "
-                "report channel first.\n"
-                "`/poll end poll_id` / `/poll remove poll_id` — manage a poll you created; "
-                "server managers can manage any poll."
-            ),
-            inline=False,
-        )
-
-        member = interaction.user
-        guild = interaction.guild
-        if not guild or not isinstance(member, discord.Member):
-            guide.set_footer(
-                text="Use commands inside a server to see the sections available to your roles."
+    @app_commands.describe(
+        command="Leave empty for the full guide, or pick one command for details"
+    )
+    async def help_command(
+        interaction: discord.Interaction,
+        command: str | None = None,
+    ) -> None:
+        """Render the live command catalog filtered to what this member may use."""
+        entries = catalog(bot.tree)
+        selected = command.strip().lower().lstrip("/") if command else ""
+        if selected:
+            entry = next((item for item in entries if item.path == selected), None)
+            if entry is None:
+                await interaction.response.send_message(
+                    "❓ I could not find that command. Pick one from the autocomplete list.",
+                    ephemeral=True,
+                )
+                return
+            detail = embed(
+                f"💜 /{entry.path}",
+                command_detail(entry),
+                discord.Colour.from_rgb(177, 77, 255),
             )
-            await interaction.response.send_message(embed=guide, ephemeral=True)
+            detail.set_footer(text="Every command keeps its own permission checks.")
+            await interaction.response.send_message(embed=detail, ephemeral=True)
             return
 
-        config = bot.database.config(guild.id)
-        server_owner = member.id == guild.owner_id
-        bot_owner = member.id == bot.settings_owner_id
-        owner = server_owner or bot_owner
-
-        dashboard_role_ids = {
-            int(config[key])
-            for key in ("owner_role", "co_owner_role")
-            if config and config[key]
-        }
-        member_role_ids = {role.id for role in member.roles}
-        dashboard_access = server_owner or bool(member_role_ids & dashboard_role_ids)
-        manage_guild = (
-            server_owner
-            or member.guild_permissions.administrator
-            or member.guild_permissions.manage_guild
+        member = interaction.user if interaction.guild else None
+        fields = render_guide(entries, viewer_access(bot, member, interaction.guild))
+        guide = embed(
+            "💜 Grid A1 • Command Guide",
+            "✨ Built from the live command tree, so it always matches this bot. Discord shows "
+            "each command's options as you type, and protected commands only answer members "
+            "holding one of the staff roles saved by `/setup roles`.\n\n🔎 For one command in full, "
+            "run `/help command:` and pick it.",
+            discord.Colour.from_rgb(177, 77, 255),
         )
-        admin_access = owner or manage_guild
-        staff_access = (
-            admin_access
-            or member.guild_permissions.manage_channels
-            or bool(
-                member_role_ids
-                & set(bot.database.configured_permission_role_ids(guild.id))
-            )
+        for name, value in fields:
+            guide.add_field(name=name, value=value, inline=False)
+        guide.add_field(
+            name="⌨️ Prefix commands",
+            value="\n".join(prefix_guide_lines())[:1024],
+            inline=False,
         )
-        can_manage_messages = (
-            server_owner
-            or member.guild_permissions.administrator
-            or member.guild_permissions.manage_messages
-        )
-
-        if dashboard_access:
+        if not fields:
             guide.add_field(
-                name="🎛️ Easy private dashboard",
-                value=(
-                    "`/dashboard` — Select an area, review its status, then choose "
-                    "**Set up section**. The server owner can always open it; configured "
-                    "Owner/Co-owner roles can also use it."
-                ),
+                name="🌐 Nothing to list yet",
+                value="Ask your server owner to finish setup, then run /help again.",
                 inline=False,
             )
-
-        if server_owner:
-            guide.add_field(
-                name="👑 Server owner setup",
-                value=(
-                    "`/setup roles owner_role co_owner_role head_admin_role admin_role "
-                    "moderator_role` — Choose five distinct roles to initialize staff "
-                    "access. The server owner can always open `/dashboard`; configured "
-                    "Owner/Co-owner roles can open it too."
-                ),
-                inline=False,
-            )
-
-        if admin_access:
-            setup_help = BASE_SERVER_SETUP_HELP
-            if manage_guild:
-                setup_help += MANAGE_GUILD_HELP
-            guide.add_field(
-                name="⚙️ Server setup & safety",
-                value=setup_help,
-                inline=False,
-            )
-            guide.add_field(
-                name="📊 Poll setup",
-                value=POLL_SETUP_HELP,
-                inline=False,
-            )
-            guide.add_field(
-                name="🎁 Giveaways",
-                value=GIVEAWAY_SETUP_HELP,
-                inline=False,
-            )
-
-        if can_manage_messages:
-            guide.add_field(
-                name="📝 Message management",
-                value=(
-                    "`/embed title description image` — Post a custom bot-branded embed. "
-                    "Requires Manage Messages and Send Messages.\n"
-                    "`/embed-edit message_id title description image` — Edit a bot-authored "
-                    "embed. Requires Manage Messages; title, description, and image are optional."
-                ),
-                inline=False,
-            )
-
-        if staff_access:
-            guide.add_field(
-                name="🛡️ Staff tools",
-                value=(
-                    "`/ticket claim` — Claim the current support ticket.\n"
-                    "`/ticket transfer target_member` — Assign it to another staff member.\n"
-                    "`/ticket remove user` — Remove a member from the ticket.\n"
-                    "`/ticket requestclose reason` / `/ticket close reason` — Request or "
-                    "complete ticket closure; closure saves a transcript.\n"
-                    "`/kick member reason` / `/ban member reason` / `/warn member reason` / "
-                    "`/timeout member minutes reason` — Moderation actions. Check role order "
-                    "before kick, ban, or timeout.\n"
-                    "`!lock` / `!unlock` — Lock or unlock the current channel."
-                ),
-                inline=False,
-            )
-
-        if bot_owner:
-            guide.add_field(
-                name="🔧 Bot owner",
-                value=(
-                    "`/ping` — View private latency, uptime, and runtime diagnostics.\n"
-                    "`/sync` — Synchronize application commands; cooldown-protected."
-                ),
-                inline=False,
-            )
-
         guide.set_footer(
-            text="Commands keep their existing permission checks. Need access? Ask your server owner."
+            text="Members only see the sections their roles allow. Need access? Ask your server owner."
         )
         await interaction.response.send_message(embed=guide, ephemeral=True)
 
+    @help_command.autocomplete("command")
+    async def help_command_autocomplete(
+        interaction: discord.Interaction,
+        current: str,
+    ) -> list[app_commands.Choice[str]]:
+        """Offer the live catalog so nobody has to memorise command paths."""
+        return [
+            app_commands.Choice(name=f"/{entry.path}", value=entry.path)
+            for entry in match_entries(catalog(bot.tree), current)
+        ]
     @bot.tree.command(
         name="ping",
         description="🏓 View private bot health, latency, and runtime details (owner only)",
@@ -290,6 +186,7 @@ def register_commands(bot: discord.Client) -> None:
         description="🎨 Post a custom embed with an optional image (Manage Messages)",
     )
     @app_commands.checks.has_permissions(manage_messages=True, send_messages=True)
+    @app_commands.checks.cooldown(5, 60.0, key=lambda i: (i.guild_id, i.user.id))
     @app_commands.describe(
         title="Embed title",
         description="Embed description",
@@ -364,6 +261,7 @@ def register_commands(bot: discord.Client) -> None:
         description="🖊️ Edit a bot-authored embed in this channel",
     )
     @app_commands.checks.has_permissions(manage_messages=True)
+    @app_commands.checks.cooldown(5, 60.0, key=lambda i: (i.guild_id, i.user.id))
     @app_commands.describe(
         message_id="Numeric ID of the bot-authored message",
         title="Optional replacement title",

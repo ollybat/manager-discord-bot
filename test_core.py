@@ -3,28 +3,24 @@ from __future__ import annotations
 
 import ast
 import asyncio
+import inspect
 import json
 import os
 import sqlite3
 import tempfile
 import unittest
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import discord
+from discord import app_commands
 from pathlib import Path
 
 from grid_a1.config import Settings, validate_runtime
 from grid_a1.database import Database
 from grid_a1.embeds import inactivity_indicator
 from grid_a1.utils import anti_link_config_updates, active_ticket_owner, detected_external_links, inactivity_custom_id, is_http_url, safe_json_list, sanitize_channel_name, ticket_status_title
-from grid_a1.commands import (
-    BASE_SERVER_SETUP_HELP,
-    GIVEAWAY_SETUP_HELP,
-    MANAGE_GUILD_HELP,
-    POLL_SETUP_HELP,
-    _validate_image,
-)
+from grid_a1.commands import _validate_image
 from grid_a1.polls import PollVoteView, parse_poll_options, poll_embed
 from grid_a1.views import DashboardView, TicketControls
 
@@ -42,10 +38,17 @@ class CoreTests(unittest.TestCase):
             owner_line = next(line for line in source.splitlines() if line.startswith("OWNER_ID="))
             self.assertEqual(owner_line.partition("=")[2].strip(), "", filename)
 
-    def test_help_sections_fit_discord_embed_field_limits(self):
-        self.assertLessEqual(len(BASE_SERVER_SETUP_HELP + MANAGE_GUILD_HELP), 1024)
-        self.assertLessEqual(len(POLL_SETUP_HELP), 1024)
-        self.assertLessEqual(len(GIVEAWAY_SETUP_HELP), 1024)
+    def test_help_fields_fit_discord_embed_limits_for_the_widest_access(self):
+        from grid_a1.bot import bot as runtime_bot
+        from grid_a1.guides import ACCESS_LABELS, catalog, render_guide
+
+        entries = catalog(runtime_bot.tree)
+        fields = render_guide(entries, list(ACCESS_LABELS))
+        self.assertTrue(fields)
+        for name, value in fields:
+            self.assertLessEqual(len(name), 256)
+            self.assertLessEqual(len(value), 1024)
+        self.assertLessEqual(sum(len(name) + len(value) for name, value in fields), 6000)
 
     def test_custom_embed_image_validation_checks_type_and_extension(self):
         self.assertIsNone(_validate_image(None))
@@ -96,7 +99,7 @@ class CoreTests(unittest.TestCase):
             self.assertEqual(database.ticket("ABC123")["issue"], "links")
             self.assertEqual(database.config(42)["owner_role"], 101)
             self.assertEqual(database.config(42)["report_channel"], 9900)
-            self.assertEqual(database.startup_check()["schema_version"], 19)
+            self.assertEqual(database.startup_check()["schema_version"], 21)
 
     def test_ticket_create_rolls_back_when_audit_insert_fails(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -208,14 +211,14 @@ class CoreTests(unittest.TestCase):
 
         now = datetime(2026, 11, 16, 12, 0, tzinfo=timezone.utc)
 
-        def ticket(ticket_id, status="open", region="EU", opened_at="2026-11-16T10:00:00+00:00", closed_at=None, claimed_by=None):
-            return {"ticket_id": ticket_id, "status": status, "region": region, "opened_at": opened_at, "closed_at": closed_at, "claimed_by": claimed_by}
+        def ticket(ticket_id, status="open", region="EU", opened_at="2026-11-16T10:00:00+00:00", closed_at=None, claimed_by=None, priority="normal"):
+            return {"ticket_id": ticket_id, "status": status, "region": region, "opened_at": opened_at, "closed_at": closed_at, "claimed_by": claimed_by, "priority": priority}
 
         def claim(ticket_id, created_at, assignee):
             return {"ticket_id": ticket_id, "created_at": created_at, "actor_id": assignee, "metadata": json.dumps({"new_assignee": assignee})}
 
         tickets = [
-            ticket("A", claimed_by=1),
+            ticket("A", claimed_by=1, priority="high"),
             ticket("B", status="close_requested", region="NA"),
             ticket("C", status="closed", opened_at="2026-11-10T10:00:00+00:00", closed_at="2026-11-10T11:00:00+00:00", claimed_by=2),
             ticket("D", status="closed", opened_at="2026-10-01T10:00:00+00:00", closed_at="2026-10-01T10:30:00+00:00", claimed_by=2),
@@ -234,9 +237,15 @@ class CoreTests(unittest.TestCase):
         self.assertAlmostEqual(stats.average_claim_minutes or 0, 16.67, places=2)
         self.assertAlmostEqual(stats.average_close_minutes or 0, 45.0, places=2)
         self.assertEqual(stats.regions, (("EU", 1), ("NA", 1)))
-        self.assertEqual(stats.top_claimers, ((2, 2), (1, 1)))
+        self.assertEqual(stats.top_claimers, ((2, 2, 10.0), (1, 1, 30.0)))
+        self.assertEqual(stats.priorities, (("low", 0), ("normal", 1), ("high", 1), ("urgent", 0)))
         self.assertEqual(format_duration(stats.average_claim_minutes), "17m")
         self.assertEqual(format_duration(None), "—")
+        self.assertEqual((stats.rating_average, stats.rating_count), (None, 0))
+
+        rated = build_stats(tickets, [], now=now, ratings=[5, 4, 4])
+        self.assertEqual(rated.rating_count, 3)
+        self.assertAlmostEqual(rated.rating_average or 0, 4.33, places=2)
 
     def test_ticket_stats_embed_reports_queue_and_empty_states(self):
         from grid_a1.embeds import ticket_stats_embed
@@ -244,10 +253,13 @@ class CoreTests(unittest.TestCase):
 
         guild = SimpleNamespace(name="Grid A1")
         empty = ticket_stats_embed(guild, TicketStats())
+        empty_fields = {field.name: field.value for field in empty.fields}
         self.assertIn("Support statistics", empty.title)
-        self.assertEqual(len(empty.fields), 5)
-        self.assertEqual(empty.fields[3].value, "No open tickets right now.")
-        self.assertEqual(empty.fields[4].value, "No claims recorded yet.")
+        self.assertEqual(len(empty.fields), 7)
+        self.assertEqual(empty_fields["🌍 Open by region"], "No open tickets right now.")
+        self.assertEqual(empty_fields["🥇 Most claims"], "No claims recorded yet.")
+        self.assertEqual(empty_fields["🚦 Open by priority"], "No open tickets right now.")
+        self.assertEqual(empty_fields["⭐ Feedback"], "No ratings yet. Owners are asked privately after closure.")
 
         busy = ticket_stats_embed(
             guild,
@@ -261,12 +273,23 @@ class CoreTests(unittest.TestCase):
                 average_claim_minutes=12.0,
                 average_close_minutes=95.0,
                 regions=(("EU", 2),),
-                top_claimers=((77, 5),),
+                priorities=(("low", 0), ("normal", 2), ("high", 1), ("urgent", 3)),
+                top_claimers=((77, 5, 12.0), (78, 2, None)),
             ),
         )
+        busy_fields = {field.name: field.value for field in busy.fields}
         self.assertIn("Queue: **3**", busy.fields[0].value)
         self.assertIn("1h 35m", busy.fields[2].value)
-        self.assertIn("<@77> — **5**", busy.fields[4].value)
+        self.assertIn("<@77> — **5** • 12m avg", busy_fields["🥇 Most claims"])
+        self.assertIn("<@78> — **2**", busy_fields["🥇 Most claims"])
+        self.assertNotIn("<@78> — **2** •", busy_fields["🥇 Most claims"])
+        self.assertIn("🔴 Urgent: **3**", busy_fields["🚦 Open by priority"])
+        self.assertIn("No ratings yet", busy_fields["⭐ Feedback"])
+
+        rated = ticket_stats_embed(guild, TicketStats(rating_average=4.5, rating_count=8))
+        rated_fields = {field.name: field.value for field in rated.fields}
+        self.assertIn("Average: **4.50/5**", rated_fields["⭐ Feedback"])
+        self.assertIn("Ratings: **8**", rated_fields["⭐ Feedback"])
 
     def test_collect_reads_ticket_workload_from_sqlite(self):
         from grid_a1.stats import collect
@@ -279,8 +302,787 @@ class CoreTests(unittest.TestCase):
             database.assign_ticket("STAT1", 8002)
             stats = collect(database, 42, now=datetime(2026, 11, 16, 12, 0, tzinfo=timezone.utc))
             self.assertEqual((stats.open_total, stats.claimed, stats.unclaimed), (1, 1, 0))
-            self.assertEqual(stats.top_claimers, ((8002, 1),))
+            self.assertEqual([(assignee, count) for assignee, count, _ in stats.top_claimers], [(8002, 1)])
             self.assertEqual(stats.regions, (("EU", 1),))
+            self.assertEqual(stats.priorities, (("low", 0), ("normal", 1), ("high", 0), ("urgent", 0)))
+            self.assertEqual((stats.rating_average, stats.rating_count), (None, 0))
+            database.save_feedback("STAT1", 42, 8001, 5)
+            scored = collect(database, 42)
+            self.assertEqual((scored.rating_average, scored.rating_count), (5.0, 1))
+
+    def test_ticket_priority_is_validated_audited_and_counted(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(Path(directory) / "manager.sqlite3")
+            database.migrate()
+            database.create_ticket(ticket_id="PRI1", guild_id=42, channel_id=9701, owner_id=8801, issue="general", region="EU", opened_at="2026-11-16T09:00:00+00:00", last_activity_at="2026-11-16T09:00:00+00:00")
+            self.assertEqual(database.ticket("PRI1")["priority"], "normal")
+            self.assertEqual(database.priority_counts(42), {"normal": 1})
+            self.assertTrue(database.set_priority("PRI1", "urgent", 8802))
+            self.assertEqual(database.ticket("PRI1")["priority"], "urgent")
+            self.assertEqual(database.priority_counts(42), {"urgent": 1})
+            with database.connect() as db:
+                rows = db.execute("SELECT actor_id, metadata FROM audit_log WHERE ticket_id='PRI1' AND action='priority_changed'").fetchall()
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["actor_id"], 8802)
+            self.assertEqual(json.loads(rows[0]["metadata"]), {"from": "normal", "to": "urgent"})
+            with self.assertRaises(ValueError):
+                database.set_priority("PRI1", "extreme", 8802)
+            with self.assertRaises(ValueError):
+                database.update_ticket("PRI1", priority="blocker")
+            database.update_ticket("PRI1", status="closed", closed_at="2026-11-16T10:00:00+00:00", closed_by=8802)
+            self.assertFalse(database.set_priority("PRI1", "low", 8802))
+            self.assertEqual(database.priority_counts(42), {})
+
+    def test_priority_embed_labels_the_staff_choice(self):
+        from grid_a1.embeds import priority_embed
+
+        actor = SimpleNamespace(display_name="Saturn Staff")
+        urgent = priority_embed("urgent", actor)
+        self.assertIn("🔴 Urgent", urgent.title)
+        self.assertEqual(urgent.footer.text, "Set by Saturn Staff")
+        self.assertIn("🟠 High", priority_embed("high", actor).title)
+        self.assertIn("Priority", priority_embed("weird", actor).title)
+
+
+
+
+    def test_new_moderation_and_listing_commands_are_registered(self):
+        import grid_a1.bot as bot_module
+
+        for name in ("unban", "untimeout", "purge", "modlog"):
+            self.assertIsNotNone(bot_module.bot.tree.get_command(name), name)
+        self.assertIsNotNone(bot_module.giveaway_group.get_command("list"))
+        self.assertIsNotNone(bot_module.poll_group.get_command("results"))
+
+        bulk = bot_module.moderation_purge
+        self.assertEqual((bulk._params["count"].min_value, bulk._params["count"].max_value), (1, 100))
+        self.assertTrue(bulk.checks, "purge should carry a permission check")
+        self.assertEqual(bot_module.moderation_unban._params["user_id"].name, "user_id")
+        self.assertIsNotNone(bot_module.moderation_unban_autocomplete)
+
+    def test_unban_autocomplete_lists_and_filters_bans(self):
+        import grid_a1.bot as bot_module
+
+        class FakeUser:
+            def __init__(self, name, uid):
+                self.name = name
+                self.id = uid
+
+            def __str__(self):
+                return self.name
+
+        class FakeBans:
+            def __init__(self, pairs):
+                self._pairs = pairs
+
+            def __aiter__(self):
+                self._walk = iter(self._pairs)
+                return self
+
+            async def __anext__(self):
+                try:
+                    return next(self._walk)
+                except StopIteration:
+                    raise StopAsyncIteration
+
+        pairs = [(FakeUser("Spammer", 11), 11), (FakeUser("Raider", 22), 22)]
+        guild = SimpleNamespace(bans=lambda limit: FakeBans([SimpleNamespace(user=user) for user, _ in pairs]))
+        interaction = SimpleNamespace(guild=guild, user=SimpleNamespace(id=1))
+        choices = asyncio.run(bot_module.moderation_unban_autocomplete(interaction, ""))
+        self.assertEqual([choice.value for choice in choices], ["11", "22"])
+        self.assertEqual(choices[0].name, "Spammer • 11")
+        filtered = asyncio.run(bot_module.moderation_unban_autocomplete(interaction, "raid"))
+        self.assertEqual([choice.value for choice in filtered], ["22"])
+        by_id = asyncio.run(bot_module.moderation_unban_autocomplete(interaction, "11"))
+        self.assertEqual([choice.value for choice in by_id], ["11"])
+        self.assertEqual(asyncio.run(bot_module.moderation_unban_autocomplete(SimpleNamespace(guild=None), "")), [])
+
+        class BrokenBans:
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                raise discord.HTTPException(SimpleNamespace(status=500, reason="boom"), "no")
+
+        broken = SimpleNamespace(guild=SimpleNamespace(bans=lambda limit: BrokenBans()), user=SimpleNamespace(id=1))
+        self.assertEqual(asyncio.run(bot_module.moderation_unban_autocomplete(broken, "")), [])
+
+    def test_moderation_commands_record_the_member_id_for_history(self):
+        import inspect
+
+        import grid_a1.bot as bot_module
+        from grid_a1.guides import ACCESS_LABELS, COMMAND_ACCESS, catalog, render_guide
+
+        for command, marker in (
+            (bot_module.moderation_kick, "member={member.id}; "),
+            (bot_module.moderation_ban, "member={member.id}; "),
+            (bot_module.moderation_unban, "member={target_id}; "),
+            (bot_module.moderation_untimeout, "member={member.id}; "),
+        ):
+            body = inspect.getsource(command.callback)
+            self.assertIn(marker, body, command.name)
+        purge_body = inspect.getsource(bot_module.moderation_purge.callback)
+        self.assertIn("_report_clear", purge_body)
+        report_body = inspect.getsource(bot_module._report_clear)
+        self.assertIn("set_footer", report_body)
+        self.assertIn('"purge"', report_body)
+
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(Path(directory) / "manager.sqlite3")
+            database.migrate()
+            database.audit(42, None, 900, "kick", "member=8801; spam")
+            database.audit(42, None, 900, "unban", "member=8801; appealed")
+            database.audit(42, None, 900, "untimeout", "member=8801; mistake")
+            database.audit(42, None, 900, "purge", "channel=5; deleted=10; cleanup")
+            actions = [row["action"] for row in database.member_history(42, 8801)]
+            self.assertEqual(actions, ["untimeout", "unban", "kick"])
+            self.assertNotIn("purge", actions)
+
+        entries = catalog(bot_module.bot.tree)
+        rendered = "\n".join(value for _, value in render_guide(entries, list(ACCESS_LABELS)))
+        for command in ("/unban", "/untimeout", "/purge", "/modlog", "/poll results", "/giveaway list"):
+            self.assertIn(command, rendered)
+        self.assertEqual(COMMAND_ACCESS["purge"], "manage_messages")
+        self.assertEqual(COMMAND_ACCESS["unban"], "staff")
+        self.assertEqual(COMMAND_ACCESS["poll results"], "poll_creator")
+        self.assertEqual(COMMAND_ACCESS["giveaway list"], "admin")
+
+    def test_timestamp_marker_handles_stored_and_missing_times(self):
+        from grid_a1.stats import timestamp_marker
+
+        marker = timestamp_marker("2026-11-16T12:00:00+00:00")
+        self.assertTrue(marker.startswith("<t:"))
+        self.assertTrue(marker.endswith(":R>"))
+        self.assertEqual(timestamp_marker(None), "an unknown time")
+        self.assertEqual(timestamp_marker("nonsense"), "an unknown time")
+
+
+
+    def test_clear_channel_batches_and_respects_budgets(self):
+        import grid_a1.bot as bot_module
+
+        class FakeChannel:
+            def __init__(self, total):
+                self.remaining = total
+                self.calls = []
+
+            async def purge(self, limit, reason=None):
+                taken = min(limit, self.remaining)
+                self.remaining -= taken
+                self.calls.append((limit, reason))
+                return [object()] * taken
+
+        channel = FakeChannel(250)
+        self.assertEqual(asyncio.run(bot_module._clear_channel(channel, count=None, reason="test")), (250, False))
+        self.assertEqual([limit for limit, _ in channel.calls], [100, 100, 100])
+        self.assertEqual(channel.remaining, 0)
+        self.assertIn("test", channel.calls[0][1])
+
+        limited = FakeChannel(250)
+        self.assertEqual(asyncio.run(bot_module._clear_channel(limited, count=150, reason="test")), (150, False))
+        self.assertEqual([limit for limit, _ in limited.calls], [100, 50])
+        self.assertEqual(limited.remaining, 100)
+
+        budget = FakeChannel(500)
+        self.assertEqual(asyncio.run(bot_module._clear_channel(budget, count=None, reason="test", seconds=0.0)), (100, True))
+        self.assertEqual(budget.remaining, 400)
+
+        self.assertEqual(asyncio.run(bot_module._clear_channel(FakeChannel(0), count=None, reason="test")), (0, False))
+        self.assertEqual(asyncio.run(bot_module._clear_channel(FakeChannel(9), count=0, reason="test")), (0, False))
+
+    def test_clear_empties_the_channel_behind_a_confirmation(self):
+        import grid_a1.bot as bot_module
+        from grid_a1.guides import prefix_guide_lines
+
+        source = inspect.getsource(bot_module.prefix_clear.callback)
+        self.assertIn("ConfirmView", source)
+        self.assertIn("_report_clear", source)
+        self.assertIn("count: int | None = None", source)
+        self.assertIn("Delete everything", source)
+        self.assertTrue(bot_module.prefix_clear._buckets)
+
+        report = inspect.getsource(bot_module._report_clear)
+        self.assertIn('"purge"', report)
+        self.assertIn("everything", report)
+        self.assertIn("stopped", report)
+
+        purge = bot_module.moderation_purge
+        self.assertIn("everything", inspect.getsource(purge.callback))
+        self.assertFalse(purge._params["everything"].required)
+        self.assertTrue(purge._params["count"].required)
+        self.assertIn("!clear [count] [reason]", "\n".join(prefix_guide_lines()))
+
+    def test_staff_access_comes_only_from_the_configured_roles(self):
+        import grid_a1.bot as bot_module
+
+        def member(member_id, roles=(), owner_permissions=()):
+            person = MagicMock(spec=discord.Member)
+            person.id = member_id
+            person.roles = [SimpleNamespace(id=role_id) for role_id in roles]
+            person.guild_permissions = discord.Permissions.all() if "admin" in owner_permissions else discord.Permissions.none()
+            return person
+
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(Path(directory) / "manager.sqlite3")
+            database.migrate()
+            guild = SimpleNamespace(id=4242, owner_id=1)
+            interaction = SimpleNamespace(guild=guild, user=member(7))
+            admin_interaction = SimpleNamespace(guild=guild, user=member(8, owner_permissions=("admin",)))
+            with patch.object(bot_module.bot, "database", database, create=True):
+                # nothing configured yet: even an Administrator is refused
+                self.assertEqual(database.missing_permission_roles(4242), list(database.PERMISSION_ROLE_FIELDS))
+                self.assertFalse(database.permission_roles_ready(4242))
+                self.assertFalse(bot_module._privileged(admin_interaction, True))
+                self.assertFalse(bot_module._privileged(admin_interaction, False))
+                self.assertIn("/setup roles", bot_module._access_notice(guild))
+
+                database.upsert_config(
+                    4242,
+                    owner_role=10,
+                    co_owner_role=11,
+                    head_admin_role=12,
+                    admin_role=13,
+                    moderator_role=14,
+                )
+                self.assertTrue(database.permission_roles_ready(4242))
+                self.assertEqual(database.missing_permission_roles(4242), [])
+                self.assertEqual(database.configured_admin_role_ids(4242), [10, 11, 12, 13])
+                self.assertIn("configured staff role", bot_module._access_notice(guild))
+
+                # Discord permissions alone still grant nothing
+                self.assertFalse(bot_module._privileged(admin_interaction, True))
+                self.assertFalse(bot_module._privileged(admin_interaction, False))
+
+                moderator = SimpleNamespace(guild=guild, user=member(9, roles=(14,)))
+                self.assertTrue(bot_module._privileged(moderator, True))
+                self.assertFalse(bot_module._privileged(moderator, False))
+
+                head_admin = SimpleNamespace(guild=guild, user=member(9, roles=(12,)))
+                self.assertTrue(bot_module._privileged(head_admin, True))
+                self.assertTrue(bot_module._privileged(head_admin, False))
+
+                self.assertTrue(bot_module._privileged(SimpleNamespace(guild=guild, user=member(1)), False))
+                self.assertTrue(bot_module._privileged(SimpleNamespace(guild=guild, user=member(bot_module.settings.owner_id)), False))
+                self.assertFalse(bot_module._privileged(SimpleNamespace(guild=None, user=member(7, roles=(10,))), False))
+
+    def test_staff_commands_refuse_with_the_setup_reason(self):
+        import grid_a1.bot as bot_module
+
+        self.assertTrue(issubclass(bot_module.StaffAccessError, app_commands.CheckFailure))
+        for command in (bot_module.moderation_kick, bot_module.ticket_stats, bot_module.giveaway_config):
+            self.assertTrue(command.checks, command.name)
+        self.assertIn("_access_notice(interaction.guild)", inspect.getsource(bot_module._permission_check))
+
+    def test_prefix_commands_are_registered_and_documented(self):
+        from grid_a1.bot import bot as runtime_bot
+        from grid_a1.guides import PREFIX_COMMANDS, prefix_command_names, prefix_guide_lines
+
+        names = prefix_command_names()
+        registered = set()
+        for command in runtime_bot.commands:
+            if not command.name.islower():
+                continue
+            registered.add(command.name)
+            self.assertIn(command.name, names, command.name)
+            self.assertTrue(command.help and command.help[0] not in "abcdefghijklmnopqrstuvwxyz", command.name)
+        for name in names:
+            self.assertIsNotNone(runtime_bot.get_command(name), name)
+        self.assertLessEqual(len("\n".join(prefix_guide_lines())), 1024)
+        for usage, access in ((usage, access) for _, usage, access in PREFIX_COMMANDS):
+            self.assertTrue(usage.startswith("!"))
+            self.assertIn(access, {"Everyone", "Staff role"})
+        for guarded in ("kick", "ban", "unban", "warn", "timeout", "untimeout", "modlog", "stats", "clear", "slowmode", "lock", "unlock"):
+            source = inspect.getsource(runtime_bot.get_command(guarded).callback)
+            self.assertTrue("_require_staff_prefix" in source or "_prefix_privileged" in source, guarded)
+
+    def test_setup_status_reports_what_is_missing(self):
+        import grid_a1.bot as bot_module
+
+        status = bot_module.setup_group.get_command("status")
+        self.assertIsNotNone(status)
+        self.assertTrue(status.checks)
+        source = inspect.getsource(status.callback)
+        self.assertIn("missing_permission_roles", source)
+        self.assertIn("PERMISSION_ROLE_FIELDS", source)
+        self.assertIn("/setup roles", source)
+
+        help_source = (ROOT / "grid_a1" / "commands.py").read_text(encoding="utf-8")
+        self.assertIn("prefix_guide_lines", help_source)
+        self.assertIn("Prefix commands", help_source)
+        self.assertIn("/setup roles", help_source)
+
+    def test_ticket_queue_overview_orders_by_priority_then_age(self):
+        from grid_a1.stats import queue_overview, sort_open_queue
+
+        rows = [
+            {"ticket_id": "LOW", "channel_id": 1, "priority": "low", "claimed_by": None, "opened_at": "2026-11-16T08:00:00+00:00"},
+            {"ticket_id": "URGENT", "channel_id": 2, "priority": "urgent", "claimed_by": 42, "opened_at": "2026-11-16T11:00:00+00:00"},
+            {"ticket_id": "LOW2", "channel_id": 3, "priority": "low", "claimed_by": 7, "opened_at": "2026-11-16T07:00:00+00:00"},
+        ]
+        self.assertEqual([row["ticket_id"] for row in sort_open_queue(rows)], ["URGENT", "LOW2", "LOW"])
+        lines, hidden = queue_overview(rows, limit=2)
+        self.assertEqual(hidden, 1)
+        self.assertIn("🔴 Urgent", lines[0])
+        self.assertIn("<@42>", lines[0])
+        self.assertIn("<#3>", lines[1])
+        self.assertIn("unclaimed", [line for line in queue_overview(rows, limit=3)[0] if "<#1>" in line][0])
+        empty_lines, empty_hidden = queue_overview([])
+        self.assertEqual((empty_lines, empty_hidden), ([], 0))
+
+    def test_moderation_history_and_note_lines_render_stored_records(self):
+        from grid_a1.stats import history_detail, moderation_history_lines, note_lines
+
+        rows = [
+            {"actor_id": 99, "action": "warn", "metadata": "member=12345; spamming chat", "created_at": "2026-11-16T11:00:00+00:00"},
+            {"actor_id": 98, "action": "ban", "metadata": "member=12345; raiding", "created_at": "2026-11-16T10:00:00+00:00"},
+        ]
+        lines = moderation_history_lines(rows)
+        self.assertIn("**warn**", lines[0])
+        self.assertIn("by <@99>", lines[0])
+        self.assertIn("spamming chat", lines[0])
+        self.assertNotIn("member=12345", lines[0])
+        self.assertEqual(history_detail(None), "no details recorded")
+        self.assertEqual(len(history_detail("x" * 400)), 140)
+        notes = note_lines(
+            [
+                {"actor_id": 5, "metadata": json.dumps({"note": "Refund approved"}), "created_at": "2026-11-16T11:00:00+00:00"},
+                {"actor_id": 6, "metadata": "not json", "created_at": "2026-11-16T11:00:00+00:00"},
+                {"actor_id": 7, "metadata": json.dumps({"note": "   "}), "created_at": "2026-11-16T11:00:00+00:00"},
+            ]
+        )
+        self.assertEqual(len(notes), 1)
+        self.assertIn("Refund approved", notes[0])
+        self.assertIn("<@5>", notes[0])
+
+    def test_ticket_notes_and_member_history_read_from_sqlite(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(Path(directory) / "manager.sqlite3")
+            database.migrate()
+            database.create_ticket(ticket_id="NOTE1", guild_id=42, channel_id=9801, owner_id=8801, issue="general", region="EU", opened_at="2026-11-16T09:00:00+00:00", last_activity_at="2026-11-16T09:00:00+00:00")
+            stored = database.add_ticket_note("NOTE1", 42, 8802, "  Customer   asked for a refund  ")
+            self.assertEqual(stored, "Customer asked for a refund")
+            with self.assertRaises(ValueError):
+                database.add_ticket_note("NOTE1", 42, 8802, "   ")
+            self.assertEqual(len(database.add_ticket_note("NOTE1", 42, 8802, "second note")), len("second note"))
+            notes = database.ticket_notes(42, "NOTE1")
+            self.assertEqual(len(notes), 2)
+            self.assertEqual(notes[0]["actor_id"], 8802)
+            self.assertIn("second note", notes[0]["metadata"])
+            self.assertEqual(database.ticket_notes(99, "NOTE1"), [])
+            database.audit(42, None, 777, "warn", "member=8801; posted spam")
+            database.audit(42, None, 777, "warn", "member=8802; unrelated member")
+            database.audit(42, None, 777, "note", "member=8801; not a moderation record")
+            history = database.member_history(42, 8801)
+            self.assertEqual(len(history), 1)
+            self.assertEqual(history[0]["action"], "warn")
+            self.assertEqual(history[0]["actor_id"], 777)
+            self.assertEqual(database.member_history(42, 8801, limit=0)[0]["action"], "warn")
+            self.assertEqual(database.member_history(99, 8801), [])
+
+    def test_new_staff_commands_are_registered_and_guided(self):
+        import grid_a1.bot as bot_module
+        from grid_a1.guides import ACCESS_LABELS, COMMAND_ACCESS, catalog, render_guide
+
+        tickets = bot_module.ticket_group
+        for name in ("list", "note", "notes"):
+            self.assertIsNotNone(tickets.get_command(name), name)
+        self.assertIsNotNone(bot_module.bot.tree.get_command("modlog"))
+        entries = catalog(bot_module.bot.tree)
+        rendered = "\n".join(value for _, value in render_guide(entries, list(ACCESS_LABELS)))
+        for command in ("/ticket list", "/ticket note", "/ticket notes", "/modlog"):
+            self.assertIn(command, rendered)
+            self.assertEqual(COMMAND_ACCESS[command.lstrip("/")], "staff")
+        for flag in ("list", "note", "notes"):
+            self.assertIsNotNone(tickets.get_command(flag)._params["text"] if flag == "note" else tickets.get_command(flag))
+
+    def test_guide_catalog_covers_every_runtime_command(self):
+        from grid_a1.bot import bot as runtime_bot
+        from grid_a1.guides import ACCESS_LABELS, COMMAND_ACCESS, catalog
+
+        entries = catalog(runtime_bot.tree)
+        self.assertGreaterEqual(len(entries), 30)
+        self.assertEqual([entry.path for entry in entries if entry.path not in COMMAND_ACCESS], [])
+        for entry in entries:
+            self.assertIn(entry.access, ACCESS_LABELS)
+            self.assertTrue(entry.usage.startswith("/" + entry.path))
+        priority = next(entry for entry in entries if entry.path == "ticket priority")
+        self.assertEqual(priority.options, (("priority", True),))
+        self.assertIn("priority", priority.usage)
+        self.assertEqual(priority.access_label, "Configured staff role")
+        claim = next(entry for entry in entries if entry.path == "ticket claim")
+        self.assertEqual(claim.usage, "/ticket claim")
+
+    def test_guide_shows_only_what_the_viewer_may_use(self):
+        from types import SimpleNamespace
+
+        from grid_a1.bot import bot as runtime_bot
+        from grid_a1.guides import catalog, render_guide, viewer_access
+
+        class FakeDatabase:
+            def config(self, guild_id):
+                return {"owner_role": 10, "co_owner_role": 11}
+
+            def configured_permission_role_ids(self, guild_id):
+                return [12, 13]
+
+        fake_bot = SimpleNamespace(settings_owner_id=999, database=FakeDatabase())
+        guild = SimpleNamespace(id=1, owner_id=5)
+
+        def member(member_id, roles=(), **permissions):
+            granted = {
+                "administrator": False,
+                "manage_guild": False,
+                "manage_messages": False,
+                "manage_channels": False,
+            }
+            granted.update(permissions)
+            return SimpleNamespace(
+                id=member_id,
+                roles=[SimpleNamespace(id=role_id) for role_id in roles],
+                guild_permissions=SimpleNamespace(**granted),
+            )
+
+        entries = catalog(runtime_bot.tree)
+        plain = render_guide(entries, viewer_access(fake_bot, member(7), guild))
+        titles = [name for name, _ in plain]
+        self.assertNotIn("🔧 Bot owner", titles)
+        self.assertNotIn("⚙️ Server setup", titles)
+        self.assertIn("🚀 Start here", titles)
+        self.assertTrue(any("info server" in value for _, value in plain))
+        self.assertFalse(any("/sync" in value for _, value in plain))
+
+        staff = render_guide(entries, viewer_access(fake_bot, member(7, roles=(12,)), guild))
+        self.assertIn("🛡️ Moderation", [name for name, _ in staff])
+        self.assertFalse(any("/giveaway config" in value for _, value in staff))
+
+        admin = render_guide(entries, viewer_access(fake_bot, member(7, roles=(11,)), guild))
+        admin_values = "\n".join(value for _, value in admin)
+        self.assertIn("⚙️ Server setup", [name for name, _ in admin])
+        self.assertIn("/giveaway config", admin_values)
+        self.assertNotIn("/sync", admin_values)
+
+        discord_perms = render_guide(
+            entries,
+            viewer_access(fake_bot, member(7, administrator=True, manage_guild=True, manage_channels=True), guild),
+        )
+        discord_values = "\n".join(value for _, value in discord_perms)
+        self.assertNotIn("⚙️ Server setup", [name for name, _ in discord_perms])
+        self.assertNotIn("/giveaway config", discord_values)
+        self.assertFalse(any("Moderation" == name.replace("🛡️ ", "") for name, _ in discord_perms))
+
+        owner = render_guide(entries, viewer_access(fake_bot, member(5), guild))
+        self.assertIn("⚙️ Server setup", [name for name, _ in owner])
+
+        full = render_guide(entries, viewer_access(fake_bot, member(999), guild), max_total=6000)
+        self.assertLessEqual(sum(len(name) + len(value) for name, value in full), 6000)
+        for name, value in full:
+            self.assertLessEqual(len(value), 1024)
+
+    def test_guide_autocomplete_and_detail_helpers(self):
+        from grid_a1.bot import bot as runtime_bot
+        from grid_a1.guides import build_choices, catalog, command_detail, match_entries
+
+        entries = catalog(runtime_bot.tree)
+        matched = match_entries(entries, "ticket")
+        self.assertTrue(all(entry.path.startswith("ticket") for entry in matched[:4]))
+        self.assertIn("ban", [entry.path for entry in match_entries(entries, "ba")])
+        self.assertLessEqual(len(match_entries(entries, "")), 25)
+        self.assertEqual(match_entries(entries, "nothing-like-this"), [])
+
+        detail = command_detail(next(entry for entry in entries if entry.path == "help"))
+        self.assertIn("Usage: `/help [command]`", detail)
+        self.assertIn("Access: Everyone", detail)
+
+        rows = [
+            {"question": "Which map?", "poll_id": "POLL1", "status": "open"},
+            {"question": "Which mode?", "poll_id": "POLL2", "status": "ended"},
+            {"question": "Hidden", "poll_id": None, "status": "open"},
+        ]
+        labelled = build_choices(rows, ("question", "poll_id", "status"), "poll_id", "")
+        self.assertEqual(labelled[0], ("Which map? • POLL1 • open", "POLL1"))
+        self.assertEqual(len(labelled), 2)
+        self.assertEqual(build_choices(rows, ("question", "poll_id"), "poll_id", "mode"), [("Which mode? • POLL2", "POLL2")])
+        self.assertEqual(build_choices(rows, ("question", "poll_id"), "poll_id", "missing"), [])
+        long_labels = build_choices(
+            [{"question": "x" * 400, "poll_id": "P" * 40}], ("question", "poll_id"), "poll_id", ""
+        )
+        self.assertEqual(len(long_labels[0][0]), 100)
+        self.assertEqual(len(rows), 3)
+
+    def test_error_helper_text_and_command_paths(self):
+        from grid_a1.bot import _wait_text, command_path
+        from grid_a1.bot import ticket_group
+
+        self.assertEqual(_wait_text(0), "1s")
+        self.assertEqual(_wait_text(45.4), "45s")
+        self.assertEqual(_wait_text(75), "1m 15s")
+        self.assertEqual(command_path(ticket_group.get_command("priority")), "ticket priority")
+        self.assertEqual(command_path(ticket_group), "ticket")
+
+    def test_guild_polls_lists_every_status_for_autocomplete(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(Path(directory) / "manager.sqlite3")
+            database.migrate()
+            database.create_poll(
+                poll_id="POLLOLD", guild_id=42, channel_id=9200, creator_id=7001, question="Which map?",
+                options_json='["Island", "Ragnarok"]', created_at="2026-01-01T00:00:00+00:00",
+                ends_at="2026-01-02T00:00:00+00:00",
+            )
+            database.create_poll(
+                poll_id="POLLNEW", guild_id=42, channel_id=9200, creator_id=7001, question="Which mode?",
+                options_json='["Casual", "Hardcore"]', created_at="2026-02-01T00:00:00+00:00",
+                ends_at="2026-02-02T00:00:00+00:00",
+            )
+            database.create_poll(
+                poll_id="POLLOTHER", guild_id=99, channel_id=9201, creator_id=7001, question="Other server",
+                options_json='["A", "B"]', created_at="2026-03-01T00:00:00+00:00",
+                ends_at="2026-03-02T00:00:00+00:00",
+            )
+            database.end_poll("POLLOLD", 7001, "2026-01-03T00:00:00+00:00")
+            polls = database.guild_polls(42)
+            self.assertEqual([row["poll_id"] for row in polls], ["POLLNEW", "POLLOLD"])
+            self.assertEqual({row["status"] for row in polls}, {"open", "ended"})
+            self.assertEqual(database.guild_polls(42, limit=1)[0]["poll_id"], "POLLNEW")
+            self.assertEqual([row["poll_id"] for row in database.active_polls(42)], ["POLLNEW"])
+
+
+    def test_identifier_commands_offer_live_autocomplete(self):
+        import asyncio
+        from types import SimpleNamespace
+
+        import grid_a1.bot as bot_module
+
+        for command, parameter in (
+            (bot_module.giveaway_end, "giveaway_id"),
+            (bot_module.poll_end, "poll_id"),
+            (bot_module.poll_remove, "poll_id"),
+        ):
+            self.assertIsNotNone(command._params[parameter].autocomplete, command.name)
+        help_command = bot_module.bot.tree.get_command("help")
+        self.assertIsNotNone(help_command._params["command"].autocomplete)
+        self.assertEqual(
+            asyncio.run(
+                bot_module.giveaway_end_autocomplete(SimpleNamespace(guild_id=None), "ni")
+            ),
+            [],
+        )
+        self.assertEqual(
+            asyncio.run(bot_module.poll_remove_autocomplete(SimpleNamespace(guild_id=None), "")),
+            [],
+        )
+
+    def test_error_handler_answers_with_one_clear_ephemeral_message(self):
+        import asyncio
+        from types import SimpleNamespace
+
+        from discord import app_commands
+
+        import grid_a1.bot as bot_module
+
+        class Recorder:
+            def __init__(self):
+                self.messages = []
+
+            async def send_message(self, content=None, **kwargs):
+                self.messages.append(content)
+
+            async def send(self, content=None, **kwargs):
+                self.messages.append(content)
+
+            def is_done(self):
+                return False
+
+        def answer(error):
+            target = SimpleNamespace(
+                response=Recorder(),
+                followup=Recorder(),
+                guild_id=1,
+                user=SimpleNamespace(id=2),
+            )
+            asyncio.run(bot_module.on_app_command_error(target, error))
+            return " ".join(str(item) for item in target.response.messages)
+
+        self.assertIn("42s", answer(app_commands.CommandOnCooldown(app_commands.Cooldown(1, 30.0), 42.0)))
+        failure = app_commands.CheckFailure("no access")
+        failure.command = bot_module.ticket_group.get_command("stats")
+        self.assertIn("/help command:ticket stats", answer(failure))
+        self.assertIn("manage_messages", answer(app_commands.BotMissingPermissions(["manage_messages"])))
+        self.assertIn("inside a server", answer(app_commands.NoPrivateMessage()))
+
+    def test_destructive_and_expensive_commands_are_rate_limited(self):
+        import grid_a1.bot as bot_module
+        from grid_a1.bot import bot as runtime_bot
+
+        limited = {
+            "report": runtime_bot.tree.get_command("report"),
+            "ticket stats": bot_module.ticket_group.get_command("stats"),
+            "ticket transcript": bot_module.ticket_group.get_command("transcript"),
+            "info server": bot_module.info_group.get_command("server"),
+        }
+        for label, command in limited.items():
+            self.assertGreaterEqual(len(command.checks), 1, label)
+        unlimited = bot_module.ticket_group.get_command("claim")
+        self.assertEqual([check for check in unlimited.checks], list(unlimited.checks))
+
+    def test_status_endpoint_serves_a_compact_health_document(self):
+        import urllib.error
+        import urllib.request
+        from grid_a1.health import DEFAULT_PORT, HealthServer, health_enabled, resolve_port
+
+        self.assertEqual(resolve_port({}), DEFAULT_PORT)
+        self.assertEqual(resolve_port({"PORT": "1919"}), 1919)
+        self.assertEqual(resolve_port({"PORT": "1919", "HEALTH_PORT": "2020"}), 2020)
+        self.assertEqual(resolve_port({"PORT": "http"}), DEFAULT_PORT)
+        self.assertEqual(resolve_port({"HEALTH_PORT": "70000"}), DEFAULT_PORT)
+        self.assertTrue(health_enabled({}))
+        self.assertFalse(health_enabled({"HEALTH_DISABLED": "TRUE"}))
+
+        server = HealthServer(
+            lambda: {"connected_servers": 2, "uptime_seconds": 15, "schema_version": 21},
+            host="127.0.0.1",
+            port=0,
+        )
+        self.assertTrue(server.start())
+        self.assertTrue(server.running)
+        base = f"http://127.0.0.1:{server.port}"
+        try:
+            with urllib.request.urlopen(f"{base}/health", timeout=5) as response:
+                self.assertEqual(response.status, 200)
+                self.assertEqual(response.headers["Cache-Control"], "no-store")
+                payload = json.loads(response.read().decode("utf-8"))
+            self.assertEqual(payload["status"], "ok")
+            self.assertEqual(payload["connected_servers"], 2)
+            self.assertEqual(payload["schema_version"], 21)
+            with urllib.request.urlopen(f"{base}/", timeout=5) as root_response:
+                self.assertEqual(root_response.status, 200)
+            with self.assertRaises(urllib.error.HTTPError) as missing:
+                urllib.request.urlopen(f"{base}/does-not-exist", timeout=5)
+            self.assertEqual(missing.exception.code, 404)
+            rejected_request = urllib.request.Request(f"{base}/health", data=b"{}", method="POST")
+            with self.assertRaises(urllib.error.HTTPError) as rejected:
+                urllib.request.urlopen(rejected_request, timeout=5)
+            self.assertEqual(rejected.exception.code, 405)
+        finally:
+            server.stop()
+        self.assertFalse(server.running)
+
+    def test_status_endpoint_degrades_when_the_report_fails(self):
+        import urllib.error
+        import urllib.request
+        from grid_a1.health import HealthServer
+
+        def broken():
+            raise RuntimeError("boom")
+
+        server = HealthServer(broken, host="127.0.0.1", port=0)
+        self.assertEqual(
+            server.document(),
+            (503, {"status": "degraded", "detail": "status report unavailable"}),
+        )
+        self.assertTrue(server.start())
+        try:
+            with self.assertRaises(urllib.error.HTTPError) as failure:
+                urllib.request.urlopen(f"http://127.0.0.1:{server.port}/health", timeout=5)
+            self.assertEqual(failure.exception.code, 503)
+            body = json.loads(failure.exception.read().decode("utf-8"))
+            self.assertEqual(body["status"], "degraded")
+        finally:
+            server.stop()
+
+    def test_bot_health_report_keeps_only_coarse_runtime_facts(self):
+        from grid_a1.bot import bot as runtime_bot
+
+        report = runtime_bot.health_report()
+        self.assertEqual(report["status"], "ok")
+        self.assertEqual(report["service"], "grid-a1-manager")
+        self.assertEqual(report["schema_version"], 21)
+        self.assertIsInstance(report["uptime_seconds"], int)
+        self.assertIsInstance(report["connected_servers"], int)
+        self.assertNotIn("token", json.dumps(report).lower())
+        self.assertNotIn("guild_ids", report)
+        runtime_bot.health_server.stop()
+        self.assertFalse(runtime_bot.health_server.running)
+
+    def test_feedback_round_trip_replaces_rating_and_audits_it(self):
+        from datetime import datetime, timezone
+
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(Path(directory) / "manager.sqlite3")
+            database.migrate()
+            database.create_ticket(ticket_id="FB1", guild_id=42, channel_id=9601, owner_id=8801, issue="general", region="EU", opened_at="2026-11-16T09:00:00+00:00", last_activity_at="2026-11-16T09:00:00+00:00")
+            database.update_ticket("FB1", status="closed", closed_at="2026-11-16T10:00:00+00:00", closed_by=8802)
+            noon = datetime(2026, 11, 16, 12, 0, tzinfo=timezone.utc)
+            self.assertIsNone(database.feedback_for("FB1"))
+            self.assertEqual(database.feedback_pending(now=noon), ["FB1"])
+
+            self.assertEqual(database.save_feedback("FB1", 42, 8801, 5), 5)
+            self.assertEqual(database.save_feedback("FB1", 42, 8801, 4), 4)
+            self.assertEqual(database.feedback_summary(42), (4.0, 1))
+            self.assertEqual(database.feedback_scores(42), [4])
+            self.assertEqual(database.feedback_for("FB1")["score"], 4)
+            self.assertEqual(database.feedback_pending(now=noon), [])
+            self.assertEqual(database.feedback_pending(now=datetime(2026, 11, 30, 12, 0, tzinfo=timezone.utc)), [])
+            self.assertEqual(database.feedback_summary(99), (None, 0))
+            with database.connect() as db:
+                audit = db.execute("SELECT * FROM audit_log WHERE ticket_id='FB1' AND action='feedback_recorded'").fetchall()
+            self.assertEqual(len(audit), 2)
+            with self.assertRaises(ValueError):
+                database.save_feedback("FB1", 42, 8801, 9)
+
+    def test_feedback_view_rejects_strangers_and_records_owner_rating(self):
+        from grid_a1.utils import feedback_custom_id
+        from grid_a1.views import TicketFeedbackView
+
+        self.assertEqual(feedback_custom_id(5, "FB1"), "grid-a1:feedback:FB1:5")
+        self.assertEqual(feedback_custom_id(3, "bad id!/../x"), "grid-a1:feedback:badidx:3")
+        for bad_score, bad_id in ((0, "FB1"), (6, "FB1"), (3, "")):
+            with self.assertRaises(ValueError):
+                feedback_custom_id(bad_score, bad_id)
+
+        class Response:
+            def __init__(self):
+                self.messages = []
+                self.deferred = False
+            def is_done(self):
+                return False
+            async def send_message(self, message, ephemeral=False):
+                self.messages.append(message)
+            async def defer(self, ephemeral=False):
+                self.deferred = True
+
+        class Followup:
+            def __init__(self):
+                self.messages = []
+            async def send(self, message, ephemeral=False):
+                self.messages.append(message)
+
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(Path(directory) / "manager.sqlite3")
+            database.migrate()
+            database.create_ticket(ticket_id="FB1", guild_id=42, channel_id=9601, owner_id=8801, issue="general", region="EU", opened_at="2026-11-16T09:00:00+00:00", last_activity_at="2026-11-16T09:00:00+00:00")
+            database.update_ticket("FB1", status="closed", closed_at="2026-11-16T10:00:00+00:00", closed_by=8802)
+            service = SimpleNamespace(db=database)
+            view = TicketFeedbackView(service, "FB1")
+            self.assertEqual(
+                sorted(item.custom_id for item in view.children),
+                [f"grid-a1:feedback:FB1:{score}" for score in (1, 2, 3, 4, 5)],
+            )
+
+            stranger = SimpleNamespace(user=SimpleNamespace(id=9999), response=Response(), followup=Followup())
+            asyncio.run(view._rate(stranger, 5))
+            self.assertIn("Only the ticket owner", stranger.response.messages[0])
+            self.assertIsNone(database.feedback_for("FB1"))
+
+            owner = SimpleNamespace(user=SimpleNamespace(id=8801), response=Response(), followup=Followup())
+            asyncio.run(view._rate(owner, 5))
+            self.assertTrue(owner.response.deferred)
+            self.assertEqual(database.feedback_for("FB1")["score"], 5)
+            self.assertIn("5/5", owner.followup.messages[0])
+
+            unknown = TicketFeedbackView(service, "NOPE")
+            ghost = SimpleNamespace(user=SimpleNamespace(id=8801), response=Response(), followup=Followup())
+            asyncio.run(unknown._rate(ghost, 3))
+            self.assertIn("Only the ticket owner", ghost.response.messages[0])
 
     def test_ticket_close_request_is_atomic_and_idempotent(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -432,12 +1234,13 @@ class CoreTests(unittest.TestCase):
             database = Database(path)
             database.migrate()
             self.assertTrue(database.startup_check()["ok"])
-            self.assertEqual(database.startup_check()["schema_version"], 19)
+            self.assertEqual(database.startup_check()["schema_version"], 21)
             self.assertEqual(database.poll_for_guild(42, "OLDPOLL")["description"], "")
             with database.connect() as db:
                 tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
             self.assertIn("giveaways", tables)
             self.assertIn("giveaway_entries", tables)
+            self.assertIn("ticket_feedback", tables)
 
     def test_poll_storage_configuration_votes_and_removal(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -535,7 +1338,7 @@ class CoreTests(unittest.TestCase):
                 )
                 if name:
                     registered.add(name)
-        self.assertEqual(registered, {"config", "create", "end", "remove"})
+        self.assertEqual(registered, {"config", "create", "end", "remove", "results"})
 
     def test_poll_and_giveaway_dashboards_expose_the_expected_controls(self):
         from grid_a1.giveaways import GiveawayDashboardView, GiveawayEntryView, GiveawayService
@@ -566,7 +1369,7 @@ class CoreTests(unittest.TestCase):
         self.assertIsNotNone(giveaway_group)
         self.assertEqual(
             {command.name for command in giveaway_group.commands},
-            {"config", "end"},
+            {"config", "end", "list"},
         )
 
     def test_poll_subcommands_are_registered_on_the_runtime_tree(self):
@@ -576,7 +1379,7 @@ class CoreTests(unittest.TestCase):
         self.assertIsNotNone(poll_group)
         self.assertEqual(
             {command.name for command in poll_group.commands},
-            {"config", "create", "end", "remove"},
+            {"config", "create", "end", "remove", "results"},
         )
 
     def test_optional_postgres_baseline_lists_poll_tables(self):
@@ -947,18 +1750,30 @@ class CoreTests(unittest.TestCase):
                         parameters = {argument.arg for argument in node.args.args[1:]}
                         self.assertTrue(parameters <= described, f"{path}:{node.name} needs descriptions for every slash option")
 
-    def test_help_lists_all_command_groups(self):
-        source = (ROOT / "grid_a1" / "commands.py").read_text(encoding="utf-8")
-        for section in ("🌐 Everyone", "🎛️ Easy private dashboard", "👑 Server owner setup", "⚙️ Server setup & safety", "📊 Poll setup", "🎁 Giveaways", "🛡️ Staff tools", "🔧 Bot owner"):
-            self.assertIn(section, source)
-        for command in ("/report", "/setup tickets", "/setup welcomer", "/ticket transfer", "/ticket close", "/poll config", "/giveaway config", "/anti-links", "/embed-edit", "/sync"):
-            self.assertIn(command, source)
+    def test_help_lists_every_section_and_command_from_the_live_tree(self):
+        from grid_a1.bot import bot as runtime_bot
+        from grid_a1.guides import ACCESS_LABELS, SECTIONS, catalog, render_guide
 
-    def test_help_does_not_advertise_removed_commands_or_anti_link_options(self):
-        source = (ROOT / "grid_a1" / "commands.py").read_text(encoding="utf-8")
-        for stale in ("`/staff`", "whitelist domains", "bypass roles", "allowed link roles"):
-            self.assertNotIn(stale, source)
-        self.assertIn("configure enabled, action, and log channel", source)
+        entries = catalog(runtime_bot.tree)
+        fields = render_guide(entries, list(ACCESS_LABELS), max_total=6000)
+        rendered = "\n".join(value for _, value in fields)
+        titles = {title for title, _ in SECTIONS}
+        self.assertEqual(len(titles), len(SECTIONS))
+        for title in titles:
+            self.assertTrue(any(title in name for name, _ in fields), title)
+        for command in ("/help", "/report", "/dashboard", "/info server", "/setup tickets", "/setup welcomer", "/ticket transfer", "/ticket close", "/ticket priority", "/ticket stats", "/poll config", "/giveaway config", "/giveaway end", "/anti-links", "/embed-edit", "/sync"):
+            self.assertIn(command, rendered)
+
+    def test_help_never_advertises_removed_commands_or_stale_options(self):
+        from grid_a1.bot import bot as runtime_bot
+        from grid_a1.guides import ACCESS_LABELS, catalog, render_guide
+
+        rendered = "\n".join(
+            value for _, value in render_guide(catalog(runtime_bot.tree), list(ACCESS_LABELS))
+        )
+        for stale in ("`/staff`", "whitelist domains", "bypass roles", "allowed link roles", "/setup staff"):
+            self.assertNotIn(stale, rendered)
+        self.assertIn("/anti-links", rendered)
 
     def test_anti_links_ignores_sentence_periods_and_numeric_versions(self):
         for sentence in (

@@ -4,6 +4,7 @@ import discord
 
 from .database import Database
 from .stats import MONTH_WINDOW_DAYS, RECENT_WINDOW_DAYS, TicketStats, format_duration
+from .utils import PRIORITY_LABELS
 from .utils import utcnow
 
 NEON_PURPLE = discord.Colour.from_rgb(177, 77, 255)
@@ -67,6 +68,25 @@ def ticket_embed(issue: str, region: str, details: str, status: str = "🟢", in
     return result
 
 
+def priority_embed(priority: str, actor: discord.abc.User) -> discord.Embed:
+    """Confirm a staff priority change inside the ticket channel."""
+    label = PRIORITY_LABELS.get(priority, priority.title())
+    result = embed(f"🚦 Priority set to {label}", "Staff triage this queue in priority order, and the change is recorded in the audit log.", NEON_PURPLE)
+    result.set_footer(text=f"Set by {actor.display_name}")
+    return result
+
+
+def feedback_embed() -> discord.Embed:
+    """Private rating request sent to a ticket owner after closure."""
+    result = embed(
+        "⭐ How did we do?",
+        "Thanks for using support. Tap a star to rate the help you received — it takes a second, and staff only ever see the average.",
+        NEON_PURPLE,
+    )
+    result.set_footer(text="1 star = poor • 5 stars = excellent • You can change your rating any time")
+    return result
+
+
 def ticket_stats_embed(guild: discord.Guild, stats: TicketStats) -> discord.Embed:
     """Render one guild's ticket workload as a staff-facing statistics panel."""
     server = getattr(guild, "name", "this server")
@@ -112,8 +132,32 @@ def ticket_stats_embed(guild: discord.Guild, stats: TicketStats) -> discord.Embe
     result.add_field(
         name="🥇 Most claims",
         value=(
-            "\n".join(f"<@{staff_id}> — **{count}**" for staff_id, count in stats.top_claimers)
+            "\n".join(
+                f"<@{staff_id}> — **{count}**"
+                + (f" • {format_duration(minutes)} avg" if minutes is not None else "")
+                for staff_id, count, minutes in stats.top_claimers
+            )
             or "No claims recorded yet."
+        ),
+        inline=True,
+    )
+    result.add_field(
+        name="🚦 Open by priority",
+        value=(
+            "\n".join(
+                f"{PRIORITY_LABELS.get(priority, priority.title())}: **{count}**"
+                for priority, count in stats.priorities
+            )
+            or "No open tickets right now."
+        ),
+        inline=True,
+    )
+    result.add_field(
+        name="⭐ Feedback",
+        value=(
+            f"Average: **{stats.rating_average:.2f}/5**\nRatings: **{stats.rating_count}**"
+            if stats.rating_average is not None
+            else "No ratings yet. Owners are asked privately after closure."
         ),
         inline=True,
     )
@@ -121,11 +165,12 @@ def ticket_stats_embed(guild: discord.Guild, stats: TicketStats) -> discord.Embe
     return result
 
 
-def ticket_archive_embed(ticket_id: str, region: str, issue: str, closer: discord.abc.User, reason: str) -> discord.Embed:
+def ticket_archive_embed(ticket_id: str, region: str, issue: str, closer: discord.abc.User, reason: str, priority: str = "normal") -> discord.Embed:
     result = embed("📁 Grid A1 • Ticket archived", "The ticket transcript is attached for staff records. The ticket channel has been closed.", discord.Colour.dark_grey())
     result.add_field(name="Ticket ID", value=f"`{ticket_id}`", inline=True)
     result.add_field(name="Issue", value=issue.title()[:1024], inline=True)
     result.add_field(name="Region", value=region, inline=True)
+    result.add_field(name="Priority", value=PRIORITY_LABELS.get(priority, priority.title()), inline=True)
     result.add_field(name="Closed by", value=closer.mention, inline=True)
     result.add_field(name="Closing reason", value=discord.utils.escape_markdown(reason)[:1024], inline=False)
     result.set_footer(text="Grid A1 Manager • Transcript attached • All times UTC")

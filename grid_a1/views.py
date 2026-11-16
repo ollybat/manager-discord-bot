@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import discord
+import logging
 import time
 
 from .embeds import embed
 from .tickets import TicketService, claim
-from .utils import active_ticket_owner, inactivity_custom_id, is_ticket, parse_ticket_topic, staff_member
+from .utils import active_ticket_owner, feedback_custom_id, inactivity_custom_id, is_ticket, parse_ticket_topic, staff_member
+
+log = logging.getLogger(__name__)
 
 QUESTION_SETS = {
     "general": ("What do you need help with?", "Which server or area is involved?"),
@@ -288,6 +291,45 @@ class VerificationConfirm(discord.ui.View):
         except discord.Forbidden: return await interaction.followup.send("❌ I cannot assign the role. Check Manage Roles and role order.", ephemeral=True)
         await interaction.edit_original_response(embed=embed("💜 Verification complete", f"🎉 Welcome, {interaction.user.mention}! You now have {role.mention}."), view=None)
 
+class ConfirmView(discord.ui.View):
+    """Ask the caller to confirm a destructive action before it runs."""
+
+    def __init__(self, on_confirm, *, author_id: int, confirm_label: str = "Confirm", timeout: float = 90.0):
+        super().__init__(timeout=timeout)
+        self._on_confirm = on_confirm
+        self.author_id = author_id
+        self.message: discord.Message | None = None
+        confirm = discord.ui.Button(label=confirm_label[:80], style=discord.ButtonStyle.danger, emoji="✅")
+        confirm.callback = self._confirm
+        cancel = discord.ui.Button(label="Cancel", style=discord.ButtonStyle.secondary, emoji="✖️")
+        cancel.callback = self._cancel
+        self.add_item(confirm)
+        self.add_item(cancel)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("🔒 Only the member who ran the command can answer this prompt.", ephemeral=True)
+            return False
+        return True
+
+    async def _confirm(self, interaction: discord.Interaction) -> None:
+        self.stop()
+        await self._on_confirm(interaction)
+
+    async def _cancel(self, interaction: discord.Interaction) -> None:
+        self.stop()
+        await interaction.response.edit_message(embed=embed("✖️ Cancelled", "Nothing was changed."), view=None)
+
+    async def on_timeout(self) -> None:
+        """Explain the expired prompt instead of leaving dead buttons."""
+        if self.message is None:
+            return
+        try:
+            await self.message.edit(embed=embed("⌛ Confirmation expired", "Nothing was changed. Run the command again if you still want it."), view=None)
+        except discord.HTTPException:
+            log.debug("Could not update an expired confirmation prompt", exc_info=True)
+
+
 class OwnerInactivityView(discord.ui.View):
     """Buttons sent privately to a ticket owner after a red inactivity warning."""
     def __init__(self, service: TicketService, ticket_id: str):
@@ -349,6 +391,41 @@ class OwnerInactivityView(discord.ui.View):
     async def close(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not await self._owner_check(interaction): return
         await self.service.close_owner_from_dm(interaction, self.ticket_id, "Closed by ticket owner from inactivity notice")
+
+
+class TicketFeedbackView(discord.ui.View):
+    """Star-rating buttons sent privately to a ticket owner after closure."""
+    def __init__(self, service: TicketService, ticket_id: str):
+        super().__init__(timeout=None); self.service = service; self.ticket_id = ticket_id
+        for item in self.children:
+            if isinstance(item, discord.ui.Button) and item.custom_id:
+                item.custom_id = feedback_custom_id(int(item.custom_id.rsplit(":", 1)[-1]), ticket_id)
+    async def _rate(self, interaction: discord.Interaction, score: int) -> None:
+        row = self.service.db.ticket(self.ticket_id)
+        if not row or int(row["owner_id"]) != interaction.user.id:
+            return await interaction.response.send_message("🔒 Only the ticket owner can rate this ticket.", ephemeral=True)
+        if not interaction.response.is_done(): await interaction.response.defer(ephemeral=True)
+        try:
+            self.service.db.save_feedback(self.ticket_id, int(row["guild_id"]), interaction.user.id, score)
+        except Exception:
+            log.exception("Could not record feedback for ticket %s", self.ticket_id)
+            return await interaction.followup.send("⚠️ I could not save your rating. Please try again later.", ephemeral=True)
+        await interaction.followup.send(f"{'⭐' * score} Thanks — your rating of **{score}/5** was recorded. Tap another star to change it.", ephemeral=True)
+    @discord.ui.button(label="1", emoji="⭐", style=discord.ButtonStyle.danger, custom_id="grid-a1:feedback:1")
+    async def rate_one(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await self._rate(interaction, 1)
+    @discord.ui.button(label="2", emoji="⭐", style=discord.ButtonStyle.secondary, custom_id="grid-a1:feedback:2")
+    async def rate_two(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await self._rate(interaction, 2)
+    @discord.ui.button(label="3", emoji="⭐", style=discord.ButtonStyle.secondary, custom_id="grid-a1:feedback:3")
+    async def rate_three(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await self._rate(interaction, 3)
+    @discord.ui.button(label="4", emoji="⭐", style=discord.ButtonStyle.success, custom_id="grid-a1:feedback:4")
+    async def rate_four(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await self._rate(interaction, 4)
+    @discord.ui.button(label="5", emoji="⭐", style=discord.ButtonStyle.success, custom_id="grid-a1:feedback:5")
+    async def rate_five(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await self._rate(interaction, 5)
 
 
 class TicketControls(discord.ui.View):

@@ -3,15 +3,18 @@ import io
 import logging
 import time
 import hashlib
+from datetime import timedelta
 import discord
 import json
 from discord import app_commands
 from discord.ext import commands, tasks
 from .config import Settings, configure_logging, validate_runtime
-from .database import Database
-from .embeds import embed, support_panel, inactivity_indicator, ticket_stats_embed
+from .database import SCHEMA_VERSION, Database
+from .embeds import embed, support_panel, inactivity_indicator, priority_embed, ticket_stats_embed
 from .tickets import TicketService, claim
 from .giveaways import GiveawayDashboardView, GiveawayEntryView, GiveawayService
+from .guides import build_choices, prefix_guide_lines
+from .health import HealthServer
 from .polls import (
     DEFAULT_POLL_DURATION_HOURS,
     MAX_POLL_DURATION_HOURS,
@@ -23,9 +26,15 @@ from .polls import (
     poll_dashboard_embed,
     poll_embed,
 )
-from .stats import collect as collect_ticket_stats
-from .utils import anti_link_config_updates, is_http_url, is_ticket, parse_ticket_topic, staff_member, detected_external_links, normalize_domain, safe_json_list, utcnow
-from .views import DashboardView, OwnerInactivityView, TicketControls, TicketPanel, VerifyPanel
+from .stats import (
+    collect as collect_ticket_stats,
+    moderation_history_lines,
+    note_lines,
+    queue_overview,
+    timestamp_marker,
+)
+from .utils import PRIORITIES, PRIORITY_LABELS, anti_link_config_updates, is_http_url, is_ticket, parse_ticket_topic, staff_member, detected_external_links, normalize_domain, safe_json_list, utcnow
+from .views import ConfirmView, DashboardView, OwnerInactivityView, TicketControls, TicketFeedbackView, TicketPanel, VerifyPanel
 from .welcomer import missing, send_welcome, welcome_embed
 from .commands import OwnerConfigurationError, OwnerOnlyError, register_commands
 settings = Settings.from_env(); configure_logging(settings.log_level)
@@ -40,7 +49,24 @@ class GridA1Bot(commands.Bot):
         self.started_at = time.time()
         self._global_sync_in_progress = False
         self._stale_guild_commands_cleared = False
+        self.health_server = HealthServer(self.health_report)
         register_commands(self)
+    def health_report(self) -> dict[str, object]:
+        """Small non-sensitive status document for the optional HTTP status endpoint."""
+        gateway_ms = round(self.latency * 1_000) if self.latency >= 0 else None
+        return {
+            "status": "ok",
+            "service": "grid-a1-manager",
+            "uptime_seconds": max(0, int(time.time() - self.started_at)),
+            "connected_servers": len(self.guilds),
+            "gateway_latency_ms": gateway_ms,
+            "schema_version": SCHEMA_VERSION,
+            "checked_at": utcnow().isoformat(),
+        }
+    async def close(self) -> None:
+        """Stop the optional status endpoint before disconnecting from Discord."""
+        self.health_server.stop()
+        await super().close()
     async def setup_hook(self):
         log.info("Starting Grid A1: database=%s prefix=%s owner_configured=%s", self.database.path, settings.prefix, bool(settings.owner_id))
         for problem in validate_runtime(settings):
@@ -50,11 +76,16 @@ class GridA1Bot(commands.Bot):
         if not store["ok"]:
             raise RuntimeError(f"SQLite startup check failed: {store}")
         log.info("SQLite ready: schema=%s WAL=enabled indexes=verified", store["schema_version"])
+        # Optional: answer the host's public domain so platform health checks and uptime
+        # monitors see a 200. Discord traffic never depends on this listener.
+        self.health_server.start()
         self.add_view(TicketPanel(self.tickets))
         self.add_view(TicketControls(self.tickets))
         self.add_view(VerifyPanel(self.database))
         for row in self.database.open_tickets_all():
             self.add_view(OwnerInactivityView(self.tickets, row["ticket_id"]))
+        for ticket_id in self.database.feedback_pending():
+            self.add_view(TicketFeedbackView(self.tickets, ticket_id))
         for poll in self.database.polls_with_messages_all():
             options = self.database.poll_options(poll["poll_id"])
             if len(options) < 2:
@@ -323,23 +354,45 @@ bot.tree.add_command(ticket_group)
 bot.tree.add_command(poll_group)
 bot.tree.add_command(giveaway_group)
 def guild(i): return i.guild
+def _member_role_ids(member) -> set[int]:
+    return {role.id for role in getattr(member, "roles", ())}
+
+def _elder_of(guild, user) -> bool:
+    """The server owner and the bot owner always keep control of their own server."""
+    if not guild or not user: return False
+    return user.id in {guild.owner_id, settings.owner_id}
+
+def _role_access(guild, member, require_staff: bool) -> bool:
+    """Staff access comes only from the roles saved by /setup roles."""
+    if not guild or not isinstance(member, discord.Member): return False
+    if _elder_of(guild, member): return True
+    allowed = set(bot.database.configured_admin_role_ids(guild.id) if not require_staff else bot.database.configured_permission_role_ids(guild.id))
+    if not allowed: return False
+    return bool(_member_role_ids(member) & allowed)
+
 def _privileged(interaction: discord.Interaction, require_staff: bool = False) -> bool:
-    if not interaction.guild or not isinstance(interaction.user, discord.Member): return False
-    if interaction.user.id == interaction.guild.owner_id or interaction.user.id == settings.owner_id: return True
-    permissions = interaction.user.guild_permissions
-    if permissions.administrator or permissions.manage_guild: return True
-    return require_staff and (permissions.manage_channels or bool(set(role.id for role in interaction.user.roles) & set(bot.database.configured_permission_role_ids(interaction.guild.id))))
+    return _role_access(interaction.guild, interaction.user, require_staff)
 
 def _prefix_privileged(ctx, require_staff: bool = False) -> bool:
-    if not ctx.guild or not isinstance(ctx.author, discord.Member): return False
-    if ctx.author.id == ctx.guild.owner_id or ctx.author.id == settings.owner_id: return True
-    permissions = ctx.author.guild_permissions
-    if permissions.administrator or permissions.manage_guild: return True
-    return require_staff and (permissions.manage_channels or bool(set(role.id for role in ctx.author.roles) & set(bot.database.configured_permission_role_ids(ctx.guild.id))))
+    return _role_access(ctx.guild, ctx.author, require_staff)
+
+def _access_notice(guild) -> str:
+    """Explain a refused staff command, naming the setup step when it is missing."""
+    if guild is None: return "❌ That command only works inside a server."
+    missing = bot.database.missing_permission_roles(guild.id)
+    if missing:
+        return ("⚠️ This server has not finished staff setup yet. The server owner must run "
+                "/setup roles to choose the staff roles, and only those roles can use staff commands.")
+    return "🔒 Only members with a configured staff role can use that. Check /help for what each command needs."
+
+class StaffAccessError(app_commands.CheckFailure):
+    """Refusal that carries its own reason, so the error handler can explain the setup step."""
 
 def _permission_check(require_staff: bool = False):
     async def predicate(interaction: discord.Interaction) -> bool:
-        return _privileged(interaction, require_staff)
+        if _privileged(interaction, require_staff):
+            return True
+        raise StaffAccessError(_access_notice(interaction.guild))
     return app_commands.check(predicate)
 
 def admin(): return _permission_check(False)
@@ -363,7 +416,7 @@ def server_owner_only():
 
 @bot.tree.command(name="anti-links", description="🛡️ Configure protection against outside links and invites")
 @app_commands.guild_only()
-@app_commands.checks.has_permissions(manage_guild=True)
+@admin()
 @app_commands.describe(
     enabled="Enable or disable protection; omit to keep the current value",
     action="Action to take; omit to keep the current value",
@@ -408,6 +461,7 @@ async def anti_links(
 
 @bot.tree.command(name="report", description="🚩 Privately report a server member to staff")
 @app_commands.guild_only()
+@app_commands.checks.cooldown(3, 60.0, key=lambda i: (i.guild_id, i.user.id))
 @app_commands.describe(member="Member being reported", reason="What happened?", proof_link="Optional link to supporting evidence", proof_file="Optional screenshot or evidence file")
 async def report_member(i: discord.Interaction, member: discord.Member, reason: str | None = None, proof_link: str | None = None, proof_file: discord.Attachment | None = None):
     guild = i.guild
@@ -454,6 +508,25 @@ async def dashboard(i: discord.Interaction):
     view = DashboardView(bot.database, settings.owner_id)
     await i.followup.send(embed=view.dashboard_embed(i.guild), view=view, ephemeral=True)
 
+@bot.tree.command(name="modlog", description="🧾 Show a member's recorded moderation history")
+@staff()
+@app_commands.guild_only()
+@app_commands.describe(member="Member whose recorded kick, ban, warn, and timeout history you want")
+@app_commands.checks.cooldown(5, 60.0, key=lambda i: (i.guild_id, i.user.id))
+async def modlog(i: discord.Interaction, member: discord.Member):
+    """Summarise the moderation actions recorded against one member."""
+    rows = bot.database.member_history(i.guild.id, member.id)
+    result = embed(
+        "🧾 Moderation history",
+        f"Recorded actions against {member.mention}, newest first.",
+    )
+    result.add_field(
+        name=f"Records ({len(rows)})",
+        value="\n".join(moderation_history_lines(rows)) or "Nothing recorded for this member.",
+        inline=False,
+    )
+    result.set_footer(text="Kick, ban, warn, and timeout records only; warnings are recorded, not applied automatically.")
+    await i.response.send_message(embed=result, ephemeral=True)
 @bot.tree.command(name="kick", description="👢 Remove a member from this server with a recorded reason")
 @staff()
 @app_commands.describe(member="Member to kick", reason="Why the member is being kicked")
@@ -464,7 +537,7 @@ async def moderation_kick(i: discord.Interaction, member: discord.Member, reason
     await i.response.defer(ephemeral=True)
     try: await member.kick(reason=f"{reason} • Moderator: {i.user}")
     except discord.Forbidden: return await i.followup.send("❌ Discord denied the kick. Check Kick Members permission and role hierarchy.", ephemeral=True)
-    bot.database.audit(i.guild.id, None, i.user.id, "kick", discord.utils.escape_markdown(reason)[:500])
+    bot.database.audit(i.guild.id, None, i.user.id, "kick", f"member={member.id}; {discord.utils.escape_markdown(reason)[:450]}")
     await i.followup.send(embed=embed("💜 Member kicked", f"✅ {member.mention} was removed from the server.\n\n**Reason:** {discord.utils.escape_markdown(reason)[:500]}"), ephemeral=True)
 
 @bot.tree.command(name="ban", description="🔨 Ban a member from this server with a recorded reason")
@@ -477,7 +550,7 @@ async def moderation_ban(i: discord.Interaction, member: discord.Member, reason:
     await i.response.defer(ephemeral=True)
     try: await member.ban(reason=f"{reason} • Moderator: {i.user}", delete_message_seconds=0)
     except discord.Forbidden: return await i.followup.send("❌ Discord denied the ban. Check Ban Members permission and role hierarchy.", ephemeral=True)
-    bot.database.audit(i.guild.id, None, i.user.id, "ban", discord.utils.escape_markdown(reason)[:500])
+    bot.database.audit(i.guild.id, None, i.user.id, "ban", f"member={member.id}; {discord.utils.escape_markdown(reason)[:450]}")
     await i.followup.send(embed=embed("💜 Member banned", f"🔨 {member.mention} was banned from the server.\n\n**Reason:** {discord.utils.escape_markdown(reason)[:500]}"), ephemeral=True)
 
 @bot.tree.command(name="warn", description="⚠️ Record a moderation warning for a member")
@@ -501,19 +574,317 @@ async def moderation_timeout(i: discord.Interaction, member: discord.Member, min
     bot.database.audit(i.guild.id, None, i.user.id, "timeout", f"member={member.id}; minutes={minutes}; {discord.utils.escape_markdown(reason)[:400]}")
     await i.followup.send(embed=embed("💜 Member timed out", f"⏳ {member.mention} was timed out for **{minutes} minute(s)**.\n\n**Reason:** {discord.utils.escape_markdown(reason)[:500]}"), ephemeral=True)
 
+@bot.tree.command(name="unban", description="♻️ Lift a ban so the member can rejoin")
+@staff()
+@app_commands.guild_only()
+@app_commands.describe(user_id="Start typing to pick a banned member, or paste their numeric user ID", reason="Why the ban is being lifted")
+async def moderation_unban(i: discord.Interaction, user_id: str, reason: str = "No reason provided"):
+    if not i.guild: return await i.response.send_message("❌ Unbans only work inside a server.", ephemeral=True)
+    try: target_id = int(str(user_id).strip())
+    except (TypeError, ValueError): return await i.response.send_message("❌ Pick a banned member from the list, or paste their numeric user ID.", ephemeral=True)
+    await i.response.defer(ephemeral=True)
+    try: entry = await i.guild.fetch_ban(discord.Object(id=target_id))
+    except discord.NotFound: return await i.followup.send("ℹ️ That user is not banned in this server.", ephemeral=True)
+    except discord.Forbidden: return await i.followup.send("❌ I cannot read the ban list. Check the Ban Members permission.", ephemeral=True)
+    try: await i.guild.unban(entry.user, reason=f"{reason} • Moderator: {i.user}")
+    except discord.Forbidden: return await i.followup.send("❌ Discord denied the unban. Check the Ban Members permission and try again.", ephemeral=True)
+    bot.database.audit(i.guild.id, None, i.user.id, "unban", f"member={target_id}; {discord.utils.escape_markdown(reason)[:450]}")
+    await i.followup.send(embed=embed("💜 Ban lifted", f"♻️ {entry.user} can join the server again.\n\n**Reason:** {discord.utils.escape_markdown(reason)[:500]}"), ephemeral=True)
+
+@moderation_unban.autocomplete("user_id")
+async def moderation_unban_autocomplete(i: discord.Interaction, current: str):
+    """Offer this server's current bans so nobody has to hunt for a raw user ID."""
+    if not i.guild: return []
+    needle = (current or "").strip().lower()
+    choices: list[app_commands.Choice[str]] = []
+    try:
+        async for entry in i.guild.bans(limit=100):
+            user = entry.user
+            label = f"{user} • {user.id}"
+            if needle and needle not in label.lower() and needle not in str(user.id): continue
+            choices.append(app_commands.Choice(name=label[:100], value=str(user.id)))
+            if len(choices) >= 25: break
+    except discord.HTTPException:
+        log.warning("Could not read the ban list to autocomplete an unban")
+        return []
+    return choices
+
+@bot.tree.command(name="untimeout", description="🔓 End a member's timeout early")
+@staff()
+@app_commands.guild_only()
+@app_commands.describe(member="Member whose timeout should end now", reason="Why the timeout is being lifted")
+async def moderation_untimeout(i: discord.Interaction, member: discord.Member, reason: str = "No reason provided"):
+    if not i.guild: return await i.response.send_message("❌ Timeouts only work inside a server.", ephemeral=True)
+    if member.id == i.user.id or member.id == i.guild.owner_id: return await i.response.send_message("❌ You cannot change your own timeout or the server owner's.", ephemeral=True)
+    if not i.guild.me or member.top_role >= i.guild.me.top_role: return await i.response.send_message("❌ My bot role must be above that member.", ephemeral=True)
+    if member.timed_out_until is None: return await i.response.send_message("ℹ️ That member is not timed out right now.", ephemeral=True)
+    await i.response.defer(ephemeral=True)
+    try: await member.timeout(None, reason=f"{reason} • Moderator: {i.user}")
+    except discord.Forbidden: return await i.followup.send("❌ Discord denied the change. Check the Moderate Members permission and role hierarchy.", ephemeral=True)
+    bot.database.audit(i.guild.id, None, i.user.id, "untimeout", f"member={member.id}; {discord.utils.escape_markdown(reason)[:450]}")
+    await i.followup.send(embed=embed("💜 Timeout lifted", f"🔓 {member.mention} can talk again.\n\n**Reason:** {discord.utils.escape_markdown(reason)[:500]}"), ephemeral=True)
+
+@bot.tree.command(name="purge", description="🧹 Bulk-delete recent messages, or empty the channel")
+@app_commands.guild_only()
+@app_commands.checks.has_permissions(manage_messages=True)
+@app_commands.checks.cooldown(3, 60.0, key=lambda i: (i.guild_id, i.user.id))
+@app_commands.describe(
+    count="How many recent messages to delete (1–100); ignored when everything is True",
+    everything="Set to True to empty the channel instead of using count",
+    reason="Why the messages are being removed",
+)
+async def moderation_purge(i: discord.Interaction, count: app_commands.Range[int, 1, 100], everything: bool = False, reason: str = "No reason provided"):
+    if not isinstance(i.channel, discord.TextChannel): return await i.response.send_message("❌ Purge needs a normal text channel.", ephemeral=True)
+    await i.response.defer(ephemeral=True)
+    async def reply(embed=None, **kwargs): await i.followup.send(embed=embed, ephemeral=True, **kwargs)
+    await _report_clear(reply, i.channel, i.user, None if everything else int(count), reason)
+
 @bot.command(name="lock", help="🔒 Prevent members from sending messages in this channel (staff only).")
 async def prefix_lock(ctx):
-    if not ctx.guild or not _prefix_privileged(ctx, True): return await ctx.send("❌ Only staff, the server owner, or the bot owner can lock channels.")
+    if not ctx.guild or not _prefix_privileged(ctx, True): return await ctx.send(_access_notice(ctx.guild))
     try: await ctx.channel.set_permissions(ctx.guild.default_role, send_messages=False, reason=f"Channel locked by {ctx.author}")
     except discord.Forbidden: return await ctx.send("❌ I cannot lock this channel. Check Manage Channels and Manage Permissions.")
     await ctx.send("🔒 This channel is now locked for members.")
 
 @bot.command(name="unlock", help="🔓 Restore member messaging in this channel (staff only).")
 async def prefix_unlock(ctx):
-    if not ctx.guild or not _prefix_privileged(ctx, True): return await ctx.send("❌ Only staff, the server owner, or the bot owner can unlock channels.")
+    if not ctx.guild or not _prefix_privileged(ctx, True): return await ctx.send(_access_notice(ctx.guild))
     try: await ctx.channel.set_permissions(ctx.guild.default_role, send_messages=None, reason=f"Channel unlocked by {ctx.author}")
     except discord.Forbidden: return await ctx.send("❌ I cannot unlock this channel. Check Manage Channels and Manage Permissions.")
     await ctx.send("🔓 This channel is now unlocked for members.")
+
+_CLEAR_BATCH = 100
+_CLEAR_SECONDS = 20.0
+
+async def _clear_channel(channel, *, count: int | None, reason: str, seconds: float = _CLEAR_SECONDS) -> tuple[int, bool]:
+    """Delete messages in batches. Returns (deleted, stopped_early).
+
+    A count of None empties the channel, stopping when Discord returns a short batch,
+    when the time budget runs out, or on the first refusal so the caller can report it.
+    """
+    deleted = 0
+    deadline = time.monotonic() + seconds
+    while True:
+        want = _CLEAR_BATCH if count is None else min(_CLEAR_BATCH, count - deleted)
+        if want <= 0:
+            return deleted, False
+        batch = await channel.purge(limit=want, reason=reason)
+        if not batch:
+            return deleted, False
+        deleted += len(batch)
+        if len(batch) < want:
+            return deleted, False
+        if time.monotonic() >= deadline:
+            return deleted, True
+
+async def _require_staff_prefix(ctx, require_staff: bool = True) -> bool:
+    """Gate a prefix command on the roles selected by /setup roles."""
+    if _prefix_privileged(ctx, require_staff):
+        return True
+    await ctx.send(_access_notice(ctx.guild))
+    return False
+
+def _hierarchy_error(guild, author, member, me) -> str | None:
+    """Shared safety checks for every prefix moderation action."""
+    if member.id == author.id: return "❌ You cannot target yourself with a moderation action."
+    if member.id == guild.owner_id: return "❌ The server owner cannot be moderated."
+    if author.id != guild.owner_id and member.top_role >= author.top_role: return "❌ That member has an equal or higher role than you."
+    if me is None or member.top_role >= me.top_role: return "❌ My bot role must be above that member."
+    return None
+
+@bot.command(name="help", help="💜 Show the prefix commands and point at the slash guide.")
+async def prefix_help(ctx):
+    guide = embed(
+        "💜 Grid A1 • Prefix commands",
+        f"Everything else lives in slash commands — run `/help` for the full guide, or "
+        f"`/help command:` for one command in full. This server's prefix is `{settings.prefix}`.",
+        discord.Colour.from_rgb(177, 77, 255),
+    )
+    guide.add_field(name="⌨️ Prefix commands", value="\n".join(prefix_guide_lines())[:1024], inline=False)
+    guide.set_footer(text="Staff commands need one of the roles saved by /setup roles.")
+    await ctx.send(embed=guide)
+
+@bot.command(name="ping", help="🏓 Check that the bot answers.")
+async def prefix_ping(ctx):
+    await ctx.send(f"🏓 Pong! Gateway latency {round(bot.latency * 1000)} ms.")
+
+@bot.command(name="whois", help="🔎 Show a member's account age, join date, roles, and records.")
+async def prefix_whois(ctx, member: discord.Member):
+    if not ctx.guild: return await ctx.send("❌ Member details are only available inside a server.")
+    records = bot.database.member_history(ctx.guild.id, member.id)
+    detail = embed(f"🔎 {member}", f"{member.mention} • `{member.id}`", discord.Colour.from_rgb(177, 77, 255))
+    detail.add_field(name="Account created", value=discord.utils.format_dt(member.created_at, "R"), inline=True)
+    detail.add_field(name="Joined here", value=discord.utils.format_dt(member.joined_at, "R") if member.joined_at else "unknown", inline=True)
+    detail.add_field(name="Top role", value=getattr(member.top_role, "mention", "none"), inline=True)
+    detail.add_field(name="Roles", value=str(max(0, len(member.roles) - 1)), inline=True)
+    detail.add_field(name="Timed out", value=discord.utils.format_dt(member.timed_out_until, "R") if member.timed_out_until else "no", inline=True)
+    detail.add_field(name="Recorded actions", value=str(len(records)), inline=True)
+    if records: detail.add_field(name="Latest record", value=moderation_history_lines(records[:1])[0][:1024], inline=False)
+    await ctx.send(embed=detail)
+
+@bot.command(name="serverinfo", help="🌐 Show this server's size, age, and staff setup state.")
+async def prefix_serverinfo(ctx):
+    if not ctx.guild: return await ctx.send("❌ Server details are only available inside a server.")
+    guild = ctx.guild
+    missing = bot.database.missing_permission_roles(guild.id)
+    detail = embed(f"🌐 {guild.name}", (guild.description or "No description set.")[:300], discord.Colour.from_rgb(177, 77, 255))
+    detail.add_field(name="Members", value=str(guild.member_count), inline=True)
+    detail.add_field(name="Owner", value=f"<@{guild.owner_id}>", inline=True)
+    detail.add_field(name="Created", value=discord.utils.format_dt(guild.created_at, "R"), inline=True)
+    detail.add_field(name="Channels", value=str(len(guild.channels)), inline=True)
+    detail.add_field(name="Roles", value=str(len(guild.roles)), inline=True)
+    detail.add_field(name="Open tickets", value=str(len(bot.database.open_tickets(guild.id))), inline=True)
+    detail.add_field(
+        name="Staff setup",
+        value="✅ All five staff roles are configured." if not missing else f"⚠️ Missing: {', '.join(missing)} — the server owner should run /setup roles.",
+        inline=False,
+    )
+    await ctx.send(embed=detail)
+
+@bot.command(name="warn", help="⚠️ Record a moderation warning (staff only).")
+async def prefix_warn(ctx, member: discord.Member, *, reason: str):
+    if not await _require_staff_prefix(ctx): return
+    problem = _hierarchy_error(ctx.guild, ctx.author, member, ctx.guild.me)
+    if problem and "bot role" not in problem: return await ctx.send(problem)
+    body = discord.utils.escape_markdown(reason)[:450]
+    bot.database.audit(ctx.guild.id, ctx.channel.id, ctx.author.id, "warn", f"member={member.id}; {body}")
+    await ctx.send(embed=embed("💜 Warning recorded", f"⚠️ A warning was recorded for {member.mention}.\n\n**Reason:** {body}"))
+
+@bot.command(name="timeout", help="⏳ Time a member out for 1 minute to 28 days (staff only).")
+async def prefix_timeout(ctx, member: discord.Member, minutes: int, *, reason: str = "No reason provided"):
+    if not await _require_staff_prefix(ctx): return
+    problem = _hierarchy_error(ctx.guild, ctx.author, member, ctx.guild.me)
+    if problem: return await ctx.send(problem)
+    if not 1 <= minutes <= 40320: return await ctx.send("❌ Timeout length must be between 1 and 40320 minutes (28 days).")
+    body = discord.utils.escape_markdown(reason)[:450]
+    try: await member.timeout(discord.utils.utcnow() + timedelta(minutes=minutes), reason=f"{reason} • Moderator: {ctx.author}")
+    except discord.Forbidden: return await ctx.send("❌ Discord denied the timeout. Check Moderate Members and role hierarchy.")
+    bot.database.audit(ctx.guild.id, ctx.channel.id, ctx.author.id, "timeout", f"member={member.id}; minutes={minutes}; {body}")
+    await ctx.send(embed=embed("💜 Member timed out", f"⏳ {member.mention} was timed out for **{minutes} minute(s)**.\n\n**Reason:** {body}"))
+
+@bot.command(name="untimeout", help="🔓 End a member's timeout early (staff only).")
+async def prefix_untimeout(ctx, member: discord.Member, *, reason: str = "No reason provided"):
+    if not await _require_staff_prefix(ctx): return
+    if member.timed_out_until is None: return await ctx.send("ℹ️ That member is not timed out right now.")
+    if member.id == ctx.author.id or member.id == ctx.guild.owner_id: return await ctx.send("❌ You cannot change your own timeout or the server owner's.")
+    try: await member.timeout(None, reason=f"{reason} • Moderator: {ctx.author}")
+    except discord.Forbidden: return await ctx.send("❌ Discord denied the change. Check Moderate Members and role hierarchy.")
+    body = discord.utils.escape_markdown(reason)[:450]
+    bot.database.audit(ctx.guild.id, ctx.channel.id, ctx.author.id, "untimeout", f"member={member.id}; {body}")
+    await ctx.send(embed=embed("💜 Timeout lifted", f"🔓 {member.mention} can talk again.\n\n**Reason:** {body}"))
+
+@bot.command(name="kick", help="👢 Remove a member with a recorded reason (staff only).")
+async def prefix_kick(ctx, member: discord.Member, *, reason: str = "No reason provided"):
+    if not await _require_staff_prefix(ctx): return
+    problem = _hierarchy_error(ctx.guild, ctx.author, member, ctx.guild.me)
+    if problem: return await ctx.send(problem)
+    body = discord.utils.escape_markdown(reason)[:450]
+    try: await member.kick(reason=f"{reason} • Moderator: {ctx.author}")
+    except discord.Forbidden: return await ctx.send("❌ Discord denied the kick. Check Kick Members and role hierarchy.")
+    bot.database.audit(ctx.guild.id, ctx.channel.id, ctx.author.id, "kick", f"member={member.id}; {body}")
+    await ctx.send(embed=embed("💜 Member kicked", f"✅ {member.mention} was removed from the server.\n\n**Reason:** {body}"))
+
+@bot.command(name="ban", help="🔨 Ban a member with a recorded reason (staff only).")
+async def prefix_ban(ctx, member: discord.Member, *, reason: str = "No reason provided"):
+    if not await _require_staff_prefix(ctx): return
+    problem = _hierarchy_error(ctx.guild, ctx.author, member, ctx.guild.me)
+    if problem: return await ctx.send(problem)
+    body = discord.utils.escape_markdown(reason)[:450]
+    try: await member.ban(reason=f"{reason} • Moderator: {ctx.author}", delete_message_seconds=0)
+    except discord.Forbidden: return await ctx.send("❌ Discord denied the ban. Check Ban Members and role hierarchy.")
+    bot.database.audit(ctx.guild.id, ctx.channel.id, ctx.author.id, "ban", f"member={member.id}; {body}")
+    await ctx.send(embed=embed("💜 Member banned", f"🔨 {member.mention} was banned from the server.\n\n**Reason:** {body}"))
+
+@bot.command(name="unban", help="♻️ Lift a ban by user ID (staff only).")
+async def prefix_unban(ctx, user_id: int, *, reason: str = "No reason provided"):
+    if not await _require_staff_prefix(ctx): return
+    try: entry = await ctx.guild.fetch_ban(discord.Object(id=int(user_id)))
+    except discord.NotFound: return await ctx.send("ℹ️ That user is not banned in this server.")
+    except discord.Forbidden: return await ctx.send("❌ I cannot read the ban list. Check the Ban Members permission.")
+    try: await ctx.guild.unban(entry.user, reason=f"{reason} • Moderator: {ctx.author}")
+    except discord.Forbidden: return await ctx.send("❌ Discord denied the unban. Check the Ban Members permission.")
+    body = discord.utils.escape_markdown(reason)[:450]
+    bot.database.audit(ctx.guild.id, ctx.channel.id, ctx.author.id, "unban", f"member={entry.user.id}; {body}")
+    await ctx.send(embed=embed("💜 Ban lifted", f"♻️ {entry.user} can join the server again.\n\n**Reason:** {body}"))
+
+@bot.command(name="modlog", help="🧾 Show a member's recorded moderation history (staff only).")
+async def prefix_modlog(ctx, member: discord.Member):
+    if not await _require_staff_prefix(ctx): return
+    rows = bot.database.member_history(ctx.guild.id, member.id)
+    detail = embed("🧾 Moderation history", f"Recorded actions against {member.mention}, newest first.")
+    detail.add_field(name=f"Records ({len(rows)})", value="\n".join(moderation_history_lines(rows)) or "Nothing recorded for this member.", inline=False)
+    await ctx.send(embed=detail)
+
+@bot.command(name="stats", help="📊 Show ticket workload and response times (staff only).")
+@commands.cooldown(3, 60.0, commands.BucketType.user)
+async def prefix_stats(ctx):
+    if not await _require_staff_prefix(ctx): return
+    await ctx.send(embed=ticket_stats_embed(ctx.guild, collect_ticket_stats(bot.database, ctx.guild.id)))
+
+async def _report_clear(respond, channel, actor, count: int | None, reason: str) -> None:
+    """Run a clear and reply with exactly what happened."""
+    try:
+        deleted, stopped = await _clear_channel(channel, count=count, reason=f"{reason} • Moderator: {actor}")
+    except discord.Forbidden:
+        return await respond("❌ I need the Manage Messages permission in this channel to delete anything.")
+    except discord.HTTPException:
+        log.exception("Bulk delete failed in channel %s", channel.id)
+        return await respond("❌ Discord rejected that delete. Try again in a moment, or clear a smaller number.")
+    bot.database.audit(
+        channel.guild.id,
+        channel.id,
+        actor.id,
+        "purge",
+        f"channel={channel.id}; deleted={deleted}; {'everything' if count is None else f'limit={count}'}; {discord.utils.escape_markdown(reason)[:360]}",
+    )
+    if count is None:
+        summary = f"Deleted **{deleted}** message(s) in {channel.mention} — the channel is clear." if not stopped else (
+            f"Deleted **{deleted}** message(s) in {channel.mention} and stopped after {int(_CLEAR_SECONDS)} seconds "
+            "to stay responsive. Run the command again to continue."
+        )
+    else:
+        summary = f"Deleted **{deleted}** message(s) in {channel.mention}."
+    result = embed("🧹 Messages removed", summary)
+    result.set_footer(text="Messages older than 14 days cannot be bulk-deleted, so those are removed one at a time.")
+    await respond(embed=result)
+
+@bot.command(name="clear", help="🧹 Delete the newest messages, or the whole channel when you give no count (staff only).")
+@commands.cooldown(2, 60.0, commands.BucketType.user)
+async def prefix_clear(ctx, count: int | None = None, *, reason: str = "No reason provided"):
+    if not await _require_staff_prefix(ctx): return
+    if not isinstance(ctx.channel, discord.TextChannel): return await ctx.send("❌ Clear needs a normal text channel.")
+    if count is not None and not 1 <= count <= 10000:
+        return await ctx.send("❌ Give a count between 1 and 10000, or leave the count out to empty the channel completely.")
+    if count is not None:
+        return await _report_clear(ctx.send, ctx.channel, ctx.author, count, reason)
+    prompt = embed(
+        "🧹 Clear this channel?",
+        f"This deletes **every** message in {ctx.channel.mention}, including this prompt. Discord cannot bulk-delete "
+        f"messages older than 14 days, so those are removed one at a time and the job stops after about "
+        f"{int(_CLEAR_SECONDS)} seconds, reporting what is left.\n\nThis cannot be undone.",
+    )
+    prompt.set_footer(text="Only you can answer this prompt, and it expires after 90 seconds.")
+    async def confirmed(interaction: discord.Interaction) -> None:
+        await interaction.response.edit_message(
+            embed=embed("🧹 Clearing…", f"Deleting every message in {ctx.channel.mention}."), view=None
+        )
+        async def reply(embed=None, **kwargs):
+            await interaction.followup.send(embed=embed, ephemeral=True, **kwargs)
+        await _report_clear(reply, ctx.channel, ctx.author, None, reason)
+    view = ConfirmView(confirmed, author_id=ctx.author.id, confirm_label="Delete everything")
+    view.message = await ctx.send(embed=prompt, view=view)
+
+@bot.command(name="slowmode", help="🐌 Set this channel's slowmode in seconds (staff only, 0 disables).")
+async def prefix_slowmode(ctx, seconds: int, *, reason: str = "No reason provided"):
+    if not await _require_staff_prefix(ctx): return
+    if not isinstance(ctx.channel, discord.TextChannel): return await ctx.send("❌ Slowmode needs a normal text channel.")
+    if not 0 <= seconds <= 21600: return await ctx.send("❌ Slowmode must be between 0 and 21600 seconds (6 hours). Use 0 to turn it off.")
+    try: await ctx.channel.edit(slowmode_delay=seconds, reason=f"{reason} • Moderator: {ctx.author}")
+    except (discord.Forbidden, discord.HTTPException): return await ctx.send("❌ I cannot change this channel's slowmode. Check Manage Channels.")
+    bot.database.audit(ctx.guild.id, ctx.channel.id, ctx.author.id, "slowmode", f"seconds={seconds}; {discord.utils.escape_markdown(reason)[:400]}")
+    state = "turned off" if seconds == 0 else f"set to **{seconds}** second(s)"
+    await ctx.send(embed=embed("🐌 Slowmode updated", f"Slowmode in {ctx.channel.mention} is now {state}."))
+
 
 @setup_group.command(name="roles", description="🎭 Set the five distinct staff permission roles")
 @server_owner_only()
@@ -534,8 +905,49 @@ async def setup_roles(i: discord.Interaction, owner_role: discord.Role, co_owner
     e.set_footer(text="Grid A1 • Permission configuration • Changes saved to SQLite")
     await i.followup.send(embed=e, ephemeral=True)
 
+@setup_group.command(name="status", description="🩺 Check which parts of this server's setup are finished")
+@app_commands.guild_only()
+@admin()
+async def setup_status(interaction: discord.Interaction) -> None:
+    """Report the saved setup so a new server knows exactly what to run next."""
+    guild = interaction.guild
+    if guild is None:
+        return await interaction.response.send_message("❌ Setup only applies inside a server.", ephemeral=True)
+    config = bot.database.config(guild.id)
+    labels = ("Owner", "Co-owner", "Head admin", "Admin", "Moderator")
+    role_lines = []
+    for field, label in zip(bot.database.PERMISSION_ROLE_FIELDS, labels):
+        role_id = config[field] if config else None
+        role_lines.append(f"{'✅' if role_id else '❌'} {label}: " + (f"<@&{int(role_id)}>" if role_id else "not set"))
+    def mark(name: str, ok: bool) -> str:
+        return f"{'✅' if ok else '❌'} {name}"
+    places = [
+        mark("Moderation log channel", bool(config and config["logs_channel"])),
+        mark("Report channel", bool(config and config["report_channel"])),
+        mark("Ticket category", bool(config and config["ticket_category"])),
+        mark("Welcome channel", bool(config and config["welcome_channel"])),
+        mark("Staff dashboard panel", bool(config and config["panel_channel"])),
+        mark("Anti-links protection", bool(config and config["anti_links_enabled"])),
+    ]
+    missing = bot.database.missing_permission_roles(guild.id)
+    if missing:
+        nxt = ("The server owner must run /setup roles and pick all five staff roles — until then no staff "
+               "command works for anyone but the server owner.")
+    else:
+        nxt = "All staff roles are saved. Staff commands now answer only members holding one of them."
+    result = embed(
+        f"🩺 Setup status — {guild.name}",
+        "Everything the bot needs is configured with slash commands, and staff access comes from the roles below.",
+    )
+    result.add_field(name="Staff roles", value="\n".join(role_lines), inline=False)
+    result.add_field(name="Places", value="\n".join(places), inline=False)
+    result.add_field(name="Next step", value=nxt, inline=False)
+    result.set_footer(text="Run /setup roles, /setup tickets, or /setup welcomer to fill in what is missing.")
+    await interaction.response.send_message(embed=result, ephemeral=True)
+
 @bot.tree.command(name="verifypanel", description="✅ Publish a verification panel and assignable role")
-@app_commands.checks.has_permissions(manage_guild=True)
+@app_commands.guild_only()
+@admin()
 @app_commands.describe(channel="Text channel where the public panel will appear", role="Role granted after successful verification")
 async def verifypanel(i: discord.Interaction, channel: discord.TextChannel, role: discord.Role):
     if role.is_default(): return await i.response.send_message("❌ You cannot use @everyone as the verification role.", ephemeral=True)
@@ -568,7 +980,8 @@ wipefeed_group = app_commands.Group(name="wipefeed", description="📣 Configure
 bot.tree.add_command(wipefeed_group)
 
 @wipefeed_group.command(name="enable", description="🔔 Turn wipe announcements on or off")
-@app_commands.checks.has_permissions(manage_guild=True)
+@app_commands.guild_only()
+@admin()
 @app_commands.describe(enabled="Whether new wipe announcements are enabled")
 async def wipefeed_enable(i: discord.Interaction, enabled: bool):
     bot.database.upsert_config(i.guild.id, wipefeed_enabled=int(enabled))
@@ -576,7 +989,8 @@ async def wipefeed_enable(i: discord.Interaction, enabled: bool):
     await i.response.send_message(f"✅ Wipefeed is now **{state}**.", ephemeral=True)
 
 @wipefeed_group.command(name="send", description="📣 Post an EU 6X wipe announcement")
-@app_commands.checks.has_permissions(manage_guild=True)
+@app_commands.guild_only()
+@admin()
 @app_commands.describe(timestamp="Unix timestamp, for example 1785524400", channel="Channel where the wipe announcement will be posted")
 async def wipefeed_send(i: discord.Interaction, timestamp: str, channel: discord.TextChannel):
     config = bot.database.config(i.guild.id)
@@ -595,6 +1009,7 @@ info_group = app_commands.Group(name="info", description="🌐 View server infor
 bot.tree.add_command(info_group)
 
 @info_group.command(name="server", description="🏰 View server members, channels, roles, and settings")
+@app_commands.checks.cooldown(5, 60.0, key=lambda i: (i.guild_id, i.user.id))
 async def info_server(i: discord.Interaction):
     g = i.guild
     if not g: return await i.response.send_message("❌ This command can only be used inside a server.", ephemeral=True)
@@ -627,7 +1042,8 @@ async def info_server(i: discord.Interaction):
 roles_group = app_commands.Group(name="roles", description="🎭 Display and publish the server role directory")
 bot.tree.add_command(roles_group)
 @roles_group.command(name="setchannel", description="📋 Post the server role directory in a text channel")
-@app_commands.checks.has_permissions(manage_guild=True)
+@app_commands.guild_only()
+@admin()
 @app_commands.describe(channel="Text channel where the role directory should be posted")
 async def roles_setchannel(i: discord.Interaction, channel: discord.TextChannel):
     roles = [role for role in i.guild.roles if not role.is_default()]
@@ -710,8 +1126,69 @@ async def ticket_requestclose(i,reason:str):
 @staff()
 @app_commands.describe(reason="Resolution or closure reason saved with the transcript")
 async def ticket_close(i,reason:str="No reason provided"): await bot.tickets.close(i,reason)
+@ticket_group.command(name="priority", description="🚦 Set how urgent this ticket is")
+@staff()
+@app_commands.describe(priority="Priority this ticket should be worked at")
+@app_commands.choices(priority=[app_commands.Choice(name=PRIORITY_LABELS[value], value=value) for value in PRIORITIES])
+async def ticket_priority(i: discord.Interaction, priority: app_commands.Choice[str]):
+    if not isinstance(i.channel, discord.TextChannel) or not is_ticket(i.channel): return await i.response.send_message("❌ This command only works inside an active ticket.", ephemeral=True)
+    row = bot.database.ticket_by_channel(i.channel.id)
+    if not row: return await i.response.send_message("⚠️ This ticket is already closed or unavailable.", ephemeral=True)
+    if row["priority"] == priority.value: return await i.response.send_message(f"ℹ️ This ticket is already **{PRIORITY_LABELS[priority.value]}**.", ephemeral=True)
+    if not bot.database.set_priority(row["ticket_id"], priority.value, i.user.id): return await i.response.send_message("⚠️ This ticket closed while the priority was being set.", ephemeral=True)
+    await i.response.send_message(embed=priority_embed(priority.value, i.user))
+@ticket_group.command(name="list", description="🗂️ List this server's open tickets, most urgent first")
+@staff()
+@app_commands.checks.cooldown(5, 60.0, key=lambda i: (i.guild_id, i.user.id))
+async def ticket_list(i: discord.Interaction):
+    if not i.guild:
+        return await i.response.send_message("❌ Open the ticket queue inside a server.", ephemeral=True)
+    rows = bot.database.open_tickets(i.guild.id)
+    lines, hidden = queue_overview(rows)
+    result = embed(
+        f"🗂️ Open ticket queue — {i.guild.name}",
+        f"**{len(rows)}** open ticket{'s' if len(rows) != 1 else ''}, most urgent first, oldest at the top of each priority.",
+    )
+    result.add_field(
+        name="Tickets",
+        value="\n".join(lines) or "Nothing is open right now. 🎉",
+        inline=False,
+    )
+    if hidden:
+        result.set_footer(text=f"…and {hidden} more not shown. Clear the oldest tickets first.")
+    await i.response.send_message(embed=result, ephemeral=True)
+@ticket_group.command(name="note", description="🗒️ Save an internal staff note on this ticket")
+@staff()
+@app_commands.describe(text="Note only staff can read; the ticket owner never sees it")
+async def ticket_note(i: discord.Interaction, text: str):
+    if not isinstance(i.channel, discord.TextChannel) or not is_ticket(i.channel):
+        return await i.response.send_message("❌ This command only works inside an active ticket.", ephemeral=True)
+    row = bot.database.ticket_by_channel(i.channel.id)
+    if not row:
+        return await i.response.send_message("⚠️ This ticket is already closed or unavailable.", ephemeral=True)
+    try:
+        stored = bot.database.add_ticket_note(row["ticket_id"], i.guild.id, i.user.id, text)
+    except ValueError as error:
+        return await i.response.send_message(f"❌ {error}", ephemeral=True)
+    await i.response.send_message(
+        embed=embed("🗒️ Note saved", f"Internal note recorded on this ticket:\n> {stored}\n\nUse /ticket notes to read the history."),
+        ephemeral=True,
+    )
+@ticket_group.command(name="notes", description="🗂️ Read the internal staff notes on this ticket")
+@staff()
+async def ticket_notes(i: discord.Interaction):
+    if not isinstance(i.channel, discord.TextChannel) or not is_ticket(i.channel):
+        return await i.response.send_message("❌ This command only works inside an active ticket.", ephemeral=True)
+    row = bot.database.ticket_by_channel(i.channel.id)
+    if not row:
+        return await i.response.send_message("⚠️ This ticket is already closed or unavailable.", ephemeral=True)
+    lines = note_lines(bot.database.ticket_notes(i.guild.id, row["ticket_id"]))
+    result = embed("🗂️ Internal ticket notes", f"Staff-only notes on {i.channel.mention}, newest first.")
+    result.add_field(name="Notes", value="\n".join(lines) or "No notes yet. Add one with /ticket note.", inline=False)
+    await i.response.send_message(embed=result, ephemeral=True)
 @ticket_group.command(name="stats", description="📊 Show ticket workload, response times, and top claimers")
 @staff()
+@app_commands.checks.cooldown(5, 60.0, key=lambda i: (i.guild_id, i.user.id))
 async def ticket_stats(i: discord.Interaction):
     g = guild(i)
     if g is None: return await i.response.send_message("❌ Statistics are only available inside a server.", ephemeral=True)
@@ -719,6 +1196,7 @@ async def ticket_stats(i: discord.Interaction):
     await i.followup.send(embed=ticket_stats_embed(g, collect_ticket_stats(bot.database, g.id)), ephemeral=True)
 @ticket_group.command(name="transcript", description="📄 Get a plain-text transcript without closing the ticket")
 @staff()
+@app_commands.checks.cooldown(3, 60.0, key=lambda i: (i.guild_id, i.user.id))
 async def ticket_transcript(i: discord.Interaction):
     if not isinstance(i.channel, discord.TextChannel) or not is_ticket(i.channel): return await i.response.send_message("❌ This command only works inside an active ticket.", ephemeral=True)
     await i.response.defer(ephemeral=True)
@@ -727,6 +1205,57 @@ async def ticket_transcript(i: discord.Interaction):
         log.warning("Could not render an on-demand transcript for channel %s", i.channel.id)
         return await i.followup.send("❌ I could not read this channel's history. Please retry.", ephemeral=True)
     await i.followup.send(f"📄 Transcript for {i.channel.mention}. The ticket stays open.", file=discord.File(io.BytesIO(text.encode("utf-8")), filename=f"{i.channel.name}-transcript.txt"), ephemeral=True)
+@giveaway_group.command(
+    name="list",
+    description="📋 List this server's active giveaways with entry counts",
+)
+@app_commands.guild_only()
+@admin()
+@app_commands.describe(limit="How many giveaways to show (1–25)")
+async def giveaway_list(
+    interaction: discord.Interaction,
+    limit: app_commands.Range[int, 1, 25] = 10,
+) -> None:
+    """Show open giveaways ending soonest first, with entries and winner counts."""
+    guild = interaction.guild
+    if guild is None:
+        return await interaction.response.send_message(
+            "❌ Giveaways are only available inside a server.",
+            ephemeral=True,
+        )
+    rows = sorted(
+        bot.database.active_giveaways(guild.id, limit=int(limit)),
+        key=lambda row: row["ends_at"] or "",
+    )
+    shown: list[str] = []
+    used = 0
+    for row in rows:
+        entries = bot.database.giveaway_entry_count(row["giveaway_id"])
+        ping = f"pings <@&{row['ping_role_id']}>" if row["ping_role_id"] else "no ping"
+        line = (
+            f"🎁 **{discord.utils.escape_markdown(row['reward_type'])[:80]}** • `{row['giveaway_id']}`\n"
+            f"┗ {entries} {'entry' if entries == 1 else 'entries'} • "
+            f"{int(row['winner_count'])} winner(s) • {timestamp_marker(row['ends_at'])} • "
+            f"{ping} • <#{row['channel_id']}>"
+        )
+        if used + len(line) + 1 > 1000:
+            break
+        shown.append(line)
+        used += len(line) + 1
+    listing = embed(
+        f"📋 Active giveaways — {guild.name}",
+        f"**{len(rows)}** open giveaway(s), ending soonest first.",
+    )
+    listing.add_field(
+        name="Giveaways",
+        value="\n".join(shown) or "Nothing is open right now. Start one with /giveaway config.",
+        inline=False,
+    )
+    if len(shown) < len(rows):
+        listing.set_footer(text=f"…and {len(rows) - len(shown)} more not shown. End the soonest ones first.")
+    await interaction.response.send_message(embed=listing, ephemeral=True)
+
+
 @giveaway_group.command(
     name="config",
     description="🎛️ Open the private giveaway setup and active list",
@@ -755,7 +1284,7 @@ async def giveaway_config(interaction: discord.Interaction) -> None:
 )
 @app_commands.guild_only()
 @admin()
-@app_commands.describe(giveaway_id="Giveaway ID shown in its public panel")
+@app_commands.describe(giveaway_id="Start typing to pick an active giveaway, or paste its ID")
 async def giveaway_end(interaction: discord.Interaction, giveaway_id: str) -> None:
     guild = interaction.guild
     if guild is None:
@@ -763,26 +1292,44 @@ async def giveaway_end(interaction: discord.Interaction, giveaway_id: str) -> No
     normalized_id = giveaway_id.strip().upper()
     if not bot.database.giveaway_for_guild(guild.id, normalized_id):
         return await interaction.response.send_message("⚠️ I could not find that giveaway in this server.", ephemeral=True)
-    await interaction.response.defer(ephemeral=True)
+    entries = bot.database.giveaway_entry_count(normalized_id)
+
+    async def draw_winners(target: discord.Interaction) -> None:
+        await target.response.defer(ephemeral=True)
+        try:
+            state, winners, panel_updated = await bot.giveaways.finish(
+                guild,
+                normalized_id,
+                ended_by=interaction.user.id,
+                force=True,
+            )
+        except Exception:
+            log.exception("Manual giveaway end failed for %s", normalized_id)
+            return await target.followup.send("❌ I could not end that giveaway. Check its public panel and try again.", ephemeral=True)
+        if state == "already_ended":
+            return await target.followup.send("ℹ️ That giveaway has already ended.", ephemeral=True)
+        if state != "ended":
+            return await target.followup.send("⚠️ That giveaway is no longer active.", ephemeral=True)
+        winner_text = ", ".join(f"<@{user_id}>" for user_id in winners) if winners else "No one entered."
+        message = f"✅ Giveaway `{normalized_id}` ended. Winners: {winner_text}"
+        if not panel_updated:
+            message += " The winner draw was saved, but I could not refresh the public panel."
+        await target.followup.send(message, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
+
+    view = ConfirmView(draw_winners, author_id=interaction.user.id, confirm_label="Draw winners now")
+    await interaction.response.send_message(
+        embed=embed(
+            "🎉 End this giveaway now?",
+            f"Giveaway `{normalized_id}` currently has **{entries}** entr{'y' if entries == 1 else 'ies'}.\n"
+            "Ending it draws the winners straight away and cannot be undone.",
+        ),
+        view=view,
+        ephemeral=True,
+    )
     try:
-        state, winners, panel_updated = await bot.giveaways.finish(
-            guild,
-            normalized_id,
-            ended_by=interaction.user.id,
-            force=True,
-        )
-    except Exception:
-        log.exception("Manual giveaway end failed for %s", normalized_id)
-        return await interaction.followup.send("❌ I could not end that giveaway. Check its public panel and try again.", ephemeral=True)
-    if state == "already_ended":
-        return await interaction.followup.send("ℹ️ That giveaway has already ended.", ephemeral=True)
-    if state != "ended":
-        return await interaction.followup.send("⚠️ That giveaway is no longer active.", ephemeral=True)
-    winner_text = ", ".join(f"<@{user_id}>" for user_id in winners) if winners else "No one entered."
-    message = f"✅ Giveaway `{normalized_id}` ended. Winners: {winner_text}"
-    if not panel_updated:
-        message += " The winner draw was saved, but I could not refresh the public panel."
-    await interaction.followup.send(message, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
+        view.message = await interaction.original_response()
+    except discord.HTTPException:
+        log.debug("Could not capture the giveaway confirmation prompt for its timeout message")
 
 
 def _may_manage_poll(interaction: discord.Interaction, poll) -> bool:
@@ -794,6 +1341,26 @@ def _may_manage_poll(interaction: discord.Interaction, poll) -> bool:
             or _privileged(interaction)
         )
     )
+
+
+@giveaway_end.autocomplete("giveaway_id")
+async def giveaway_end_autocomplete(
+    interaction: discord.Interaction,
+    current: str,
+) -> list[app_commands.Choice[str]]:
+    """Offer this server's active giveaways instead of a raw identifier."""
+    if interaction.guild_id is None:
+        return []
+    rows = bot.database.active_giveaways(interaction.guild_id)
+    return [
+        app_commands.Choice(name=label, value=value)
+        for label, value in build_choices(
+            rows,
+            ("reward_type", "giveaway_id"),
+            "giveaway_id",
+            current,
+        )
+    ]
 
 
 @poll_group.command(
@@ -980,11 +1547,57 @@ async def poll_create(
 
 
 @poll_group.command(
+    name="results",
+    description="📈 Show a poll's current results without ending it",
+)
+@app_commands.guild_only()
+@app_commands.describe(poll_id="Start typing to pick a poll, or paste its ID")
+async def poll_results(
+    interaction: discord.Interaction,
+    poll_id: str,
+) -> None:
+    """Show live standings to the creator or a server manager, without ending the poll."""
+    guild = interaction.guild
+    if guild is None:
+        await interaction.response.send_message(
+            "❌ Polls can only be managed inside a server.",
+            ephemeral=True,
+        )
+        return
+
+    poll = bot.database.poll_for_guild(guild.id, poll_id.strip().upper())
+    if not poll:
+        await interaction.response.send_message(
+            "⚠️ I could not find that poll in this server. Check the poll ID and try again.",
+            ephemeral=True,
+        )
+        return
+    if not _may_manage_poll(interaction, poll):
+        await interaction.response.send_message(
+            "🔒 Only the poll creator or a server manager can see results before the poll ends.",
+            ephemeral=True,
+        )
+        return
+
+    standings = poll_embed(
+        poll,
+        bot.database.poll_options(poll["poll_id"]),
+        bot.database.poll_results(poll["poll_id"]),
+    )
+    if poll["status"] == "open":
+        lead = "📊 Live standings — the poll is still open, so these numbers can still change."
+    else:
+        lead = "🔒 Final results — this poll has ended."
+    standings.description = f"{lead}\n\n{standings.description}"
+    await interaction.response.send_message(embed=standings, ephemeral=True)
+
+
+@poll_group.command(
     name="end",
     description="🔒 End a poll and publish its final results",
 )
 @app_commands.guild_only()
-@app_commands.describe(poll_id="Poll ID shown in the poll panel footer")
+@app_commands.describe(poll_id="Start typing to pick an open poll, or paste its ID")
 async def poll_end(interaction: discord.Interaction, poll_id: str) -> None:
     """End a poll if the caller created it or manages the server."""
     guild = interaction.guild
@@ -1043,12 +1656,32 @@ async def poll_end(interaction: discord.Interaction, poll_id: str) -> None:
     await interaction.followup.send(embed=result_embed, ephemeral=True)
 
 
+@poll_end.autocomplete("poll_id")
+async def poll_end_autocomplete(
+    interaction: discord.Interaction,
+    current: str,
+) -> list[app_commands.Choice[str]]:
+    """Offer this server's open polls with their questions."""
+    if interaction.guild_id is None:
+        return []
+    rows = bot.database.active_polls(interaction.guild_id)
+    return [
+        app_commands.Choice(name=label, value=value)
+        for label, value in build_choices(
+            rows,
+            ("question", "poll_id"),
+            "poll_id",
+            current,
+        )
+    ]
+
+
 @poll_group.command(
     name="remove",
     description="🗑️ Remove a poll message and its stored votes",
 )
 @app_commands.guild_only()
-@app_commands.describe(poll_id="Poll ID shown in the poll panel footer")
+@app_commands.describe(poll_id="Start typing to pick any of this server's polls, or paste its ID")
 async def poll_remove(interaction: discord.Interaction, poll_id: str) -> None:
     """Delete the poll message and its stored votes for its creator or a manager."""
     guild = interaction.guild
@@ -1074,53 +1707,113 @@ async def poll_remove(interaction: discord.Interaction, poll_id: str) -> None:
         )
         return
 
-    await interaction.response.defer(ephemeral=True)
-    try:
-        await bot.polls.remove_public_message(guild, poll)
-    except discord.Forbidden:
-        await interaction.followup.send(
-            "❌ I could not delete the poll message. The poll and votes were kept; check Manage Messages.",
-            ephemeral=True,
-        )
-        return
-    except discord.HTTPException as error:
-        log.warning("Could not remove poll message %s: %s", normalized_poll_id, error)
-        await interaction.followup.send(
-            "⚠️ Discord could not remove the poll message right now. The poll data was kept.",
-            ephemeral=True,
-        )
-        return
+    async def remove_poll(target: discord.Interaction) -> None:
+        await target.response.defer(ephemeral=True)
+        try:
+            await bot.polls.remove_public_message(guild, poll)
+        except discord.Forbidden:
+            await target.followup.send(
+                "❌ I could not delete the poll message. The poll and votes were kept; check Manage Messages.",
+                ephemeral=True,
+            )
+            return
+        except discord.HTTPException as error:
+            log.warning("Could not remove poll message %s: %s", normalized_poll_id, error)
+            await target.followup.send(
+                "⚠️ Discord could not remove the poll message right now. The poll data was kept.",
+                ephemeral=True,
+            )
+            return
 
-    try:
-        removed = bot.database.remove_poll(
-            normalized_poll_id,
-            removed_by=interaction.user.id,
-        )
-    except Exception:
-        log.exception("Public poll %s was removed but database cleanup failed", normalized_poll_id)
-        await interaction.followup.send(
-            "⚠️ The public message was removed, but I could not remove its stored record. Contact an admin before recreating it.",
-            ephemeral=True,
-        )
-        return
-    if not removed:
-        await interaction.followup.send(
-            "⚠️ The poll message was removed, but its record was already gone.",
-            ephemeral=True,
-        )
-        return
+        try:
+            removed = bot.database.remove_poll(
+                normalized_poll_id,
+                removed_by=interaction.user.id,
+            )
+        except Exception:
+            log.exception("Public poll %s was removed but database cleanup failed", normalized_poll_id)
+            await target.followup.send(
+                "⚠️ The public message was removed, but I could not remove its stored record. Contact an admin before recreating it.",
+                ephemeral=True,
+            )
+            return
+        if not removed:
+            await target.followup.send(
+                "⚠️ The poll message was removed, but its record was already gone.",
+                ephemeral=True,
+            )
+            return
 
-    await interaction.followup.send(
-        f"🗑️ Poll `{normalized_poll_id}` and its stored votes were removed.",
+        await target.followup.send(
+            f"🗑️ Poll `{normalized_poll_id}` and its stored votes were removed.",
+            ephemeral=True,
+        )
+
+    view = ConfirmView(
+        remove_poll,
+        author_id=interaction.user.id,
+        confirm_label="Delete this poll",
+    )
+    await interaction.response.send_message(
+        embed=embed(
+            "🗑️ Delete this poll?",
+            f"Poll `{normalized_poll_id}` and the votes stored for it will be removed for everyone. This cannot be undone.",
+        ),
+        view=view,
         ephemeral=True,
     )
+    try:
+        view.message = await interaction.original_response()
+    except discord.HTTPException:
+        log.debug("Could not capture the poll confirmation prompt for its timeout message")
+
+
+@poll_remove.autocomplete("poll_id")
+async def poll_remove_autocomplete(
+    interaction: discord.Interaction,
+    current: str,
+) -> list[app_commands.Choice[str]]:
+    """Offer every poll in this server, with its status, for removal."""
+    if interaction.guild_id is None:
+        return []
+    rows = bot.database.guild_polls(interaction.guild_id)
+    return [
+        app_commands.Choice(name=label, value=value)
+        for label, value in build_choices(
+            rows,
+            ("question", "poll_id", "status"),
+            "poll_id",
+            current,
+        )
+    ]
 
 
 @bot.event
 async def on_command_error(ctx, error):
+    """Answer a failed prefix command once, in plain language."""
     if isinstance(error, commands.CommandNotFound):
         return
+    prefix = settings.prefix
+    if isinstance(error, commands.MissingRequiredArgument):
+        await ctx.send(f"❌ {prefix}{ctx.command.qualified_name} still needs **{error.param.name}**. Try {prefix}help.")
+        return
+    if isinstance(error, (commands.MemberNotFound, commands.UserNotFound)):
+        await ctx.send("❌ I could not find that member. Mention them, or paste their user ID.")
+        return
+    if isinstance(error, commands.BadArgument):
+        await ctx.send(f"❌ That argument did not fit {prefix}{ctx.command.qualified_name}. Try {prefix}help.")
+        return
+    if isinstance(error, (commands.MissingPermissions, commands.CheckFailure)):
+        await ctx.send(_access_notice(ctx.guild if ctx.guild else None))
+        return
+    if isinstance(error, commands.NoPrivateMessage):
+        await ctx.send("❌ That command only works inside a server.")
+        return
+    if isinstance(error, commands.CommandOnCooldown):
+        await ctx.send(f"⏳ Slow down a moment — try again in {error.retry_after:.0f}s.")
+        return
     log.exception("Prefix command failed", exc_info=error)
+    await ctx.send("❌ That command failed. The details are in my logs.")
 
 
 @bot.event
@@ -1176,27 +1869,76 @@ async def on_member_remove(member):
     ticket_ids = bot.database.mark_owner_left(member.guild.id, member.id)
     for ticket_id in ticket_ids: bot.database.audit(member.guild.id, ticket_id, 0, 'owner_left')
 
+def _wait_text(seconds: float) -> str:
+    """Short human duration used by cooldown feedback."""
+    total = max(1, int(round(seconds)))
+    minutes, remaining = divmod(total, 60)
+    return f"{minutes}m {remaining}s" if minutes else f"{remaining}s"
+
+
+def command_path(command) -> str:
+    """Full slash path of a command object, including its parent groups."""
+    names = [getattr(command, "name", "") or ""]
+    parent = getattr(command, "parent", None)
+    while parent is not None:
+        names.append(getattr(parent, "name", "") or "")
+        parent = getattr(parent, "parent", None)
+    return " ".join(name for name in reversed(names) if name)
+
+
+def _help_pointer(error) -> str:
+    """Link a failed command to its own help entry when the command is known."""
+    command = getattr(error, "command", None)
+    path = command_path(command) if command is not None else ""
+    if path:
+        return f" Run `/help command:{path}` for what it needs."
+    return " Run `/help` to see what you can use."
+
+
 @bot.tree.error
-async def on_app_command_error(i,error):
+async def on_app_command_error(i, error):
+    """Answer every failed application command with one clear, ephemeral message."""
     original = getattr(error, "original", error)
     if isinstance(original, discord.NotFound) and getattr(original, "code", None) == 10062:
         log.warning("Application interaction expired or is unknown; response could not be delivered")
         return
-    log.exception("Application command failed", exc_info=error)
-    if isinstance(original, discord.HTTPException) and original.status == 429:
+    expected = (
+        app_commands.CommandOnCooldown,
+        app_commands.MissingPermissions,
+        app_commands.BotMissingPermissions,
+        app_commands.NoPrivateMessage,
+        app_commands.CheckFailure,
+        OwnerConfigurationError,
+        OwnerOnlyError,
+    )
+    if isinstance(error, expected):
+        log.info("Application command declined: %s", error)
+    else:
+        log.exception("Application command failed", exc_info=error)
+    if isinstance(error, app_commands.CommandOnCooldown):
+        msg = f"⏳ That command is on cooldown. Try again in {_wait_text(error.retry_after)}."
+    elif isinstance(original, discord.HTTPException) and original.status == 429:
         msg = "⏳ Discord rate-limited this request. Please wait a moment and try again."
+    elif isinstance(error, app_commands.BotMissingPermissions):
+        needed = ", ".join(error.missing_permissions) or "the required permission"
+        msg = f"🔒 I am missing **{needed}** here, so I cannot do that. A server administrator can grant it." + _help_pointer(error)
+    elif isinstance(error, app_commands.NoPrivateMessage):
+        msg = "❌ That command only works inside a server."
     elif isinstance(error, app_commands.MissingPermissions):
-        msg = "🔒 You do not have the Discord permissions required for that command. Run `/help` to see access requirements."
+        msg = "🔒 You do not have the Discord permissions required for that command." + _help_pointer(error)
     elif isinstance(error, (OwnerConfigurationError, OwnerOnlyError)):
         msg = f"⚠️ {error}"
     elif isinstance(error, app_commands.CheckFailure) and getattr(error, "command", None) and error.command.name == "dashboard":
         msg = "🔒 Dashboard access requires the configured Owner or Co-owner role. The server owner can initialize them with `/setup roles`."
+    elif isinstance(error, StaffAccessError):
+        msg = f"{error}" + _help_pointer(error)
     elif isinstance(error, app_commands.CheckFailure):
-        msg = "🔒 You do not have access to this command. Run `/help` to see which roles or permissions are required."
+        msg = "🔒 You do not have access to this command." + _help_pointer(error)
     elif isinstance(original, RuntimeError):
         msg = f"⚠️ {error}"
     else:
-        msg = "❌ That command could not be completed. Check its setup, your permissions, and the bot's channel/role permissions; run `/help` for guidance."
+        msg = ("❌ That command could not be completed. Check its setup, your permissions, and the bot's "
+               "channel/role permissions; run `/help` for guidance.")
     try:
         if i.response.is_done(): await i.followup.send(msg, ephemeral=True)
         else: await i.response.send_message(msg, ephemeral=True)

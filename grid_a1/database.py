@@ -2,11 +2,26 @@ from __future__ import annotations
 import sqlite3
 import json
 import secrets
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
-from .utils import utcnow, safe_json_list
-SCHEMA_VERSION = 19
+from .utils import DEFAULT_PRIORITY, FEEDBACK_SCORES, PRIORITIES, utcnow, safe_json_list
+SCHEMA_VERSION = 21
+
+PERMISSION_ROLE_FIELDS = (
+    "owner_role",
+    "co_owner_role",
+    "head_admin_role",
+    "admin_role",
+    "moderator_role",
+)
+ADMIN_ROLE_FIELDS = PERMISSION_ROLE_FIELDS[:4]
+NOTE_ACTION = "note"
+MODERATION_ACTIONS = ("kick", "ban", "warn", "timeout", "unban", "untimeout")
 class Database:
+    PERMISSION_ROLE_FIELDS = PERMISSION_ROLE_FIELDS
+    ADMIN_ROLE_FIELDS = ADMIN_ROLE_FIELDS
+
     def __init__(self, path: Path) -> None:
         self.path = path
 
@@ -30,7 +45,7 @@ class Database:
             for n,d in cols.items():
                 if n not in existing: db.execute(f'ALTER TABLE guild_config ADD COLUMN {n} {d}')
             existing={r[1] for r in db.execute('PRAGMA table_info(tickets)')}
-            for n,d in {'claimed_by':'INTEGER','close_requested_by':'INTEGER','inactivity_notice_at':'TEXT','owner_left':'INTEGER NOT NULL DEFAULT 0','auto_close_at':'TEXT','auto_close_reason':'TEXT','closed_at':'TEXT','closed_by':'INTEGER','close_reason':'TEXT','transcript_filename':'TEXT','urgent_at':'TEXT','urgent_by':'INTEGER'}.items():
+            for n,d in {'claimed_by':'INTEGER','close_requested_by':'INTEGER','inactivity_notice_at':'TEXT','owner_left':'INTEGER NOT NULL DEFAULT 0','auto_close_at':'TEXT','auto_close_reason':'TEXT','closed_at':'TEXT','closed_by':'INTEGER','close_reason':'TEXT','transcript_filename':'TEXT','urgent_at':'TEXT','urgent_by':'INTEGER','priority':f"TEXT NOT NULL DEFAULT '{DEFAULT_PRIORITY}'"}.items():
                 if n not in existing: db.execute(f'ALTER TABLE tickets ADD COLUMN {n} {d}')
             # Create audit_log before any index that references it.
             db.execute('''CREATE TABLE IF NOT EXISTS audit_log (id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id INTEGER NOT NULL, ticket_id TEXT, actor_id INTEGER NOT NULL, action TEXT NOT NULL, metadata TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL)''')
@@ -41,6 +56,8 @@ class Database:
             db.execute("CREATE INDEX IF NOT EXISTS idx_config_panel ON guild_config(panel_channel, panel_message)")
             db.execute("CREATE INDEX IF NOT EXISTS idx_audit_guild_created ON audit_log(guild_id, created_at)")
             db.execute('''CREATE TABLE IF NOT EXISTS closed_tickets (id INTEGER PRIMARY KEY AUTOINCREMENT, guild INTEGER NOT NULL, region TEXT NOT NULL, issue TEXT NOT NULL, closed_by INTEGER NOT NULL, reason TEXT NOT NULL, closed_at TEXT NOT NULL)''')
+            db.execute('''CREATE TABLE IF NOT EXISTS ticket_feedback (ticket_id TEXT PRIMARY KEY, guild_id INTEGER NOT NULL, owner_id INTEGER NOT NULL, score INTEGER NOT NULL, created_at TEXT NOT NULL)''')
+            db.execute("CREATE INDEX IF NOT EXISTS idx_feedback_guild_created ON ticket_feedback(guild_id, created_at)")
             db.execute("""
                 CREATE TABLE IF NOT EXISTS poll_settings (
                     guild_id INTEGER PRIMARY KEY,
@@ -129,7 +146,7 @@ class Database:
 
     def startup_check(self) -> dict[str, object]:
         with self.connect() as db:
-            required = {"guild_config", "tickets", "audit_log", "closed_tickets", "poll_settings", "polls", "poll_votes", "giveaways", "giveaway_entries", "schema_migrations"}
+            required = {"guild_config", "tickets", "audit_log", "closed_tickets", "ticket_feedback", "poll_settings", "polls", "poll_votes", "giveaways", "giveaway_entries", "schema_migrations"}
             tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
             missing = sorted(required - tables)
             integrity = db.execute("PRAGMA integrity_check").fetchone()[0]
@@ -249,11 +266,13 @@ class Database:
             "status", "claimed_by", "close_requested_by", "last_activity_at",
             "inactivity_notice_at", "owner_left", "auto_close_at", "auto_close_reason",
             "closed_at", "closed_by", "close_reason", "transcript_filename",
-            "urgent_at", "urgent_by",
+            "urgent_at", "urgent_by", "priority",
         }
         unknown_fields = set(values) - allowed_fields
         if unknown_fields:
             raise ValueError(f"unknown ticket fields: {unknown_fields}")
+        if values.get("priority") is not None and values["priority"] not in PRIORITIES:
+            raise ValueError("unknown priority")
         if not values:
             return
 
@@ -264,6 +283,34 @@ class Database:
                 f"UPDATE tickets SET {assignments} WHERE ticket_id=?",
                 parameters,
             )
+
+    def add_ticket_note(self, ticket_id: str, guild_id: int, actor_id: int, note: str) -> str:
+        """Store an internal staff note on a ticket and return the trimmed text."""
+        text = " ".join(str(note or "").split())[:500]
+        if not text:
+            raise ValueError("a note needs some text")
+        self.audit(guild_id, ticket_id, actor_id, NOTE_ACTION, json.dumps({"note": text}))
+        return text
+
+    def ticket_notes(self, guild_id: int, ticket_id: str, limit: int = 10) -> list[sqlite3.Row]:
+        """Return a ticket's internal notes newest first."""
+        with self.connect() as db:
+            return db.execute(
+                "SELECT actor_id, metadata, created_at FROM audit_log "
+                "WHERE guild_id=? AND ticket_id=? AND action=? ORDER BY id DESC LIMIT ?",
+                (guild_id, ticket_id, NOTE_ACTION, max(1, min(int(limit), 25))),
+            ).fetchall()
+
+    def member_history(self, guild_id: int, member_id: int, limit: int = 10) -> list[sqlite3.Row]:
+        """Return recent moderation actions recorded against one member."""
+        placeholders = ", ".join("?" for _ in MODERATION_ACTIONS)
+        with self.connect() as db:
+            return db.execute(
+                "SELECT actor_id, action, metadata, created_at FROM audit_log "
+                f"WHERE guild_id=? AND action IN ({placeholders}) AND metadata LIKE ? "
+                "ORDER BY id DESC LIMIT ?",
+                (guild_id, *MODERATION_ACTIONS, f"%member={int(member_id)}%", max(1, min(int(limit), 25))),
+            ).fetchall()
 
     def audit(
         self,
@@ -296,6 +343,84 @@ class Database:
 
         with self.connect() as db:
             return int(db.execute(query, parameters).fetchone()[0])
+
+    def save_feedback(
+        self,
+        ticket_id: str,
+        guild_id: int,
+        owner_id: int,
+        score: int,
+        *,
+        created_at: str | None = None,
+    ) -> int:
+        """Store or replace one ticket owner's rating and append an audit event."""
+        if score not in FEEDBACK_SCORES:
+            raise ValueError("unknown feedback score")
+        moment = created_at or utcnow().isoformat()
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            try:
+                db.execute(
+                    "INSERT INTO ticket_feedback(ticket_id, guild_id, owner_id, score, created_at) "
+                    "VALUES(?,?,?,?,?) "
+                    "ON CONFLICT(ticket_id) DO UPDATE SET score=excluded.score, created_at=excluded.created_at",
+                    (ticket_id, guild_id, owner_id, score, moment),
+                )
+                db.execute(
+                    "INSERT INTO audit_log(guild_id, ticket_id, actor_id, action, metadata, created_at) "
+                    "VALUES(?,?,?,?,?,?)",
+                    (guild_id, ticket_id, owner_id, "feedback_recorded", json.dumps({"score": score}), moment),
+                )
+                db.execute("COMMIT")
+            except Exception:
+                db.execute("ROLLBACK")
+                raise
+        return score
+
+    def feedback_summary(self, guild_id: int) -> tuple[float | None, int]:
+        """Average rating and number of ratings recorded for one guild."""
+        with self.connect() as db:
+            row = db.execute(
+                "SELECT AVG(score) AS average, COUNT(*) AS total FROM ticket_feedback WHERE guild_id=?",
+                (guild_id,),
+            ).fetchone()
+        total = int(row["total"] or 0)
+        return (round(float(row["average"]), 2), total) if total else (None, 0)
+
+    def feedback_scores(self, guild_id: int) -> list[int]:
+        """Every stored rating for one guild, newest first."""
+        with self.connect() as db:
+            rows = db.execute(
+                "SELECT score FROM ticket_feedback WHERE guild_id=? ORDER BY created_at DESC",
+                (guild_id,),
+            ).fetchall()
+        return [int(row["score"]) for row in rows]
+
+    def feedback_for(self, ticket_id: str) -> sqlite3.Row | None:
+        """One ticket's stored rating, if the owner has rated it."""
+        with self.connect() as db:
+            return db.execute(
+                "SELECT * FROM ticket_feedback WHERE ticket_id=?",
+                (ticket_id,),
+            ).fetchone()
+
+    def feedback_pending(
+        self,
+        *,
+        days: int = 7,
+        limit: int = 200,
+        now: datetime | None = None,
+    ) -> list[str]:
+        """Recently closed tickets with no rating yet, for startup view restore."""
+        since = ((now or utcnow()) - timedelta(days=max(0, int(days)))).isoformat()
+        with self.connect() as db:
+            rows = db.execute(
+                "SELECT ticket_id FROM tickets WHERE status='closed' AND closed_at >= ? "
+                "AND ticket_id NOT IN (SELECT ticket_id FROM ticket_feedback) "
+                "ORDER BY closed_at DESC LIMIT ?",
+                (since, max(1, int(limit))),
+            ).fetchall()
+        return [row["ticket_id"] for row in rows]
 
     def open_counts(self, guild_id: int) -> dict[str, int]:
         """Return open-ticket counts keyed by region for the public support panel."""
@@ -427,6 +552,14 @@ class Database:
             return db.execute(
                 "SELECT * FROM polls WHERE guild_id=? AND status='open' "
                 "ORDER BY created_at DESC LIMIT ?",
+                (guild_id, max(1, min(int(limit), 25))),
+            ).fetchall()
+
+    def guild_polls(self, guild_id: int, limit: int = 25) -> list[sqlite3.Row]:
+        """Return the newest polls in a guild whatever their status, for autocomplete."""
+        with self.connect() as db:
+            return db.execute(
+                "SELECT * FROM polls WHERE guild_id=? ORDER BY created_at DESC LIMIT ?",
                 (guild_id, max(1, min(int(limit), 25))),
             ).fetchall()
 
@@ -894,6 +1027,50 @@ class Database:
             changed = db.execute(query, (requested_by, ticket_id)).rowcount
         return bool(changed)
 
+    def set_priority(self, ticket_id: str, priority: str, actor_id: int) -> bool:
+        """Set an active ticket's priority and audit the change."""
+        if priority not in PRIORITIES:
+            raise ValueError("unknown priority")
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            try:
+                row = db.execute(
+                    "SELECT guild_id, priority FROM tickets WHERE ticket_id=? "
+                    "AND status IN ('open','close_requested')",
+                    (ticket_id,),
+                ).fetchone()
+                if not row:
+                    db.execute("COMMIT")
+                    return False
+                db.execute("UPDATE tickets SET priority=? WHERE ticket_id=?", (priority, ticket_id))
+                db.execute(
+                    "INSERT INTO audit_log(guild_id, ticket_id, actor_id, action, metadata, created_at) "
+                    "VALUES(?,?,?,?,?,?)",
+                    (
+                        row["guild_id"],
+                        ticket_id,
+                        actor_id,
+                        "priority_changed",
+                        json.dumps({"from": row["priority"], "to": priority}),
+                        utcnow().isoformat(),
+                    ),
+                )
+                db.execute("COMMIT")
+            except Exception:
+                db.execute("ROLLBACK")
+                raise
+        return True
+
+    def priority_counts(self, guild_id: int) -> dict[str, int]:
+        """Open-ticket counts keyed by priority."""
+        query = (
+            "SELECT priority, COUNT(*) AS tickets FROM tickets "
+            "WHERE guild_id=? AND status IN ('open','close_requested') GROUP BY priority"
+        )
+        with self.connect() as db:
+            rows = db.execute(query, (guild_id,)).fetchall()
+        return {row["priority"]: int(row["tickets"]) for row in rows}
+
     def set_claim(self, ticket_id: str, claimed_by: int | None) -> None:
         """Set or clear a ticket's current staff assignee."""
         self.update_ticket(ticket_id, claimed_by=claimed_by)
@@ -1025,7 +1202,21 @@ class Database:
         self.upsert_config(guild_id,anti_links_allowed_roles=json.dumps(roles[:100]));return role_id in roles
     def configured_permission_role_ids(self,guild_id):
         row=self.config(guild_id)
-        return [int(row[n]) for n in ('owner_role','co_owner_role','head_admin_role','admin_role','moderator_role') if row and row[n]]
+        return [int(row[n]) for n in self.PERMISSION_ROLE_FIELDS if row and row[n]]
+
+    def configured_admin_role_ids(self, guild_id):
+        """Role IDs that satisfy the elevated setup and moderation commands."""
+        row = self.config(guild_id)
+        return [int(row[n]) for n in self.ADMIN_ROLE_FIELDS if row and row[n]]
+
+    def missing_permission_roles(self, guild_id) -> list[str]:
+        """Names of the staff tiers that still need configuring."""
+        row = self.config(guild_id)
+        return [name for name in self.PERMISSION_ROLE_FIELDS if not row or not row[name]]
+
+    def permission_roles_ready(self, guild_id) -> bool:
+        """True only when /setup roles has configured every staff tier."""
+        return not self.missing_permission_roles(guild_id)
 
     def ticket_access_role_ids(self, guild_id):
         """Role IDs allowed to view tickets, deduplicated in permission-first order."""

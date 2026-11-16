@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import discord
 
 from .database import Database
-from .embeds import embed, inactivity_indicator, ticket_archive_embed, ticket_embed
+from .embeds import embed, feedback_embed, inactivity_indicator, ticket_archive_embed, ticket_embed
 from .utils import (
     is_ticket,
     parse_ticket_topic,
@@ -336,6 +336,20 @@ class TicketService:
         ticket = self.db.ticket(data.get("id", str(channel.id)))
         return await render(messages, channel, data, ticket)
 
+    async def request_feedback(self, owner: discord.Member | None, ticket_id: str) -> bool:
+        """Privately ask the ticket owner to rate the support they received."""
+        if owner is None:
+            return False
+
+        from .views import TicketFeedbackView
+
+        try:
+            await owner.send(embed=feedback_embed(), view=TicketFeedbackView(self, ticket_id))
+        except discord.DiscordException as error:
+            log.info("Could not send the feedback request for ticket %s: %s", ticket_id, error)
+            return False
+        return True
+
     async def close_system(
         self,
         guild: discord.Guild,
@@ -553,6 +567,7 @@ class TicketService:
             data.get("issue", "unknown"),
             interaction.user,
             reason,
+            priority=row["priority"],
         )
 
         try:
@@ -604,6 +619,8 @@ class TicketService:
                 ephemeral=True,
             )
             return
+
+        await self.request_feedback(channel.guild.get_member(int(row["owner_id"])), ticket_id)
 
         try:
             await channel.delete(reason=f"Grid A1 ticket {ticket_id} closed")
