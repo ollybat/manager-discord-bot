@@ -3,15 +3,17 @@ from __future__ import annotations
 
 import ast
 import asyncio
+import inspect
 import json
 import os
 import sqlite3
 import tempfile
 import unittest
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import discord
+from discord import app_commands
 from pathlib import Path
 
 from grid_a1.config import Settings, validate_runtime
@@ -452,6 +454,106 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(timestamp_marker(None), "an unknown time")
         self.assertEqual(timestamp_marker("nonsense"), "an unknown time")
 
+
+    def test_staff_access_comes_only_from_the_configured_roles(self):
+        import grid_a1.bot as bot_module
+
+        def member(member_id, roles=(), owner_permissions=()):
+            person = MagicMock(spec=discord.Member)
+            person.id = member_id
+            person.roles = [SimpleNamespace(id=role_id) for role_id in roles]
+            person.guild_permissions = discord.Permissions.all() if "admin" in owner_permissions else discord.Permissions.none()
+            return person
+
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(Path(directory) / "manager.sqlite3")
+            database.migrate()
+            guild = SimpleNamespace(id=4242, owner_id=1)
+            interaction = SimpleNamespace(guild=guild, user=member(7))
+            admin_interaction = SimpleNamespace(guild=guild, user=member(8, owner_permissions=("admin",)))
+            with patch.object(bot_module.bot, "database", database, create=True):
+                # nothing configured yet: even an Administrator is refused
+                self.assertEqual(database.missing_permission_roles(4242), list(database.PERMISSION_ROLE_FIELDS))
+                self.assertFalse(database.permission_roles_ready(4242))
+                self.assertFalse(bot_module._privileged(admin_interaction, True))
+                self.assertFalse(bot_module._privileged(admin_interaction, False))
+                self.assertIn("/setup roles", bot_module._access_notice(guild))
+
+                database.upsert_config(
+                    4242,
+                    owner_role=10,
+                    co_owner_role=11,
+                    head_admin_role=12,
+                    admin_role=13,
+                    moderator_role=14,
+                )
+                self.assertTrue(database.permission_roles_ready(4242))
+                self.assertEqual(database.missing_permission_roles(4242), [])
+                self.assertEqual(database.configured_admin_role_ids(4242), [10, 11, 12, 13])
+                self.assertIn("configured staff role", bot_module._access_notice(guild))
+
+                # Discord permissions alone still grant nothing
+                self.assertFalse(bot_module._privileged(admin_interaction, True))
+                self.assertFalse(bot_module._privileged(admin_interaction, False))
+
+                moderator = SimpleNamespace(guild=guild, user=member(9, roles=(14,)))
+                self.assertTrue(bot_module._privileged(moderator, True))
+                self.assertFalse(bot_module._privileged(moderator, False))
+
+                head_admin = SimpleNamespace(guild=guild, user=member(9, roles=(12,)))
+                self.assertTrue(bot_module._privileged(head_admin, True))
+                self.assertTrue(bot_module._privileged(head_admin, False))
+
+                self.assertTrue(bot_module._privileged(SimpleNamespace(guild=guild, user=member(1)), False))
+                self.assertTrue(bot_module._privileged(SimpleNamespace(guild=guild, user=member(bot_module.settings.owner_id)), False))
+                self.assertFalse(bot_module._privileged(SimpleNamespace(guild=None, user=member(7, roles=(10,))), False))
+
+    def test_staff_commands_refuse_with_the_setup_reason(self):
+        import grid_a1.bot as bot_module
+
+        self.assertTrue(issubclass(bot_module.StaffAccessError, app_commands.CheckFailure))
+        for command in (bot_module.moderation_kick, bot_module.ticket_stats, bot_module.giveaway_config):
+            self.assertTrue(command.checks, command.name)
+        self.assertIn("_access_notice(interaction.guild)", inspect.getsource(bot_module._permission_check))
+
+    def test_prefix_commands_are_registered_and_documented(self):
+        from grid_a1.bot import bot as runtime_bot
+        from grid_a1.guides import PREFIX_COMMANDS, prefix_command_names, prefix_guide_lines
+
+        names = prefix_command_names()
+        registered = set()
+        for command in runtime_bot.commands:
+            if not command.name.islower():
+                continue
+            registered.add(command.name)
+            self.assertIn(command.name, names, command.name)
+            self.assertTrue(command.help and command.help[0] not in "abcdefghijklmnopqrstuvwxyz", command.name)
+        for name in names:
+            self.assertIsNotNone(runtime_bot.get_command(name), name)
+        self.assertLessEqual(len("\n".join(prefix_guide_lines())), 1024)
+        for usage, access in ((usage, access) for _, usage, access in PREFIX_COMMANDS):
+            self.assertTrue(usage.startswith("!"))
+            self.assertIn(access, {"Everyone", "Staff role"})
+        for guarded in ("kick", "ban", "unban", "warn", "timeout", "untimeout", "modlog", "stats", "clear", "slowmode", "lock", "unlock"):
+            source = inspect.getsource(runtime_bot.get_command(guarded).callback)
+            self.assertTrue("_require_staff_prefix" in source or "_prefix_privileged" in source, guarded)
+
+    def test_setup_status_reports_what_is_missing(self):
+        import grid_a1.bot as bot_module
+
+        status = bot_module.setup_group.get_command("status")
+        self.assertIsNotNone(status)
+        self.assertTrue(status.checks)
+        source = inspect.getsource(status.callback)
+        self.assertIn("missing_permission_roles", source)
+        self.assertIn("PERMISSION_ROLE_FIELDS", source)
+        self.assertIn("/setup roles", source)
+
+        help_source = (ROOT / "grid_a1" / "commands.py").read_text(encoding="utf-8")
+        self.assertIn("prefix_guide_lines", help_source)
+        self.assertIn("Prefix commands", help_source)
+        self.assertIn("/setup roles", help_source)
+
     def test_ticket_queue_overview_orders_by_priority_then_age(self):
         from grid_a1.stats import queue_overview, sort_open_queue
 
@@ -549,7 +651,7 @@ class CoreTests(unittest.TestCase):
         priority = next(entry for entry in entries if entry.path == "ticket priority")
         self.assertEqual(priority.options, (("priority", True),))
         self.assertIn("priority", priority.usage)
-        self.assertEqual(priority.access_label, "Ticket staff")
+        self.assertEqual(priority.access_label, "Configured staff role")
         claim = next(entry for entry in entries if entry.path == "ticket claim")
         self.assertEqual(claim.usage, "/ticket claim")
 
@@ -596,11 +698,20 @@ class CoreTests(unittest.TestCase):
         self.assertIn("🛡️ Moderation", [name for name, _ in staff])
         self.assertFalse(any("/giveaway config" in value for _, value in staff))
 
-        admin = render_guide(entries, viewer_access(fake_bot, member(7, manage_guild=True), guild))
+        admin = render_guide(entries, viewer_access(fake_bot, member(7, roles=(11,)), guild))
         admin_values = "\n".join(value for _, value in admin)
         self.assertIn("⚙️ Server setup", [name for name, _ in admin])
         self.assertIn("/giveaway config", admin_values)
         self.assertNotIn("/sync", admin_values)
+
+        discord_perms = render_guide(
+            entries,
+            viewer_access(fake_bot, member(7, administrator=True, manage_guild=True, manage_channels=True), guild),
+        )
+        discord_values = "\n".join(value for _, value in discord_perms)
+        self.assertNotIn("⚙️ Server setup", [name for name, _ in discord_perms])
+        self.assertNotIn("/giveaway config", discord_values)
+        self.assertFalse(any("Moderation" == name.replace("🛡️ ", "") for name, _ in discord_perms))
 
         owner = render_guide(entries, viewer_access(fake_bot, member(5), guild))
         self.assertIn("⚙️ Server setup", [name for name, _ in owner])
