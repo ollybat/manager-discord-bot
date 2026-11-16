@@ -4,6 +4,7 @@ import discord
 import logging
 import time
 
+from .brand import BRAND_SHORT
 from .embeds import embed
 from .tickets import TicketService, claim
 from .utils import active_ticket_owner, feedback_custom_id, inactivity_custom_id, is_ticket, parse_ticket_topic, staff_member
@@ -272,7 +273,7 @@ class VerifyPanel(discord.ui.View):
         if not interaction.guild or not isinstance(interaction.user, discord.Member): return await interaction.followup.send("❌ Verification is only available inside the server.", ephemeral=True)
         config = self.database.config(interaction.guild.id); role = interaction.guild.get_role(config["verify_role"]) if config and config["verify_role"] else None; me = interaction.guild.me
         if not isinstance(role, discord.Role): return await interaction.followup.send("⚠️ Verification is not configured yet.", ephemeral=True)
-        if not me or role.is_default() or role.managed or role >= me.top_role: return await interaction.followup.send("⚠️ Grid A1 cannot manage this role. Move the bot role above it.", ephemeral=True)
+        if not me or role.is_default() or role.managed or role >= me.top_role: return await interaction.followup.send(f"⚠️ {BRAND_SHORT} cannot manage this role. Move the bot role above it.", ephemeral=True)
         if role in interaction.user.roles: return await interaction.followup.send("✅ You are already verified.", ephemeral=True)
         age_days = max(0, (discord.utils.utcnow() - interaction.user.created_at).days)
         if age_days < 7: return await interaction.followup.send(f"🛡️ Your Discord account is **{age_days} days old**. Accounts under 7 days require staff review. Please open a ticket.", ephemeral=True)
@@ -287,7 +288,7 @@ class VerificationConfirm(discord.ui.View):
         if not interaction.guild or not isinstance(interaction.user, discord.Member): return await interaction.followup.send("❌ Complete this in the server.", ephemeral=True)
         role = interaction.guild.get_role(self.role_id); me = interaction.guild.me
         if not role or not me or role >= me.top_role: return await interaction.followup.send("⚠️ The verification role is not currently manageable.", ephemeral=True)
-        try: await interaction.user.add_roles(role, reason="Grid A1 verification completed")
+        try: await interaction.user.add_roles(role, reason="SpinBack verification completed")
         except discord.Forbidden: return await interaction.followup.send("❌ I cannot assign the role. Check Manage Roles and role order.", ephemeral=True)
         await interaction.edit_original_response(embed=embed("💜 Verification complete", f"🎉 Welcome, {interaction.user.mention}! You now have {role.mention}."), view=None)
 

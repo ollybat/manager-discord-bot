@@ -1,4 +1,4 @@
-# Grid A1 Manager Bot — Project Map
+# SpinBack Manager Bot — Project Map
 
 This repository is a standalone Python Discord bot. `bot.py` is the supported entrypoint (`python bot.py`); it imports `grid_a1.bot.run()`.
 
@@ -19,6 +19,8 @@ Startup loads `.env`, validates settings, configures logging, runs SQLite migrat
 - `grid_a1/polls.py`: poll dashboard/metadata modal, persistent poll creation, result embeds, vote controls, and message refresh service.
 - `grid_a1/wipes.py`: wipe scheduling (absolute or relative times), the wipe config panel, and the once-only announcement loop.
 - `grid_a1/suggestions.py`: member suggestion storage helpers, the persistent vote buttons, and the suggestion modal.
+- `grid_a1/brand.py`: the single source of product branding (SpinBack Manager) and the starter rule texts.
+- `grid_a1/rules.py`: the rules panel embed, its persistent per-section buttons, the edit form, and panel refresh.
 - `grid_a1/giveaways.py`: private giveaway setup, persistent entry buttons, timer-based winner draws, and active giveaway dashboard.
 - `grid_a1/stats.py`: read-only ticket workload statistics, plus the shared queue/moderation/note line formatters and Discord relative-timestamp helper (queue split, closed-ticket windows, first-claim and closure averages, per-region load, per-priority load, claim leaderboard with each claimer's first-claim average, owner rating average).
 - `grid_a1/utils.py`: topic parsing, staff checks, link normalization, safe JSON parsing, channel-name slugs, and the shared priority/feedback/suggestion constants.

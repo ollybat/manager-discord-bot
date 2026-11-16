@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import discord
 
+from .brand import BRAND_NAME, BRAND_SHORT
 from .database import Database
 from .stats import MONTH_WINDOW_DAYS, RECENT_WINDOW_DAYS, TicketStats, format_duration
 from .utils import PRIORITY_LABELS
@@ -17,7 +18,7 @@ def embed(title: str, description: str, colour: discord.Colour = NEON_PURPLE) ->
 
 def support_panel(guild: discord.Guild, database: Database) -> discord.Embed:
     counts = database.open_counts(guild.id)
-    bot_name = guild.me.display_name if guild.me else "Grid A1"
+    bot_name = guild.me.display_name if guild.me else BRAND_NAME
     year = utcnow().year
     description = (
         "✨ Need help? Pick the closest category below to open a private ticket. Choose EU, add your in-game name, and answer the short form so staff can help faster.\n\n"
@@ -225,12 +226,12 @@ def ticket_stats_embed(guild: discord.Guild, stats: TicketStats) -> discord.Embe
 
 
 def ticket_archive_embed(ticket_id: str, region: str, issue: str, closer: discord.abc.User, reason: str, priority: str = "normal") -> discord.Embed:
-    result = embed("📁 Grid A1 • Ticket archived", "The ticket transcript is attached for staff records. The ticket channel has been closed.", discord.Colour.dark_grey())
+    result = embed(f"📁 {BRAND_SHORT} • Ticket archived", "The ticket transcript is attached for staff records. The ticket channel has been closed.", discord.Colour.dark_grey())
     result.add_field(name="Ticket ID", value=f"`{ticket_id}`", inline=True)
     result.add_field(name="Issue", value=issue.title()[:1024], inline=True)
     result.add_field(name="Region", value=region, inline=True)
     result.add_field(name="Priority", value=PRIORITY_LABELS.get(priority, priority.title()), inline=True)
     result.add_field(name="Closed by", value=closer.mention, inline=True)
     result.add_field(name="Closing reason", value=discord.utils.escape_markdown(reason)[:1024], inline=False)
-    result.set_footer(text="Grid A1 Manager • Transcript attached • All times UTC")
+    result.set_footer(text=f"{BRAND_NAME} • Transcript attached • All times UTC")
     return result

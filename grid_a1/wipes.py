@@ -9,6 +9,7 @@ from typing import Any
 
 import discord
 
+from .brand import BRAND_SHORT
 from .embeds import embed
 from .stats import parse_time, timestamp_marker
 from .utils import utcnow
@@ -125,7 +126,7 @@ def wipe_announcement(row: Any, *, ping_role_id: int | None = None) -> tuple[str
     )
     announcement.add_field(name="Region", value=discord.utils.escape_markdown(str(row["region"])), inline=True)
     announcement.add_field(name="Wipe ID", value=str(row["wipe_id"]), inline=True)
-    announcement.set_footer(text="Posted by Grid A1 • configure this schedule with /wipe config")
+    announcement.set_footer(text=f"Posted by {BRAND_SHORT} • configure this schedule with /wipe config")
     content = f"<@&{int(ping_role_id)}>" if ping_role_id else None
     return content, announcement
 

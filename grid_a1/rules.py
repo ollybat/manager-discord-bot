@@ -1,0 +1,194 @@
+"""The SpinBack rules panel: stored rule sections, the public panel, and the edit form."""
+from __future__ import annotations
+
+import logging
+from typing import Any
+
+import discord
+
+from .brand import BRAND_FOOTER, BRAND_SHORT, RULES_DEFAULTS, RULES_INTRO, RULES_SECTIONS
+from .embeds import embed
+from .stats import timestamp_marker
+from .utils import rules_custom_id, utcnow
+
+log = logging.getLogger(__name__)
+
+RULES_COLOUR = discord.Colour.from_rgb(94, 186, 255)
+MAX_RULE_CHARS = 4000
+MIN_RULE_CHARS = 20
+
+
+def rules_section_meta(section: str) -> tuple[str, str, str, str]:
+    """Look up one rule section, falling back to the Discord section."""
+    for entry in RULES_SECTIONS:
+        if entry[0] == section:
+            return entry
+    return RULES_SECTIONS[0]
+
+
+def rules_panel_embed() -> discord.Embed:
+    """The public rules panel exactly as members should see it."""
+    panel = embed(f"{BRAND_SHORT} Rules ✅", RULES_INTRO, RULES_COLOUR)
+    for _section, label, emoji, summary in RULES_SECTIONS:
+        panel.add_field(name=f"{label} {emoji}", value=summary, inline=False)
+    panel.set_footer(text=BRAND_FOOTER)
+    return panel
+
+
+def rules_section_embed(section: str, body: str, updated_at: str | None = None) -> discord.Embed:
+    """One set of rules, opened with its own button."""
+    _key, label, emoji, _summary = rules_section_meta(section)
+    result = embed(f"{BRAND_SHORT} Rules • {label} {emoji}", body, RULES_COLOUR)
+    footer = f"Press the other button for the remaining rules • {BRAND_FOOTER}"
+    if updated_at:
+        footer = f"Updated {timestamp_marker(updated_at)} • {footer}"
+    result.set_footer(text=footer[:2048])
+    return result
+
+
+async def _respond(interaction: discord.Interaction, *args, **kwargs) -> None:
+    """Answer once, using a follow-up when the handler already deferred."""
+    if interaction.response.is_done():
+        await interaction.followup.send(*args, **kwargs)
+    else:
+        await interaction.response.send_message(*args, **kwargs)
+
+
+class RulesView(discord.ui.View):
+    """Persistent rules panel buttons: one per rule section."""
+
+    def __init__(self, service: "RulesService"):
+        super().__init__(timeout=None)
+        self.service = service
+        for section, label, emoji, _summary in RULES_SECTIONS:
+            button = discord.ui.Button(
+                label=label,
+                emoji=emoji,
+                style=discord.ButtonStyle.primary if section == "discord" else discord.ButtonStyle.secondary,
+                custom_id=rules_custom_id(section),
+            )
+            button.callback = self._build_callback(section)
+            self.add_item(button)
+
+    def _build_callback(self, section: str):
+        async def callback(interaction: discord.Interaction) -> None:
+            await self.show(interaction, section)
+
+        return callback
+
+    async def show(self, interaction: discord.Interaction, section: str) -> None:
+        if interaction.guild is None:
+            return await _respond(interaction, "❌ The rules only open inside the server.", ephemeral=True)
+        body, updated_at = self.service.text_with_meta(interaction.guild.id, section)
+        await _respond(interaction, embed=rules_section_embed(section, body, updated_at), ephemeral=True)
+
+
+class RulesEditModal(discord.ui.Modal):
+    """Replace one section of the server rules."""
+
+    def __init__(self, service: "RulesService", section: str):
+        _key, label, emoji, _summary = rules_section_meta(section)
+        super().__init__(title=f"Edit {label} rules", timeout=900.0)
+        self.service = service
+        self.section = section
+        self.body = discord.ui.TextInput(
+            label=f"{label} {emoji} rules".strip(),
+            style=discord.TextStyle.paragraph,
+            placeholder="Write the rules here — one rule per line reads best.",
+            max_length=MAX_RULE_CHARS,
+            required=True,
+        )
+        self.add_item(self.body)
+
+    def with_current_text(self, current: str) -> "RulesEditModal":
+        """Prefill the box with the text staff are about to replace."""
+        self.body.default = (current or "")[:MAX_RULE_CHARS]
+        return self
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        await self.service.save(interaction, self.section, str(self.body.value))
+
+
+def guild_section_key(section: str) -> str:
+    """Normalize a section argument to a known key."""
+    return rules_section_meta(section)[0]
+
+
+class RulesService:
+    """Read, edit, and publish the server's rules panel."""
+
+    def __init__(self, database: Any) -> None:
+        self.database = database
+
+    def text(self, guild_id: int, section: str) -> str:
+        key = guild_section_key(section)
+        stored = self.database.rule_text(guild_id, key) if guild_id else None
+        return stored or RULES_DEFAULTS.get(key, "")
+
+    def text_with_meta(self, guild_id: int, section: str) -> tuple[str, str | None]:
+        key = guild_section_key(section)
+        stored = self.database.rule_row(guild_id, key) if guild_id else None
+        if stored:
+            return str(stored["body"]), str(stored["updated_at"])
+        return RULES_DEFAULTS.get(key, ""), None
+
+    async def post(self, interaction: discord.Interaction, channel: discord.TextChannel) -> None:
+        guild = interaction.guild
+        if guild is None:
+            return await interaction.response.send_message("❌ Post the rules inside a server.", ephemeral=True)
+        await interaction.response.defer(ephemeral=True)
+        try:
+            message = await channel.send(embed=rules_panel_embed(), view=RulesView(self))
+        except discord.Forbidden:
+            return await interaction.followup.send(
+                f"❌ I cannot post in {channel.mention}. Check View Channel and Send Messages, then try again.",
+                ephemeral=True,
+            )
+        except discord.HTTPException:
+            log.exception("Posting the rules panel failed for guild %s", guild.id)
+            return await interaction.followup.send("❌ Discord refused that post. Please try again shortly.", ephemeral=True)
+        self.database.set_rules_panel(guild.id, channel.id, message.id)
+        await interaction.followup.send(
+            f"✅ Rules posted in {channel.mention}. Members open each set with the buttons, and you can change the text later with /rules edit.",
+            ephemeral=True,
+        )
+
+    async def refresh_panel(self, guild: discord.Guild) -> bool:
+        """Refresh the posted panel after an edit so members always read the current text."""
+        config = self.database.config(guild.id)
+        if not config or not config["rules_channel"] or not config["rules_message"]:
+            return False
+        channel = guild.get_channel(int(config["rules_channel"]))
+        if not isinstance(channel, discord.TextChannel):
+            return False
+        try:
+            message = await channel.fetch_message(int(config["rules_message"]))
+            await message.edit(embed=rules_panel_embed(), view=RulesView(self))
+        except (discord.Forbidden, discord.HTTPException, discord.NotFound):
+            log.info("Could not refresh the rules panel in guild %s", guild.id, exc_info=True)
+            return False
+        return True
+
+    async def save(self, interaction: discord.Interaction, section: str, body: str) -> None:
+        guild = interaction.guild
+        if guild is None:
+            return await interaction.response.send_message("❌ Edit the rules inside a server.", ephemeral=True)
+        text = (body or "").strip()
+        if len(text) < MIN_RULE_CHARS:
+            return await interaction.response.send_message(
+                f"❌ That is too short to be a rule set — write at least {MIN_RULE_CHARS} characters.",
+                ephemeral=True,
+            )
+        key = guild_section_key(section)
+        _k, label, emoji, _summary = rules_section_meta(key)
+        self.database.set_rule_text(guild.id, key, text[:MAX_RULE_CHARS], interaction.user.id, utcnow().isoformat())
+        refreshed = await self.refresh_panel(guild)
+        note = (
+            "The posted rules panel was updated for everyone."
+            if refreshed
+            else "No rules panel is posted yet — publish it with /rules post."
+        )
+        await interaction.response.send_message(
+            f"✅ Saved the {label} {emoji} rules. {note}",
+            ephemeral=True,
+        )

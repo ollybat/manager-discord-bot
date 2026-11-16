@@ -1,4 +1,4 @@
-"""Standalone Grid A1 application commands and their permission-aware help guide."""
+"""Standalone SpinBack application commands and their permission-aware help guide."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ from typing import Optional
 import discord
 from discord import app_commands
 
+from .brand import BRAND_SHORT
 from .embeds import embed
 from .guides import (
     catalog,
@@ -88,7 +89,7 @@ def register_commands(bot: discord.Client) -> None:
         member = interaction.user if interaction.guild else None
         fields = render_guide(entries, viewer_access(bot, member, interaction.guild))
         guide = embed(
-            "💜 Grid A1 • Command Guide",
+            f"💜 {BRAND_SHORT} • Command Guide",
             "✨ Built from the live command tree, so it always matches this bot. Discord shows "
             "each command's options as you type, and protected commands only answer members "
             "holding one of the staff roles saved by `/setup roles`.\n\n🔎 For one command in full, "
@@ -149,7 +150,7 @@ def register_commands(bot: discord.Client) -> None:
         gateway_ms = round(bot.latency * 1_000) if bot.latency >= 0 else None
 
         report = embed(
-            "💜 Grid A1 • Owner Diagnostics",
+            f"💜 {BRAND_SHORT} • Owner Diagnostics",
             "🔍 Private health report.",
             discord.Colour.from_rgb(177, 77, 255),
         )

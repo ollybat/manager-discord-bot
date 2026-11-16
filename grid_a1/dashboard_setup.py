@@ -6,6 +6,7 @@ import hashlib
 import json
 import logging
 
+from .brand import BRAND_SHORT
 from .embeds import embed, support_panel
 from .tickets import TicketService
 from .utils import inactivity_custom_id
@@ -454,10 +455,10 @@ class VerificationWizardView(_DashboardWizard):
         try:
             previous = self.database.config(interaction.guild.id)
             self.save_settings(interaction.guild)
-            panel = embed("💜 Grid A1 • Secure Verification", "✨ Complete the short verification check to unlock the server.\n\n📜 Rules confirmation\n✅ Verified role for eligible members\n\nDiscord-wide moderation history is private and unavailable to bots.", discord.Colour.from_rgb(177, 77, 255))
+            panel = embed(f"💜 {BRAND_SHORT} • Secure Verification", "✨ Complete the short verification check to unlock the server.\n\n📜 Rules confirmation\n✅ Verified role for eligible members\n\nDiscord-wide moderation history is private and unavailable to bots.", discord.Colour.from_rgb(177, 77, 255))
             panel.add_field(name="🔐 Verification steps", value="1️⃣ Start verification\n2️⃣ Review your result\n3️⃣ Confirm the rules\n4️⃣ Receive access", inline=False)
             panel.add_field(name="💬 Need help?", value="If you need help, please open a support ticket.", inline=False)
-            panel.set_footer(text="Grid A1 • Secure, fair, Discord-only verification")
+            panel.set_footer(text=f"{BRAND_SHORT} • Secure, fair, Discord-only verification")
             channel = self.values["channel"]
             message = None
             if previous and previous["verify_panel_channel"] == channel.id and previous["verify_panel_message"]:
