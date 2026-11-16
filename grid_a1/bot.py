@@ -9,7 +9,7 @@ from discord import app_commands
 from discord.ext import commands, tasks
 from .config import Settings, configure_logging, validate_runtime
 from .database import Database
-from .embeds import embed, support_panel, inactivity_indicator, ticket_stats_embed
+from .embeds import embed, support_panel, inactivity_indicator, priority_embed, ticket_stats_embed
 from .tickets import TicketService, claim
 from .giveaways import GiveawayDashboardView, GiveawayEntryView, GiveawayService
 from .polls import (
@@ -24,7 +24,7 @@ from .polls import (
     poll_embed,
 )
 from .stats import collect as collect_ticket_stats
-from .utils import anti_link_config_updates, is_http_url, is_ticket, parse_ticket_topic, staff_member, detected_external_links, normalize_domain, safe_json_list, utcnow
+from .utils import PRIORITIES, PRIORITY_LABELS, anti_link_config_updates, is_http_url, is_ticket, parse_ticket_topic, staff_member, detected_external_links, normalize_domain, safe_json_list, utcnow
 from .views import DashboardView, OwnerInactivityView, TicketControls, TicketFeedbackView, TicketPanel, VerifyPanel
 from .welcomer import missing, send_welcome, welcome_embed
 from .commands import OwnerConfigurationError, OwnerOnlyError, register_commands
@@ -712,6 +712,17 @@ async def ticket_requestclose(i,reason:str):
 @staff()
 @app_commands.describe(reason="Resolution or closure reason saved with the transcript")
 async def ticket_close(i,reason:str="No reason provided"): await bot.tickets.close(i,reason)
+@ticket_group.command(name="priority", description="🚦 Set how urgent this ticket is")
+@staff()
+@app_commands.describe(priority="Priority this ticket should be worked at")
+@app_commands.choices(priority=[app_commands.Choice(name=PRIORITY_LABELS[value], value=value) for value in PRIORITIES])
+async def ticket_priority(i: discord.Interaction, priority: app_commands.Choice[str]):
+    if not isinstance(i.channel, discord.TextChannel) or not is_ticket(i.channel): return await i.response.send_message("❌ This command only works inside an active ticket.", ephemeral=True)
+    row = bot.database.ticket_by_channel(i.channel.id)
+    if not row: return await i.response.send_message("⚠️ This ticket is already closed or unavailable.", ephemeral=True)
+    if row["priority"] == priority.value: return await i.response.send_message(f"ℹ️ This ticket is already **{PRIORITY_LABELS[priority.value]}**.", ephemeral=True)
+    if not bot.database.set_priority(row["ticket_id"], priority.value, i.user.id): return await i.response.send_message("⚠️ This ticket closed while the priority was being set.", ephemeral=True)
+    await i.response.send_message(embed=priority_embed(priority.value, i.user))
 @ticket_group.command(name="stats", description="📊 Show ticket workload, response times, and top claimers")
 @staff()
 async def ticket_stats(i: discord.Interaction):
