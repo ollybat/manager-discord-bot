@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 from .utils import DEFAULT_PRIORITY, FEEDBACK_SCORES, PRIORITIES, utcnow, safe_json_list
-SCHEMA_VERSION = 21
+SCHEMA_VERSION = 23
 
 PERMISSION_ROLE_FIELDS = (
     "owner_role",
@@ -37,15 +37,20 @@ class Database:
     def migrate(self):
         with self.connect() as db:
             db.execute('CREATE TABLE IF NOT EXISTS schema_migrations(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)')
-            db.execute('''CREATE TABLE IF NOT EXISTS guild_config (guild_id INTEGER PRIMARY KEY, panel_channel INTEGER, panel_message INTEGER, panel_fingerprint TEXT, logs_channel INTEGER, report_channel INTEGER, ticket_category INTEGER, inactivity_hours INTEGER NOT NULL DEFAULT 24, welcome_channel INTEGER, verify_channel INTEGER, link_channel INTEGER, bot_commands_channel INTEGER, shop_channel INTEGER, verify_panel_channel INTEGER, verify_panel_message INTEGER, verify_role INTEGER, staff_role_1 INTEGER, staff_role_2 INTEGER, staff_role_3 INTEGER, staff_role_4 INTEGER, staff_role_5 INTEGER, staff_role_6 INTEGER, staff_role_7 INTEGER, staff_role_8 INTEGER, staff_role_9 INTEGER, staff_role_10 INTEGER, wipefeed_enabled INTEGER NOT NULL DEFAULT 0, wipefeed_channel INTEGER, urgent_at TEXT, urgent_by INTEGER, owner_role INTEGER, moderator_role INTEGER, admin_role INTEGER, co_owner_role INTEGER, head_admin_role INTEGER, anti_links_enabled INTEGER NOT NULL DEFAULT 0, anti_links_log_channel INTEGER, anti_links_action TEXT NOT NULL DEFAULT 'delete_warn', anti_links_whitelist_domains TEXT NOT NULL DEFAULT '[]', anti_links_bypass_roles TEXT NOT NULL DEFAULT '[]', anti_links_allowed_roles TEXT NOT NULL DEFAULT '[]')''')
+            db.execute('''CREATE TABLE IF NOT EXISTS guild_config (guild_id INTEGER PRIMARY KEY, panel_channel INTEGER, panel_message INTEGER, panel_fingerprint TEXT, logs_channel INTEGER, report_channel INTEGER, ticket_category INTEGER, inactivity_hours INTEGER NOT NULL DEFAULT 24, welcome_channel INTEGER, verify_channel INTEGER, link_channel INTEGER, bot_commands_channel INTEGER, shop_channel INTEGER, verify_panel_channel INTEGER, verify_panel_message INTEGER, verify_role INTEGER, staff_role_1 INTEGER, staff_role_2 INTEGER, staff_role_3 INTEGER, staff_role_4 INTEGER, staff_role_5 INTEGER, staff_role_6 INTEGER, staff_role_7 INTEGER, staff_role_8 INTEGER, staff_role_9 INTEGER, staff_role_10 INTEGER, urgent_at TEXT, urgent_by INTEGER, owner_role INTEGER, moderator_role INTEGER, admin_role INTEGER, co_owner_role INTEGER, head_admin_role INTEGER, anti_links_enabled INTEGER NOT NULL DEFAULT 0, anti_links_log_channel INTEGER, anti_links_action TEXT NOT NULL DEFAULT 'delete_warn', anti_links_whitelist_domains TEXT NOT NULL DEFAULT '[]', anti_links_bypass_roles TEXT NOT NULL DEFAULT '[]', anti_links_allowed_roles TEXT NOT NULL DEFAULT '[]')''')
             db.execute('''CREATE TABLE IF NOT EXISTS tickets (ticket_id TEXT PRIMARY KEY, guild_id INTEGER NOT NULL, channel_id INTEGER UNIQUE NOT NULL, owner_id INTEGER NOT NULL, issue TEXT NOT NULL, region TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'open', claimed_by INTEGER, close_requested_by INTEGER, opened_at TEXT NOT NULL, last_activity_at TEXT NOT NULL, inactivity_notice_at TEXT, owner_left INTEGER NOT NULL DEFAULT 0, auto_close_at TEXT, auto_close_reason TEXT, closed_at TEXT, closed_by INTEGER, close_reason TEXT, transcript_filename TEXT, urgent_at TEXT, urgent_by INTEGER)''')
             existing={r[1] for r in db.execute('PRAGMA table_info(guild_config)')}
             if 'panel_fingerprint' not in existing: db.execute("ALTER TABLE guild_config ADD COLUMN panel_fingerprint TEXT")
-            cols={**{n:'INTEGER' for n in ('report_channel','verify_panel_channel','verify_panel_message','verify_role',*[f'staff_role_{x}' for x in range(1,11)],'wipefeed_enabled','wipefeed_channel','urgent_by','owner_role','moderator_role','admin_role','co_owner_role','head_admin_role','anti_links_enabled','anti_links_log_channel')},'urgent_at':'TEXT','anti_links_action':"TEXT NOT NULL DEFAULT 'delete_warn'",'anti_links_whitelist_domains':"TEXT NOT NULL DEFAULT '[]'",'anti_links_bypass_roles':"TEXT NOT NULL DEFAULT '[]'",'anti_links_allowed_roles':"TEXT NOT NULL DEFAULT '[]'"}
+            cols={**{n:'INTEGER' for n in ('report_channel','verify_panel_channel','verify_panel_message','verify_role',*[f'staff_role_{x}' for x in range(1,11)],'urgent_by','owner_role','moderator_role','admin_role','co_owner_role','head_admin_role','anti_links_enabled','anti_links_log_channel','wipe_channel','wipe_ping_role','wipe_announce_enabled','suggestion_channel')},'urgent_at':'TEXT','anti_links_action':"TEXT NOT NULL DEFAULT 'delete_warn'",'anti_links_whitelist_domains':"TEXT NOT NULL DEFAULT '[]'",'anti_links_bypass_roles':"TEXT NOT NULL DEFAULT '[]'",'anti_links_allowed_roles':"TEXT NOT NULL DEFAULT '[]'"}
             for n,d in cols.items():
                 if n not in existing: db.execute(f'ALTER TABLE guild_config ADD COLUMN {n} {d}')
+            db.execute('''CREATE TABLE IF NOT EXISTS wipes (wipe_id TEXT PRIMARY KEY, guild_id INTEGER NOT NULL, region TEXT NOT NULL, title TEXT NOT NULL, scheduled_at TEXT NOT NULL, created_by INTEGER, created_at TEXT NOT NULL, announced_at TEXT, message_id INTEGER, channel_id INTEGER, status TEXT NOT NULL DEFAULT 'scheduled')''')
+            db.execute("CREATE INDEX IF NOT EXISTS idx_wipes_guild ON wipes(guild_id, scheduled_at)")
+            db.execute('''CREATE TABLE IF NOT EXISTS suggestions (suggestion_id TEXT PRIMARY KEY, guild_id INTEGER NOT NULL, channel_id INTEGER, message_id INTEGER, author_id INTEGER NOT NULL, body TEXT NOT NULL, created_at TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'open')''')
+            db.execute("CREATE INDEX IF NOT EXISTS idx_suggestions_guild ON suggestions(guild_id, created_at)")
+            db.execute('''CREATE TABLE IF NOT EXISTS suggestion_votes (suggestion_id TEXT NOT NULL, user_id INTEGER NOT NULL, value INTEGER NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY (suggestion_id, user_id))''')
             existing={r[1] for r in db.execute('PRAGMA table_info(tickets)')}
-            for n,d in {'claimed_by':'INTEGER','close_requested_by':'INTEGER','inactivity_notice_at':'TEXT','owner_left':'INTEGER NOT NULL DEFAULT 0','auto_close_at':'TEXT','auto_close_reason':'TEXT','closed_at':'TEXT','closed_by':'INTEGER','close_reason':'TEXT','transcript_filename':'TEXT','urgent_at':'TEXT','urgent_by':'INTEGER','priority':f"TEXT NOT NULL DEFAULT '{DEFAULT_PRIORITY}'"}.items():
+            for n,d in {'claimed_by':'INTEGER','close_requested_by':'INTEGER','inactivity_notice_at':'TEXT','owner_left':'INTEGER NOT NULL DEFAULT 0','auto_close_at':'TEXT','auto_close_reason':'TEXT','closed_at':'TEXT','closed_by':'INTEGER','close_reason':'TEXT','transcript_filename':'TEXT','urgent_at':'TEXT','urgent_by':'INTEGER','details':'TEXT','priority':f"TEXT NOT NULL DEFAULT '{DEFAULT_PRIORITY}'"}.items():
                 if n not in existing: db.execute(f'ALTER TABLE tickets ADD COLUMN {n} {d}')
             # Create audit_log before any index that references it.
             db.execute('''CREATE TABLE IF NOT EXISTS audit_log (id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id INTEGER NOT NULL, ticket_id TEXT, actor_id INTEGER NOT NULL, action TEXT NOT NULL, metadata TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL)''')
@@ -169,7 +174,8 @@ class Database:
             "verify_panel_channel", "verify_panel_message", "verify_role", "staff_role_1",
             "staff_role_2", "staff_role_3", "staff_role_4", "staff_role_5", "staff_role_6",
             "staff_role_7", "staff_role_8", "staff_role_9", "staff_role_10",
-            "wipefeed_enabled", "wipefeed_channel", "owner_role", "moderator_role",
+            "wipe_announce_enabled", "wipe_channel", "wipe_ping_role", "suggestion_channel",
+            "owner_role", "moderator_role",
             "admin_role", "co_owner_role", "head_admin_role", "anti_links_enabled",
             "anti_links_log_channel", "anti_links_action", "anti_links_whitelist_domains",
             "anti_links_bypass_roles", "anti_links_allowed_roles",
@@ -230,6 +236,7 @@ class Database:
         region: str,
         opened_at: str,
         last_activity_at: str,
+        details: str | None = None,
     ) -> None:
         """Insert a ticket and its audit event as one all-or-nothing transaction."""
         ticket_values = {
@@ -241,14 +248,15 @@ class Database:
             "region": region,
             "opened_at": opened_at,
             "last_activity_at": last_activity_at,
+            "details": (details or "")[:1500],
         }
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
             try:
                 db.execute(
                     "INSERT INTO tickets "
-                    "(ticket_id, guild_id, channel_id, owner_id, issue, region, opened_at, last_activity_at) "
-                    "VALUES (:ticket_id, :guild_id, :channel_id, :owner_id, :issue, :region, :opened_at, :last_activity_at)",
+                    "(ticket_id, guild_id, channel_id, owner_id, issue, region, opened_at, last_activity_at, details) "
+                    "VALUES (:ticket_id, :guild_id, :channel_id, :owner_id, :issue, :region, :opened_at, :last_activity_at, :details)",
                     ticket_values,
                 )
                 db.execute(
@@ -775,6 +783,235 @@ class Database:
             return db.execute(
                 "SELECT * FROM giveaways WHERE status='open' AND message_id IS NOT NULL"
             ).fetchall()
+
+    def create_wipe(self, *, wipe_id: str, guild_id: int, region: str, title: str, scheduled_at: str, created_by: int, created_at: str) -> None:
+        """Save a scheduled wipe after validating its label, region, and time."""
+        region = (region or "").strip().upper()
+        title = " ".join((title or "").split())
+        if not region or len(region) > 24:
+            raise ValueError("Region must contain 1–24 characters, such as EU or NA.")
+        if not title or len(title) > 120:
+            raise ValueError("Wipe title must contain 1–120 characters.")
+        if not scheduled_at:
+            raise ValueError("A wipe needs a scheduled time.")
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            try:
+                db.execute(
+                    "INSERT INTO wipes(wipe_id, guild_id, region, title, scheduled_at, created_by, created_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (wipe_id, guild_id, region, title, scheduled_at, created_by, created_at),
+                )
+                db.execute(
+                    "INSERT INTO audit_log(guild_id, actor_id, action, metadata, created_at) VALUES (?, ?, ?, ?, ?)",
+                    (guild_id, created_by, "wipe_scheduled", json.dumps({"wipe_id": wipe_id, "region": region, "scheduled_at": scheduled_at}), created_at),
+                )
+                db.execute("COMMIT")
+            except Exception:
+                db.execute("ROLLBACK")
+                raise
+
+    def wipes(self, guild_id: int, limit: int = 50) -> list[sqlite3.Row]:
+        """Every stored wipe for a guild, soonest scheduled first."""
+        with self.connect() as db:
+            return db.execute(
+                "SELECT * FROM wipes WHERE guild_id=? ORDER BY scheduled_at ASC LIMIT ?",
+                (guild_id, max(1, min(int(limit), 200))),
+            ).fetchall()
+
+    def wipe(self, guild_id: int, wipe_id: str) -> sqlite3.Row | None:
+        with self.connect() as db:
+            return db.execute(
+                "SELECT * FROM wipes WHERE guild_id=? AND wipe_id=?",
+                (guild_id, (wipe_id or "").strip().upper()),
+            ).fetchone()
+
+    def due_wipes(self, now: str, guild_id: int | None = None, limit: int = 25) -> list[sqlite3.Row]:
+        """Scheduled wipes whose time has passed and that were never announced."""
+        query = "SELECT * FROM wipes WHERE status='scheduled' AND announced_at IS NULL AND scheduled_at<=?"
+        params: list[Any] = [now]
+        if guild_id is not None:
+            query += " AND guild_id=?"
+            params.append(guild_id)
+        query += " ORDER BY scheduled_at ASC LIMIT ?"
+        params.append(max(1, min(int(limit), 100)))
+        with self.connect() as db:
+            return db.execute(query, tuple(params)).fetchall()
+
+    def mark_wipe_announced(self, guild_id: int, wipe_id: str, *, channel_id: int | None, message_id: int | None, when: str, actor_id: int = 0) -> bool:
+        """Record that a wipe was posted so it is never announced twice."""
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            try:
+                cursor = db.execute(
+                    "UPDATE wipes SET announced_at=?, status='announced', channel_id=?, message_id=? "
+                    "WHERE guild_id=? AND wipe_id=? AND announced_at IS NULL",
+                    (when, channel_id, message_id, guild_id, wipe_id),
+                )
+                if cursor.rowcount:
+                    db.execute(
+                        "INSERT INTO audit_log(guild_id, actor_id, action, metadata, created_at) VALUES (?, ?, ?, ?, ?)",
+                        (guild_id, int(actor_id or 0), "wipe_announced", json.dumps({"wipe_id": wipe_id, "message_id": message_id}), when),
+                    )
+                db.execute("COMMIT")
+                return bool(cursor.rowcount)
+            except Exception:
+                db.execute("ROLLBACK")
+                raise
+
+    def remove_wipe(self, guild_id: int, wipe_id: str, actor_id: int, when: str) -> sqlite3.Row | None:
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            try:
+                row = db.execute(
+                    "SELECT * FROM wipes WHERE guild_id=? AND wipe_id=?",
+                    (guild_id, (wipe_id or "").strip().upper()),
+                ).fetchone()
+                if not row:
+                    db.execute("ROLLBACK")
+                    return None
+                db.execute("DELETE FROM wipes WHERE wipe_id=?", (row["wipe_id"],))
+                db.execute(
+                    "INSERT INTO audit_log(guild_id, actor_id, action, metadata, created_at) VALUES (?, ?, ?, ?, ?)",
+                    (guild_id, actor_id, "wipe_removed", json.dumps({"wipe_id": row["wipe_id"]}), when),
+                )
+                db.execute("COMMIT")
+                return row
+            except Exception:
+                db.execute("ROLLBACK")
+                raise
+
+    def wipe_counts(self, guild_id: int) -> dict[str, int]:
+        """How many wipes are upcoming, announced, or still waiting to be posted."""
+        with self.connect() as db:
+            rows = db.execute("SELECT status, announced_at, scheduled_at FROM wipes WHERE guild_id=?", (guild_id,)).fetchall()
+        now = utcnow().isoformat()
+        counts = {"upcoming": 0, "announced": 0, "due": 0, "past": 0}
+        for row in rows:
+            if row["scheduled_at"] > now:
+                counts["upcoming"] += 1
+                continue
+            if row["announced_at"] is None:
+                counts["due"] += 1
+            else:
+                counts["announced"] += 1
+            counts["past"] += 1
+        return counts
+
+    def published_suggestions_all(self) -> list[sqlite3.Row]:
+        """Every published suggestion across guilds, for persistent vote buttons."""
+        with self.connect() as db:
+            return db.execute(
+                "SELECT * FROM suggestions WHERE message_id IS NOT NULL ORDER BY created_at ASC"
+            ).fetchall()
+
+    def create_suggestion(self, *, suggestion_id: str, guild_id: int, author_id: int, body: str, created_at: str) -> None:
+        """Store a member suggestion before it is published."""
+        text = " ".join((body or "").split())
+        if len(text) < 3:
+            raise ValueError("Write a little more so staff know what you are suggesting.")
+        if len(text) > 1000:
+            raise ValueError("Suggestions are limited to 1000 characters.")
+        with self.connect() as db:
+            db.execute(
+                "INSERT INTO suggestions(suggestion_id, guild_id, author_id, body, created_at) VALUES (?, ?, ?, ?, ?)",
+                (suggestion_id, guild_id, author_id, text, created_at),
+            )
+
+    def attach_suggestion_message(self, suggestion_id: str, channel_id: int, message_id: int) -> bool:
+        """Remember where a suggestion was published so its votes survive restarts."""
+        with self.connect() as db:
+            cursor = db.execute(
+                "UPDATE suggestions SET channel_id=?, message_id=? WHERE suggestion_id=?",
+                (int(channel_id), int(message_id), suggestion_id),
+            )
+            return bool(cursor.rowcount)
+
+    def suggestion(self, guild_id: int, suggestion_id: str) -> sqlite3.Row | None:
+        with self.connect() as db:
+            return db.execute(
+                "SELECT * FROM suggestions WHERE guild_id=? AND suggestion_id=?",
+                (guild_id, (suggestion_id or "").strip().upper()),
+            ).fetchone()
+
+    def guild_suggestions(self, guild_id: int, limit: int = 25) -> list[sqlite3.Row]:
+        """Newest suggestions first."""
+        with self.connect() as db:
+            return db.execute(
+                "SELECT * FROM suggestions WHERE guild_id=? ORDER BY created_at DESC LIMIT ?",
+                (guild_id, max(1, min(int(limit), 100))),
+            ).fetchall()
+
+    def record_suggestion_vote(self, suggestion_id: str, user_id: int, value: int, when: str) -> int:
+        """Add, replace, or remove one member's vote and return what is stored now (0 = none)."""
+        if value not in (1, -1):
+            raise ValueError("A vote is either 1 or -1.")
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            try:
+                existing = db.execute(
+                    "SELECT value FROM suggestion_votes WHERE suggestion_id=? AND user_id=?",
+                    (suggestion_id, user_id),
+                ).fetchone()
+                if existing and int(existing["value"]) == value:
+                    db.execute("DELETE FROM suggestion_votes WHERE suggestion_id=? AND user_id=?", (suggestion_id, user_id))
+                    stored = 0
+                else:
+                    db.execute(
+                        "INSERT INTO suggestion_votes(suggestion_id, user_id, value, created_at) VALUES (?, ?, ?, ?) "
+                        "ON CONFLICT(suggestion_id, user_id) DO UPDATE SET value=excluded.value, created_at=excluded.created_at",
+                        (suggestion_id, user_id, value, when),
+                    )
+                    stored = value
+                db.execute("COMMIT")
+                return stored
+            except Exception:
+                db.execute("ROLLBACK")
+                raise
+
+    def suggestion_votes(self, suggestion_id: str) -> dict[str, int]:
+        """Total up and down votes for one suggestion."""
+        with self.connect() as db:
+            rows = db.execute(
+                "SELECT value, COUNT(*) AS total FROM suggestion_votes WHERE suggestion_id=? GROUP BY value",
+                (suggestion_id,),
+            ).fetchall()
+        counts = {"up": 0, "down": 0}
+        for row in rows:
+            if int(row["value"]) > 0:
+                counts["up"] = int(row["total"])
+            else:
+                counts["down"] = int(row["total"])
+        return counts
+
+    def suggestion_votes_many(self, suggestion_ids: list[str]) -> dict[str, dict[str, int]]:
+        """Vote totals for several suggestions at once, for one listing pass."""
+        totals: dict[str, dict[str, int]] = {suggestion_id: {"up": 0, "down": 0} for suggestion_id in suggestion_ids}
+        if not totals:
+            return totals
+        marks = ",".join("?" for _ in totals)
+        with self.connect() as db:
+            rows = db.execute(
+                f"SELECT suggestion_id, value, COUNT(*) AS total FROM suggestion_votes "
+                f"WHERE suggestion_id IN ({marks}) GROUP BY suggestion_id, value",
+                tuple(totals),
+            ).fetchall()
+        for row in rows:
+            bucket = totals[row["suggestion_id"]]
+            if int(row["value"]) > 0:
+                bucket["up"] = int(row["total"])
+            else:
+                bucket["down"] = int(row["total"])
+        return totals
+
+    def suggestion_vote_of(self, suggestion_id: str, user_id: int) -> int:
+        """What one member voted on one suggestion (0 when they have not voted)."""
+        with self.connect() as db:
+            row = db.execute(
+                "SELECT value FROM suggestion_votes WHERE suggestion_id=? AND user_id=?",
+                (suggestion_id, user_id),
+            ).fetchone()
+        return int(row["value"]) if row else 0
 
     def active_giveaways(self, guild_id: int, limit: int = 25) -> list[sqlite3.Row]:
         with self.connect() as db:
