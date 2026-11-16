@@ -22,7 +22,11 @@ Closing a ticket uploads a plain-text transcript to the transcript channel befor
 
 When a ticket closes, the owner receives a private message asking them to rate the help they received from 1 to 5 stars. Ratings are stored per ticket, can be changed at any time, and staff only ever see the average and the number of ratings in `/ticket stats`. If the owner has private messages blocked the request is logged and skipped, and it never blocks the closure.
 
-Staff can run `/ticket stats` for a live workload panel: queue size split into claimed and unclaimed, closures in the last 7 and 30 days, average time to first staff claim, average time to closure, open tickets per region, and the most active claimers. `/ticket transcript` writes a plain-text transcript of the current ticket on demand without closing it.
+Staff can run `/ticket stats` for a live workload panel: queue size split into claimed and unclaimed, closures in the last 7 and 30 days, average time to first staff claim, average time to closure, open tickets per region, open tickets per priority, the most active claimers with each claimer's average time to first claim, and the owner rating average. `/ticket transcript` writes a plain-text transcript of the current ticket on demand without closing it.
+
+### Ticket priority
+
+Staff run `/ticket priority` inside a ticket to set it to 🟢 Low, 🔵 Normal, 🟠 High or 🔴 Urgent; new tickets default to Normal. The choice is confirmed in the ticket channel, recorded in the audit log, summarised in `/ticket stats`, and shown on the archive embed in the transcript channel.
 
 Run `/setup roles owner_role: ... co_owner_role: ... head_admin_role: ... admin_role: ... moderator_role: ...` if you need to initialize dashboard access first. These five roles are both permission roles and ticket notification targets. There is no `/setup staff` command.
 
