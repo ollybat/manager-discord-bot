@@ -54,7 +54,13 @@ Run `/setup roles owner_role: ... co_owner_role: ... head_admin_role: ... admin_
 
 ### Command experience
 
-`/help` is generated from the bot's live command tree, so it can never drift out of date: it lists every command the member may use, grouped into sections, with each usage line and the access that command needs, and it hides sections the member cannot use. `/help command:` opens a searchable picker and shows one command in full — purpose, usage, options, and access.
+`/help` is generated from the bot's live command tree, so it can never drift out of date: it lists every command the member may use, grouped into sections, with each usage line and the access that command needs, and it hides sections the member cannot use. `/help command:` opens a searchable picker and shows one command in full — purpose, usage, options, and access. Command descriptions are plain text with no emoji, so the picker and the guide read cleanly in every client, while the panels and messages the bot posts keep their styling.
+
+### Member cards and moderation summaries
+
+`/info user` renders a member card: account age, join date, roles, whether the roles saved by `/setup roles` give them staff access, and their recorded kick, ban, warn, and timeout history. `/info bot` describes the running instance instead — gateway latency, uptime, how many servers and members it reaches, how many commands it publishes, and whether the SQLite store passes its schema check. `/avatar` posts the full-size avatar, and the banner too when the member has one, so it can be saved or shared.
+
+`/slowmode seconds: 30 channel: #general reason: ...` is the slash twin of `!slowmode`: it needs a configured staff role, accepts `0` to switch slowmode off, refuses anything above 21600 seconds (six hours), and writes the change to the audit log with the acting moderator. `/modstats days: 14` counts the recorded moderation actions in that window — a total per action plus the most active moderators — so staff can see what the team did this week without opening every member's history.
 
 ### Staff access comes from the server, not from Discord permissions
 
