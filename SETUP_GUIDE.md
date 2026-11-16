@@ -20,6 +20,10 @@ The name members see above every message (for example `Spinback | Manager`) is t
 
 `/rules post channel: #rules` publishes the rules panel — a cyan container headed "SpinBack Rules ✅" with the welcome text, one line per rule set, and a button inside each line (Discord, Game) that opens that set privately. The starter texts cover Discord conduct and in-game conduct, and `/rules edit section: ...` replaces one set with your own wording; the posted panel refreshes straight away, and `/rules preview` shows it privately first. Buttons keep working after a restart. Re-run `/rules post` after updating to replace a panel an older version published, and make sure discord.py is 2.7 or newer (`requirements.txt`). Icons are taken from your server: an emoji named `discord`, `game`, and `spinback` (or `s`) is used automatically when it exists; the optional icon and footer-logo boxes in `/rules edit` accept a pasted emoji like `<:discord:1234567890>` when you want a specific one.
 
+## The support panel
+
+`/setup tickets` posts the public ticket panel: the heading 📩 Spinback - Support, the guidance lines, one bold line per issue type with its description, and a footer reading `Support - <your server name> • <year>`. The **Select your issue type ...** menu below it starts the ticket flow (region, then the short form). The footer mark comes from your server: name an emoji `spinback`, `s`, `support`, or `ticket` and it is used; otherwise the panel shows 🏓.
+
 ## Other commands
 
 `/setup tickets panel_channel logs_channel category inactivity_hours`
