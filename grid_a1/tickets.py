@@ -563,7 +563,7 @@ class TicketService:
                     filename=filename,
                 ),
             )
-        except discord.DiscordException as error:
+        except discord.DiscordException:
             log.exception("Could not archive ticket %s; leaving it open", ticket_id)
             await _followup(
                 interaction,
