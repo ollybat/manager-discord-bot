@@ -14,6 +14,8 @@ from .embeds import embed, support_panel, inactivity_indicator, priority_embed, 
 from .tickets import ReimburseModal, TicketService, claim
 from .giveaways import GiveawayDashboardView, GiveawayEntryView, GiveawayService
 from .suggestions import SuggestionModal, SuggestionService, SuggestionVoteView, suggestion_line
+from .brand import BRAND_NAME, BRAND_SHORT, RULES_SECTIONS
+from .rules import RulesEditModal, RulesService, RulesView, rules_panel_embed
 from .guides import build_choices, prefix_guide_lines
 from .health import HealthServer
 from .polls import (
@@ -46,12 +48,12 @@ from .views import ConfirmView, DashboardView, OwnerInactivityView, TicketContro
 from .welcomer import missing, send_welcome, welcome_embed
 from .commands import OwnerConfigurationError, OwnerOnlyError, register_commands
 settings = Settings.from_env(); configure_logging(settings.log_level)
-log = logging.getLogger("grid-a1-manager")
+log = logging.getLogger("spinback-manager")
 intents = discord.Intents.default(); intents.members = True; intents.message_content = True
 class GridA1Bot(commands.Bot):
     def __init__(self):
         super().__init__(command_prefix=settings.prefix, intents=intents, help_command=None)
-        self.database = Database(settings.database_path); self.tickets = TicketService(self.database); self.polls = PollService(self.database); self.giveaways = GiveawayService(self.database); self.wipes = WipeService(self.database); self.suggestions = SuggestionService(self.database)
+        self.database = Database(settings.database_path); self.tickets = TicketService(self.database); self.polls = PollService(self.database); self.giveaways = GiveawayService(self.database); self.wipes = WipeService(self.database); self.suggestions = SuggestionService(self.database); self.rules = RulesService(self.database)
         self._global_sync_last_at = 0.0
         self.settings_owner_id = settings.owner_id
         self.started_at = time.time()
@@ -64,7 +66,7 @@ class GridA1Bot(commands.Bot):
         gateway_ms = round(self.latency * 1_000) if self.latency >= 0 else None
         return {
             "status": "ok",
-            "service": "grid-a1-manager",
+            "service": "spinback-manager",
             "uptime_seconds": max(0, int(time.time() - self.started_at)),
             "connected_servers": len(self.guilds),
             "gateway_latency_ms": gateway_ms,
@@ -76,7 +78,7 @@ class GridA1Bot(commands.Bot):
         self.health_server.stop()
         await super().close()
     async def setup_hook(self):
-        log.info("Starting Grid A1: database=%s prefix=%s owner_configured=%s", self.database.path, settings.prefix, bool(settings.owner_id))
+        log.info("Starting SpinBack Manager: database=%s prefix=%s owner_configured=%s", self.database.path, settings.prefix, bool(settings.owner_id))
         for problem in validate_runtime(settings):
             log.warning("Startup configuration: %s", problem)
         self.database.migrate()
@@ -111,6 +113,7 @@ class GridA1Bot(commands.Bot):
             self.add_view(GiveawayEntryView(self.giveaways, giveaway["giveaway_id"]))
         for row in self.database.published_suggestions_all():
             self.add_view(SuggestionVoteView(self.suggestions, row["suggestion_id"]))
+        self.add_view(RulesView(self.rules))
         self.refresh_panels.start()
         self.inactivity_loop.start()
         self.poll_expiration_loop.start()
@@ -284,7 +287,7 @@ class GridA1Bot(commands.Bot):
                                 if owner is not None:
                                     view = OwnerInactivityView(self.tickets, row['ticket_id'])
                                     try:
-                                        await owner.send(f'🔴 Your Grid A1 ticket **{row["ticket_id"]}** has been inactive for **{duration}**. Please choose an option below within 24 hours.', view=view)
+                                        await owner.send(f'🔴 Your SpinBack ticket **{row["ticket_id"]}** has been inactive for **{duration}**. Please choose an option below within 24 hours.', view=view)
                                     except discord.Forbidden:
                                         log.info('Ticket owner %s has DMs disabled; recording the failure and leaving the ticket open', row['owner_id'])
                                         self.database.mark_inactivity_dm_unavailable(
@@ -717,7 +720,7 @@ def _hierarchy_error(guild, author, member, me) -> str | None:
 @bot.command(name="help", help="💜 Show the prefix commands and point at the slash guide.")
 async def prefix_help(ctx):
     guide = embed(
-        "💜 Grid A1 • Prefix commands",
+        f"💜 {BRAND_SHORT} • Prefix commands",
         f"Everything else lives in slash commands — run `/help` for the full guide, or "
         f"`/help command:` for one command in full. This server's prefix is `{settings.prefix}`.",
         discord.Colour.from_rgb(177, 77, 255),
@@ -918,13 +921,13 @@ async def setup_roles(i: discord.Interaction, owner_role: discord.Role, co_owner
     if invalid: return await i.followup.send(embed=embed("💜 Role setup not saved", "❌ These roles cannot be used: " + ", ".join(invalid)), ephemeral=True)
     if len({role.id for role in roles.values()}) != len(roles): return await i.followup.send(embed=embed("💜 Role setup not saved", "❌ Each permission level must use a different role."), ephemeral=True)
     bot.database.upsert_config(i.guild.id, **{name: role.id for name, role in roles.items()})
-    e = embed("💜 Grid A1 • Permission roles saved", "✅ Staff access roles are now configured for this server.", discord.Colour.from_rgb(177, 77, 255))
+    e = embed(f"💜 {BRAND_SHORT} • Permission roles saved", "✅ Staff access roles are now configured for this server.", discord.Colour.from_rgb(177, 77, 255))
     e.add_field(name="👑 Owner", value=owner_role.mention, inline=True)
     e.add_field(name="🤝 Co-owner", value=co_owner_role.mention, inline=True)
     e.add_field(name="🛡️ Head admin", value=head_admin_role.mention, inline=True)
     e.add_field(name="⚙️ Admin", value=admin_role.mention, inline=True)
     e.add_field(name="🔨 Moderator", value=moderator_role.mention, inline=True)
-    e.set_footer(text="Grid A1 • Permission configuration • Changes saved to SQLite")
+    e.set_footer(text=f"{BRAND_SHORT} • Permission configuration • Changes saved to SQLite")
     await i.followup.send(embed=e, ephemeral=True)
 
 @setup_group.command(name="status", description="🩺 Check which parts of this server's setup are finished")
@@ -973,11 +976,11 @@ async def setup_status(interaction: discord.Interaction) -> None:
 @app_commands.describe(channel="Text channel where the public panel will appear", role="Role granted after successful verification")
 async def verifypanel(i: discord.Interaction, channel: discord.TextChannel, role: discord.Role):
     if role.is_default(): return await i.response.send_message("❌ You cannot use @everyone as the verification role.", ephemeral=True)
-    if not i.guild.me or role >= i.guild.me.top_role: return await i.response.send_message("❌ Move Grid A1's bot role above the verification role first.", ephemeral=True)
-    panel = embed("💜 Grid A1 • Secure Verification", "✨ Complete the short verification check to unlock the server.\n\n📜 Rules confirmation\n✅ Verified role for eligible members\n\nDiscord-wide moderation history is private and unavailable to bots.", discord.Colour.from_rgb(177, 77, 255))
+    if not i.guild.me or role >= i.guild.me.top_role: return await i.response.send_message(f"❌ Move {BRAND_SHORT}'s bot role above the verification role first.", ephemeral=True)
+    panel = embed(f"💜 {BRAND_SHORT} • Secure Verification", "✨ Complete the short verification check to unlock the server.\n\n📜 Rules confirmation\n✅ Verified role for eligible members\n\nDiscord-wide moderation history is private and unavailable to bots.", discord.Colour.from_rgb(177, 77, 255))
     panel.add_field(name="🔐 Verification steps", value="1️⃣ Start verification\n2️⃣ Review your result\n3️⃣ Confirm the rules\n4️⃣ Receive access", inline=False)
     panel.add_field(name="💬 Need help?", value="If you need help, please open a support ticket.", inline=False)
-    panel.set_footer(text="Grid A1 • Secure, fair, Discord-only verification")
+    panel.set_footer(text=f"{BRAND_SHORT} • Secure, fair, Discord-only verification")
     await i.response.defer(ephemeral=True)
     message = await channel.send(embed=panel, view=VerifyPanel(bot.database))
     bot.database.upsert_config(i.guild.id, verify_panel_channel=channel.id, verify_panel_message=message.id, verify_role=role.id)
@@ -1140,7 +1143,7 @@ async def info_server(i: discord.Interaction):
     mfa_status = "Enabled" if g.mfa_level else "Not required"
     e.add_field(name="🛡️ Security", value=f"Verification: `{g.verification_level.name.title()}`\n2FA moderation: `{mfa_status}`", inline=True)
     e.add_field(name="🧩 Server features", value=f"`{len(g.features)}` enabled Discord features", inline=True)
-    e.set_footer(text="Grid A1 • Server information")
+    e.set_footer(text=f"{BRAND_SHORT} • Server information")
     await i.response.send_message(embed=e)
 
 roles_group = app_commands.Group(name="roles", description="🎭 Display and publish the server role directory")
@@ -1154,8 +1157,8 @@ async def roles_setchannel(i: discord.Interaction, channel: discord.TextChannel)
     roles.sort(key=lambda role: role.position, reverse=True)
     lines = [f"{role.mention} — {len(role.members)} members" for role in roles]
     description = "\n".join(lines)[:4000] if lines else "No custom roles found."
-    e = embed("💜 Grid A1 • Server role directory", "✨ All custom server roles, arranged from highest to lowest.\n\n" + description, discord.Colour.from_rgb(177, 77, 255))
-    e.set_footer(text=f"{len(roles)} custom roles • Grid A1 Manager")
+    e = embed(f"💜 {BRAND_SHORT} • Server role directory", "✨ All custom server roles, arranged from highest to lowest.\n\n" + description, discord.Colour.from_rgb(177, 77, 255))
+    e.set_footer(text=f"{len(roles)} custom roles • {BRAND_NAME}")
     await i.response.defer(ephemeral=True)
     try: await channel.send(embed=e)
     except discord.Forbidden: return await i.followup.send("❌ I cannot post in that channel.", ephemeral=True)
@@ -1187,7 +1190,7 @@ async def setup_tickets(i, panel_channel: discord.TextChannel, logs_channel: dis
             log.exception("Could not publish the support panel in guild %s: %s", g.id, error)
             return await i.followup.send("⚠️ Settings were saved, but Discord could not post the panel. Please retry in a moment or ask an admin to check bot permissions.", ephemeral=True)
     bot.database.upsert_config(g.id, panel_message=message.id)
-    await i.followup.send(f"✅ Grid A1 support panel updated in {panel_channel.mention}; logs go to {logs_channel.mention}.", ephemeral=True)
+    await i.followup.send(f"✅ {BRAND_SHORT} support panel updated in {panel_channel.mention}; logs go to {logs_channel.mention}.", ephemeral=True)
 
 @setup_group.command(name="welcomer", description="👋 Configure welcome, shop, links, and community channels")
 @admin()
@@ -2115,6 +2118,38 @@ async def suggestion_config(i: discord.Interaction, channel: discord.TextChannel
 async def reimburse(i: discord.Interaction):
     """Public entry point: everyone gets the reimbursement form and a private ticket."""
     await i.response.send_modal(ReimburseModal(bot.tickets))
+
+
+# --- Rules panel (SpinBack branding) -----------------------------------------
+rules_group = app_commands.Group(name="rules", description="📜 Post and edit the SpinBack rules panel")
+bot.tree.add_command(rules_group)
+
+
+@rules_group.command(name="post", description="📜 Post the rules panel with its Discord and Game buttons")
+@admin()
+@app_commands.guild_only()
+@app_commands.describe(channel="Text channel that should hold the rules panel")
+async def rules_post(i: discord.Interaction, channel: discord.TextChannel):
+    await bot.rules.post(i, channel)
+
+
+@rules_group.command(name="edit", description="✏️ Replace the text of one rules section and refresh the panel")
+@admin()
+@app_commands.guild_only()
+@app_commands.describe(section="Which set of rules to rewrite")
+@app_commands.choices(section=[app_commands.Choice(name=f"{label} {emoji}".strip(), value=key) for key, label, emoji, _summary in RULES_SECTIONS])
+async def rules_edit(i: discord.Interaction, section: app_commands.Choice[str]):
+    if not i.guild:
+        return await i.response.send_message("❌ Edit the rules inside a server.", ephemeral=True)
+    current = bot.rules.text(i.guild.id, section.value)
+    await i.response.send_modal(RulesEditModal(bot.rules, section.value).with_current_text(current))
+
+
+@rules_group.command(name="preview", description="👀 Show the rules panel privately before you post it")
+@admin()
+@app_commands.guild_only()
+async def rules_preview(i: discord.Interaction):
+    await i.response.send_message(embed=rules_panel_embed(), view=RulesView(bot.rules), ephemeral=True)
 
 
 def run():
