@@ -26,7 +26,7 @@ REIMBURSE_LABEL = "Reimbursement"
 REIMBURSE_PROMPTS = (
     ("Gamertag", "Your PSN or Xbox name", False),
     ("Clan Name", "The clan you belong to, or N/A", False),
-    ("Grid Location", "Where it happened, for example Grid A1 north gate", False),
+    ("Grid Location", "Where it happened, for example the A1 monument area", False),
     ("What Happened", "What went wrong and what you lost, with dates if you can", True),
 )
 
@@ -703,7 +703,7 @@ class TicketService:
         await self.request_feedback(channel.guild.get_member(int(row["owner_id"])), ticket_id)
 
         try:
-            await channel.delete(reason=f"Grid A1 ticket {ticket_id} closed")
+            await channel.delete(reason=f"SpinBack Manager ticket {ticket_id} closed")
         except discord.DiscordException as error:
             log.warning(
                 "Ticket %s is closed and archived, but channel deletion failed: %s",
