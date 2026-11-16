@@ -1992,7 +1992,7 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(sorted(PRIORITY_MARKERS), ["high", "low", "normal", "urgent"])
 
         self.assertEqual(suggestion_custom_id("up", "AB12"), "grid-a1:suggestion:AB12:up")
-        self.assertEqual(suggestion_custom_id("down", "x!" * 40)[:23], "grid-a1:suggestion:x")
+        self.assertEqual(suggestion_custom_id("down", "x!" * 40), "grid-a1:suggestion:" + "x" * 32 + ":down")
         self.assertLessEqual(len(suggestion_custom_id("down", "Z" * 90)), 100)
         for broken in ("sideways", ""):
             with self.assertRaises(ValueError):
