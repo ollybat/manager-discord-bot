@@ -1,6 +1,6 @@
 # Grid A1 Manager Discord Bot
 
-This repository preserves the existing SQLite deployment and `DATABASE_PATH` contract. SQLite migrations are additive and schema version 19; use `Database.backup()` before upgrades. A startup schema/integrity check runs before the Discord client starts.
+This repository preserves the existing SQLite deployment and `DATABASE_PATH` contract. SQLite migrations are additive and schema version 20; use `Database.backup()` before upgrades. A startup schema/integrity check runs before the Discord client starts.
 
 PostgreSQL is not a runtime backend or a tested SQLite migration path: `grid_a1/database.py` always uses SQLite and `DATABASE_PATH`. The separate `grid_a1/postgres.py` module is an optional operator helper with a baseline schema sketch; it does not migrate data or switch the bot runtime. Setting `DATABASE_URL` has no effect on the bot. The SQLite source is never modified. Install `requirements-postgres-tools.txt` only if you explicitly use that helper.
 
@@ -17,6 +17,10 @@ Server managers can use `/giveaway config` to choose an announcement channel, op
 ### Ticket transcripts
 
 Closing a ticket uploads a plain-text transcript to the transcript channel before the channel is deleted: a bordered header with the server, ticket channel, message count, created and closed times, the ticket owner and the staff member who claimed it, then one indented block per message, then a generated-by footer. All times are UTC. Attachments are kept as links, so transcripts stay small and upload quickly.
+
+### Owner feedback
+
+When a ticket closes, the owner receives a private message asking them to rate the help they received from 1 to 5 stars. Ratings are stored per ticket, can be changed at any time, and staff only ever see the average and the number of ratings in `/ticket stats`. If the owner has private messages blocked the request is logged and skipped, and it never blocks the closure.
 
 Staff can run `/ticket stats` for a live workload panel: queue size split into claimed and unclaimed, closures in the last 7 and 30 days, average time to first staff claim, average time to closure, open tickets per region, and the most active claimers. `/ticket transcript` writes a plain-text transcript of the current ticket on demand without closing it.
 
