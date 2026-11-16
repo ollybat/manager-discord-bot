@@ -96,7 +96,7 @@ class CoreTests(unittest.TestCase):
             self.assertEqual(database.ticket("ABC123")["issue"], "links")
             self.assertEqual(database.config(42)["owner_role"], 101)
             self.assertEqual(database.config(42)["report_channel"], 9900)
-            self.assertEqual(database.startup_check()["schema_version"], 20)
+            self.assertEqual(database.startup_check()["schema_version"], 21)
 
     def test_ticket_create_rolls_back_when_audit_insert_fails(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -208,14 +208,14 @@ class CoreTests(unittest.TestCase):
 
         now = datetime(2026, 11, 16, 12, 0, tzinfo=timezone.utc)
 
-        def ticket(ticket_id, status="open", region="EU", opened_at="2026-11-16T10:00:00+00:00", closed_at=None, claimed_by=None):
-            return {"ticket_id": ticket_id, "status": status, "region": region, "opened_at": opened_at, "closed_at": closed_at, "claimed_by": claimed_by}
+        def ticket(ticket_id, status="open", region="EU", opened_at="2026-11-16T10:00:00+00:00", closed_at=None, claimed_by=None, priority="normal"):
+            return {"ticket_id": ticket_id, "status": status, "region": region, "opened_at": opened_at, "closed_at": closed_at, "claimed_by": claimed_by, "priority": priority}
 
         def claim(ticket_id, created_at, assignee):
             return {"ticket_id": ticket_id, "created_at": created_at, "actor_id": assignee, "metadata": json.dumps({"new_assignee": assignee})}
 
         tickets = [
-            ticket("A", claimed_by=1),
+            ticket("A", claimed_by=1, priority="high"),
             ticket("B", status="close_requested", region="NA"),
             ticket("C", status="closed", opened_at="2026-11-10T10:00:00+00:00", closed_at="2026-11-10T11:00:00+00:00", claimed_by=2),
             ticket("D", status="closed", opened_at="2026-10-01T10:00:00+00:00", closed_at="2026-10-01T10:30:00+00:00", claimed_by=2),
@@ -234,7 +234,8 @@ class CoreTests(unittest.TestCase):
         self.assertAlmostEqual(stats.average_claim_minutes or 0, 16.67, places=2)
         self.assertAlmostEqual(stats.average_close_minutes or 0, 45.0, places=2)
         self.assertEqual(stats.regions, (("EU", 1), ("NA", 1)))
-        self.assertEqual(stats.top_claimers, ((2, 2), (1, 1)))
+        self.assertEqual(stats.top_claimers, ((2, 2, 10.0), (1, 1, 30.0)))
+        self.assertEqual(stats.priorities, (("low", 0), ("normal", 1), ("high", 1), ("urgent", 0)))
         self.assertEqual(format_duration(stats.average_claim_minutes), "17m")
         self.assertEqual(format_duration(None), "—")
         self.assertEqual((stats.rating_average, stats.rating_count), (None, 0))
@@ -249,11 +250,13 @@ class CoreTests(unittest.TestCase):
 
         guild = SimpleNamespace(name="Grid A1")
         empty = ticket_stats_embed(guild, TicketStats())
+        empty_fields = {field.name: field.value for field in empty.fields}
         self.assertIn("Support statistics", empty.title)
-        self.assertEqual(len(empty.fields), 6)
-        self.assertEqual(empty.fields[3].value, "No open tickets right now.")
-        self.assertEqual(empty.fields[4].value, "No claims recorded yet.")
-        self.assertEqual(empty.fields[5].value, "No ratings yet. Owners are asked privately after closure.")
+        self.assertEqual(len(empty.fields), 7)
+        self.assertEqual(empty_fields["🌍 Open by region"], "No open tickets right now.")
+        self.assertEqual(empty_fields["🥇 Most claims"], "No claims recorded yet.")
+        self.assertEqual(empty_fields["🚦 Open by priority"], "No open tickets right now.")
+        self.assertEqual(empty_fields["⭐ Feedback"], "No ratings yet. Owners are asked privately after closure.")
 
         busy = ticket_stats_embed(
             guild,
@@ -267,17 +270,23 @@ class CoreTests(unittest.TestCase):
                 average_claim_minutes=12.0,
                 average_close_minutes=95.0,
                 regions=(("EU", 2),),
-                top_claimers=((77, 5),),
+                priorities=(("low", 0), ("normal", 2), ("high", 1), ("urgent", 3)),
+                top_claimers=((77, 5, 12.0), (78, 2, None)),
             ),
         )
+        busy_fields = {field.name: field.value for field in busy.fields}
         self.assertIn("Queue: **3**", busy.fields[0].value)
         self.assertIn("1h 35m", busy.fields[2].value)
-        self.assertIn("<@77> — **5**", busy.fields[4].value)
-        self.assertIn("No ratings yet", busy.fields[5].value)
+        self.assertIn("<@77> — **5** • 12m avg", busy_fields["🥇 Most claims"])
+        self.assertIn("<@78> — **2**", busy_fields["🥇 Most claims"])
+        self.assertNotIn("<@78> — **2** •", busy_fields["🥇 Most claims"])
+        self.assertIn("🔴 Urgent: **3**", busy_fields["🚦 Open by priority"])
+        self.assertIn("No ratings yet", busy_fields["⭐ Feedback"])
 
         rated = ticket_stats_embed(guild, TicketStats(rating_average=4.5, rating_count=8))
-        self.assertIn("Average: **4.50/5**", rated.fields[5].value)
-        self.assertIn("Ratings: **8**", rated.fields[5].value)
+        rated_fields = {field.name: field.value for field in rated.fields}
+        self.assertIn("Average: **4.50/5**", rated_fields["⭐ Feedback"])
+        self.assertIn("Ratings: **8**", rated_fields["⭐ Feedback"])
 
     def test_collect_reads_ticket_workload_from_sqlite(self):
         from grid_a1.stats import collect
@@ -290,12 +299,46 @@ class CoreTests(unittest.TestCase):
             database.assign_ticket("STAT1", 8002)
             stats = collect(database, 42, now=datetime(2026, 11, 16, 12, 0, tzinfo=timezone.utc))
             self.assertEqual((stats.open_total, stats.claimed, stats.unclaimed), (1, 1, 0))
-            self.assertEqual(stats.top_claimers, ((8002, 1),))
+            self.assertEqual([(assignee, count) for assignee, count, _ in stats.top_claimers], [(8002, 1)])
             self.assertEqual(stats.regions, (("EU", 1),))
+            self.assertEqual(stats.priorities, (("low", 0), ("normal", 1), ("high", 0), ("urgent", 0)))
             self.assertEqual((stats.rating_average, stats.rating_count), (None, 0))
             database.save_feedback("STAT1", 42, 8001, 5)
             scored = collect(database, 42)
             self.assertEqual((scored.rating_average, scored.rating_count), (5.0, 1))
+
+    def test_ticket_priority_is_validated_audited_and_counted(self):
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(Path(directory) / "manager.sqlite3")
+            database.migrate()
+            database.create_ticket(ticket_id="PRI1", guild_id=42, channel_id=9701, owner_id=8801, issue="general", region="EU", opened_at="2026-11-16T09:00:00+00:00", last_activity_at="2026-11-16T09:00:00+00:00")
+            self.assertEqual(database.ticket("PRI1")["priority"], "normal")
+            self.assertEqual(database.priority_counts(42), {"normal": 1})
+            self.assertTrue(database.set_priority("PRI1", "urgent", 8802))
+            self.assertEqual(database.ticket("PRI1")["priority"], "urgent")
+            self.assertEqual(database.priority_counts(42), {"urgent": 1})
+            with database.connect() as db:
+                rows = db.execute("SELECT actor_id, metadata FROM audit_log WHERE ticket_id='PRI1' AND action='priority_changed'").fetchall()
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["actor_id"], 8802)
+            self.assertEqual(json.loads(rows[0]["metadata"]), {"from": "normal", "to": "urgent"})
+            with self.assertRaises(ValueError):
+                database.set_priority("PRI1", "extreme", 8802)
+            with self.assertRaises(ValueError):
+                database.update_ticket("PRI1", priority="blocker")
+            database.update_ticket("PRI1", status="closed", closed_at="2026-11-16T10:00:00+00:00", closed_by=8802)
+            self.assertFalse(database.set_priority("PRI1", "low", 8802))
+            self.assertEqual(database.priority_counts(42), {})
+
+    def test_priority_embed_labels_the_staff_choice(self):
+        from grid_a1.embeds import priority_embed
+
+        actor = SimpleNamespace(display_name="Saturn Staff")
+        urgent = priority_embed("urgent", actor)
+        self.assertIn("🔴 Urgent", urgent.title)
+        self.assertEqual(urgent.footer.text, "Set by Saturn Staff")
+        self.assertIn("🟠 High", priority_embed("high", actor).title)
+        self.assertIn("Priority", priority_embed("weird", actor).title)
 
     def test_feedback_round_trip_replaces_rating_and_audits_it(self):
         from datetime import datetime, timezone
@@ -528,7 +571,7 @@ class CoreTests(unittest.TestCase):
             database = Database(path)
             database.migrate()
             self.assertTrue(database.startup_check()["ok"])
-            self.assertEqual(database.startup_check()["schema_version"], 20)
+            self.assertEqual(database.startup_check()["schema_version"], 21)
             self.assertEqual(database.poll_for_guild(42, "OLDPOLL")["description"], "")
             with database.connect() as db:
                 tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
