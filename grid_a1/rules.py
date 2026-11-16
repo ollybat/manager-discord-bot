@@ -1,4 +1,8 @@
-"""The SpinBack rules panel: stored rule sections, the public panel, and the edit form."""
+"""The SpinBack rules panel: stored rule sections, the public panel, and the edit form.
+
+The published panel is built with Discord's Components v2 layout so the accent bar, the text,
+and the section buttons live inside one container instead of a button row sitting under an embed.
+"""
 from __future__ import annotations
 
 import logging
@@ -26,13 +30,9 @@ def rules_section_meta(section: str) -> tuple[str, str, str, str]:
     return RULES_SECTIONS[0]
 
 
-def rules_panel_embed() -> discord.Embed:
-    """The public rules panel exactly as members should see it."""
-    panel = embed(f"{BRAND_SHORT} Rules ✅", RULES_INTRO, RULES_COLOUR)
-    for _section, label, emoji, summary in RULES_SECTIONS:
-        panel.add_field(name=f"{label} {emoji}", value=summary, inline=False)
-    panel.set_footer(text=BRAND_FOOTER)
-    return panel
+def guild_section_key(section: str) -> str:
+    """Normalize a section argument to a known key."""
+    return rules_section_meta(section)[0]
 
 
 def rules_section_embed(section: str, body: str, updated_at: str | None = None) -> discord.Embed:
@@ -46,6 +46,37 @@ def rules_section_embed(section: str, body: str, updated_at: str | None = None) 
     return result
 
 
+def rules_panel_view(service: "RulesService") -> discord.ui.LayoutView:
+    """The published rules panel: one container holding the text and the section buttons."""
+    view = discord.ui.LayoutView(timeout=None)
+    children: list[Any] = [
+        discord.ui.TextDisplay(f"# {BRAND_SHORT} Rules ✅"),
+        discord.ui.TextDisplay(RULES_INTRO),
+        discord.ui.Separator(),
+    ]
+    for section, label, emoji, summary in RULES_SECTIONS:
+        children.append(
+            discord.ui.Section(
+                discord.ui.TextDisplay(f"**{label} {emoji}**\n{summary}"),
+                accessory=_rules_button(service, section, label),
+            )
+        )
+    children.append(discord.ui.TextDisplay(f"***{BRAND_FOOTER}***"))
+    view.add_item(discord.ui.Container(*children, accent_colour=RULES_COLOUR))
+    return view
+
+
+def _rules_button(service: "RulesService", section: str, label: str) -> discord.ui.Button:
+    """A section button inside the panel container."""
+    button = discord.ui.Button(label=label, style=discord.ButtonStyle.secondary, custom_id=rules_custom_id(section))
+
+    async def callback(interaction: discord.Interaction) -> None:
+        await _show_rules(service, interaction, section)
+
+    button.callback = callback
+    return button
+
+
 async def _respond(interaction: discord.Interaction, *args, **kwargs) -> None:
     """Answer once, using a follow-up when the handler already deferred."""
     if interaction.response.is_done():
@@ -54,33 +85,12 @@ async def _respond(interaction: discord.Interaction, *args, **kwargs) -> None:
         await interaction.response.send_message(*args, **kwargs)
 
 
-class RulesView(discord.ui.View):
-    """Persistent rules panel buttons: one per rule section."""
-
-    def __init__(self, service: "RulesService"):
-        super().__init__(timeout=None)
-        self.service = service
-        for section, label, emoji, _summary in RULES_SECTIONS:
-            button = discord.ui.Button(
-                label=label,
-                emoji=emoji,
-                style=discord.ButtonStyle.primary if section == "discord" else discord.ButtonStyle.secondary,
-                custom_id=rules_custom_id(section),
-            )
-            button.callback = self._build_callback(section)
-            self.add_item(button)
-
-    def _build_callback(self, section: str):
-        async def callback(interaction: discord.Interaction) -> None:
-            await self.show(interaction, section)
-
-        return callback
-
-    async def show(self, interaction: discord.Interaction, section: str) -> None:
-        if interaction.guild is None:
-            return await _respond(interaction, "❌ The rules only open inside the server.", ephemeral=True)
-        body, updated_at = self.service.text_with_meta(interaction.guild.id, section)
-        await _respond(interaction, embed=rules_section_embed(section, body, updated_at), ephemeral=True)
+async def _show_rules(service: "RulesService", interaction: discord.Interaction, section: str) -> None:
+    """Open one set of rules privately for the member who pressed its button."""
+    if interaction.guild is None:
+        return await _respond(interaction, "❌ The rules only open inside the server.", ephemeral=True)
+    body, updated_at = service.text_with_meta(interaction.guild.id, section)
+    await _respond(interaction, embed=rules_section_embed(section, body, updated_at), ephemeral=True)
 
 
 class RulesEditModal(discord.ui.Modal):
@@ -109,11 +119,6 @@ class RulesEditModal(discord.ui.Modal):
         await self.service.save(interaction, self.section, str(self.body.value))
 
 
-def guild_section_key(section: str) -> str:
-    """Normalize a section argument to a known key."""
-    return rules_section_meta(section)[0]
-
-
 class RulesService:
     """Read, edit, and publish the server's rules panel."""
 
@@ -132,13 +137,17 @@ class RulesService:
             return str(stored["body"]), str(stored["updated_at"])
         return RULES_DEFAULTS.get(key, ""), None
 
+    def panel(self) -> discord.ui.LayoutView:
+        """A fresh panel view; callbacks stay valid across restarts."""
+        return rules_panel_view(self)
+
     async def post(self, interaction: discord.Interaction, channel: discord.TextChannel) -> None:
         guild = interaction.guild
         if guild is None:
             return await interaction.response.send_message("❌ Post the rules inside a server.", ephemeral=True)
         await interaction.response.defer(ephemeral=True)
         try:
-            message = await channel.send(embed=rules_panel_embed(), view=RulesView(self))
+            message = await channel.send(view=self.panel())
         except discord.Forbidden:
             return await interaction.followup.send(
                 f"❌ I cannot post in {channel.mention}. Check View Channel and Send Messages, then try again.",
@@ -149,7 +158,9 @@ class RulesService:
             return await interaction.followup.send("❌ Discord refused that post. Please try again shortly.", ephemeral=True)
         self.database.set_rules_panel(guild.id, channel.id, message.id)
         await interaction.followup.send(
-            f"✅ Rules posted in {channel.mention}. Members open each set with the buttons, and you can change the text later with /rules edit.",
+            "✅ Rules posted in "
+            f"{channel.mention}. Members open each set with the buttons inside the panel, and you can "
+            "change the text later with /rules edit.",
             ephemeral=True,
         )
 
@@ -163,7 +174,7 @@ class RulesService:
             return False
         try:
             message = await channel.fetch_message(int(config["rules_message"]))
-            await message.edit(embed=rules_panel_embed(), view=RulesView(self))
+            await message.edit(view=self.panel())
         except (discord.Forbidden, discord.HTTPException, discord.NotFound):
             log.info("Could not refresh the rules panel in guild %s", guild.id, exc_info=True)
             return False
