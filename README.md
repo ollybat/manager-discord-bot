@@ -38,7 +38,7 @@ Wipes are scheduled per region instead of announced by hand. `/wipe config` open
 
 ### Rules panel
 
-`/rules post channel: #rules` publishes the SpinBack rules panel: a cyan embed titled "SpinBack Rules ✅" with the thank-you and purpose text, one line per rule set, and a button per set — **Discord 🎧 (All discord related rules.)** and **Game 🎮 (General in-game rules.)** — that opens that set privately for the member who pressed it. The starter texts are sensible Discord and in-game rules; `/rules edit section:` opens a form to replace one set with your own wording, and the posted panel refreshes immediately (the buttons never need re-posting). `/rules preview` shows the panel privately before you publish it, and the buttons keep working after a restart.
+`/rules post channel: #rules` publishes the SpinBack rules panel: one container with a cyan accent bar, the heading "SpinBack Rules ✅", the thank-you and purpose text, then one line per rule set with its own button inside that line — **Discord 🎧 (All discord related rules.)** and **Game 🎮 (General in-game rules.)** — and a *Powered by SpinBack* footer. Each button opens that set privately for the member who pressed it. The panel uses Discord's Components v2 layout, so the buttons sit inside the panel container instead of in a row underneath it. The starter texts are sensible Discord and in-game rules; `/rules edit section:` opens a form to replace one set with your own wording, and the posted panel refreshes immediately (the buttons never need re-posting). `/rules preview` shows the panel privately before you publish it, and the buttons keep working after a restart.
 
 ### Suggestions
 
