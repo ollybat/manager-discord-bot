@@ -23,4 +23,17 @@ Use `/setup roles owner_role: ... co_owner_role: ... head_admin_role: ... admin_
 
 The bot stores its SQLite database at `DATABASE_PATH`. For Railway, attach a persistent Volume to the bot service and set the volume mount path to `/data`; set the service variable `DATABASE_PATH=/data/manager.sqlite3`. The application cannot create or attach the Railway Volume from source code. On startup it now warns if Railway reports no volume mount or if the database path is outside the mounted directory. Keep the Volume attached when redeploying; deleting it removes the database.
 
+## Public domain, health checks, and the status endpoint
+
+The bot talks out to Discord and normally never listens on a port, so if Railway attaches a public domain, the edge has nothing to answer with and shows `502 Application failed to respond`. That does not affect the bot: commands keep working through the outbound gateway connection.
+
+Two clean options:
+
+1. **Remove the public domain** in Railway (service → Settings → Networking → delete the generated domain). A gateway-only bot has nothing to serve, so this is the simplest fix and needs no code change.
+2. **Keep the domain and serve a status page.** The bot already includes a small read-only endpoint (`grid_a1/health.py`). It binds the port Railway injects (`PORT`, falling back to 8080) and answers the domain root, `/health`, `/healthz`, and `/status` with a compact JSON document:
+   ```json
+   {"checked_at": "2026-11-16T15:12:42+00:00", "connected_servers": 1, "gateway_latency_ms": 42, "schema_version": 21, "service": "grid-a1-manager", "status": "ok", "uptime_seconds": 5400}
+   ```
+   It exposes no tokens, IDs, guild names, ticket contents, or member data. Unknown paths answer 404, anything other than GET/HEAD answers 405, and a failing status report answers 503 so the bot's own uptime monitor can detect it. `HEALTH_DISABLED=1` turns the endpoint off; `HEALTH_PORT` and `HEALTH_HOST` override the port and bind address. Use this when you want Railway health checks or an external uptime monitor to see a 200.
+
 Keep the bot token, database, transcripts, and logs private. Test role hierarchy and permissions in a test server before production.
