@@ -96,7 +96,7 @@ class CoreTests(unittest.TestCase):
                                    issue="links", region="EU", opened_at="2024-01-01T00:00:00+00:00",
                                    last_activity_at="2024-01-01T00:00:00+00:00")
             database.migrate()
-            self.assertEqual(SCHEMA_VERSION, 24)
+            self.assertEqual(SCHEMA_VERSION, 25)
             self.assertEqual(database.ticket("ABC123")["issue"], "links")
             self.assertEqual(database.config(42)["owner_role"], 101)
             self.assertEqual(database.config(42)["report_channel"], 9900)
