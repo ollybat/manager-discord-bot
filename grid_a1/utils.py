@@ -130,6 +130,16 @@ def feedback_custom_id(score: int, ticket_id: str) -> str:
     return f"grid-a1:feedback:{safe_ticket_id}:{score}"[:100]
 
 
+def server_emoji(guild: Any, names: tuple[str, ...]) -> str:
+    """The first of these emoji names the server itself defines, as Discord markup, else an empty string."""
+    emojis = getattr(guild, "emojis", None) or ()
+    for name in names:
+        for candidate in emojis:
+            if str(getattr(candidate, "name", "")).lower() == str(name).lower():
+                return str(candidate)
+    return ""
+
+
 def rules_custom_id(section: str) -> str:
     """Give each rules panel button a persistent ID tied to its section."""
     safe_section = re.sub(r"[^A-Za-z0-9_-]", "", str(section)).lower()[:32]
