@@ -383,6 +383,90 @@ class SpinBackFeatureTests(unittest.TestCase):
             self.assertEqual(modal.children[0].max_length, 4000)
             self.assertEqual(modal.with_current_text("old rules").children[0].default, "old rules")
 
+    def test_rules_post_replaces_the_previous_panel_and_restart_refreshes_it(self):
+        from grid_a1.rules import RulesService
+
+        class FakeMessage:
+            def __init__(self, message_id):
+                self.id = message_id
+                self.deleted = False
+                self.edits = []
+
+            async def delete(self):
+                self.deleted = True
+
+            async def edit(self, **kwargs):
+                self.edits.append(kwargs)
+
+        class FakeChannel:
+            def __init__(self, channel_id):
+                self.id = channel_id
+                self.mention = f"<#{channel_id}>"
+                self.sent = []
+                self.known = {}
+                self._next_id = channel_id + 100
+
+            async def send(self, **kwargs):
+                self.sent.append(kwargs)
+                self._next_id += 1
+                message = FakeMessage(self._next_id)
+                self.known[message.id] = message
+                return message
+
+            async def fetch_message(self, message_id):
+                if message_id in self.known:
+                    return self.known[message_id]
+                raise discord.NotFound(response=object(), message="unknown message")
+
+        class Recorder:
+            def __init__(self):
+                self.calls = []
+
+            async def __call__(self, *args, **kwargs):
+                self.calls.append((args, kwargs))
+
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(Path(directory) / "manager.sqlite3")
+            database.migrate()
+            service = RulesService(database)
+            channel = FakeChannel(700)
+            old_panel = FakeMessage(800)
+            channel.known[800] = old_panel
+            database.set_rules_panel(3, 700, 800)
+
+            guild = SimpleNamespace(id=3, get_channel=lambda channel_id: channel if channel_id == 700 else None)
+
+            class FakeInteraction:
+                def __init__(self):
+                    self.guild = guild
+                    self.user = SimpleNamespace(id=4)
+                    self.response = SimpleNamespace(
+                        is_done=lambda: False, defer=Recorder(), send_message=Recorder()
+                    )
+                    self.followup = SimpleNamespace(send=Recorder())
+
+            interaction = FakeInteraction()
+            asyncio.run(service.post(interaction, channel))
+            self.assertTrue(interaction.response.defer.calls[0][1]["ephemeral"])
+            self.assertTrue(old_panel.deleted)
+            self.assertEqual(len(channel.sent), 1)
+            self.assertIsInstance(channel.sent[0]["view"], discord.ui.LayoutView)
+            self.assertIsNone(channel.sent[0]["view"].timeout)
+            posted = database.config(3)
+            self.assertEqual(posted["rules_channel"], 700)
+            self.assertNotEqual(posted["rules_message"], 800)
+            self.assertIn("buttons sit inside the panel", interaction.followup.send.calls[0][0][0])
+
+            restarted = FakeChannel(700)
+            restarted.known[posted["rules_message"]] = FakeMessage(posted["rules_message"])
+            guild2 = SimpleNamespace(id=3, get_channel=lambda channel_id: restarted if channel_id == 700 else None)
+            self.assertTrue(asyncio.run(RulesService(database).refresh_panel(guild2)))
+            self.assertFalse(asyncio.run(RulesService(database).refresh_panel(SimpleNamespace(id=99, get_channel=lambda channel_id: None))))
+            edited = restarted.known[posted["rules_message"]].edits
+            self.assertEqual(len(edited), 1)
+            self.assertIsInstance(edited[0]["view"], discord.ui.LayoutView)
+            self.assertNotIn("embed", edited[0])
+
     def test_rules_commands_are_registered_and_guided(self):
         import grid_a1.bot as bot_module
         from grid_a1.guides import ACCESS_LABELS, COMMAND_ACCESS, catalog, render_guide
