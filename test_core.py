@@ -343,6 +343,115 @@ class CoreTests(unittest.TestCase):
 
 
 
+
+    def test_new_moderation_and_listing_commands_are_registered(self):
+        import grid_a1.bot as bot_module
+
+        for name in ("unban", "untimeout", "purge", "modlog"):
+            self.assertIsNotNone(bot_module.bot.tree.get_command(name), name)
+        self.assertIsNotNone(bot_module.giveaway_group.get_command("list"))
+        self.assertIsNotNone(bot_module.poll_group.get_command("results"))
+
+        bulk = bot_module.moderation_purge
+        self.assertEqual((bulk._params["count"].min_value, bulk._params["count"].max_value), (1, 100))
+        self.assertTrue(bulk.checks, "purge should carry a permission check")
+        self.assertEqual(bot_module.moderation_unban._params["user_id"].name, "user_id")
+        self.assertIsNotNone(bot_module.moderation_unban_autocomplete)
+
+    def test_unban_autocomplete_lists_and_filters_bans(self):
+        import grid_a1.bot as bot_module
+
+        class FakeUser:
+            def __init__(self, name, uid):
+                self.name = name
+                self.id = uid
+
+            def __str__(self):
+                return self.name
+
+        class FakeBans:
+            def __init__(self, pairs):
+                self._pairs = pairs
+
+            def __aiter__(self):
+                self._walk = iter(self._pairs)
+                return self
+
+            async def __anext__(self):
+                try:
+                    return next(self._walk)
+                except StopIteration:
+                    raise StopAsyncIteration
+
+        pairs = [(FakeUser("Spammer", 11), 11), (FakeUser("Raider", 22), 22)]
+        guild = SimpleNamespace(bans=lambda limit: FakeBans([SimpleNamespace(user=user) for user, _ in pairs]))
+        interaction = SimpleNamespace(guild=guild, user=SimpleNamespace(id=1))
+        choices = asyncio.run(bot_module.moderation_unban_autocomplete(interaction, ""))
+        self.assertEqual([choice.value for choice in choices], ["11", "22"])
+        self.assertEqual(choices[0].name, "Spammer • 11")
+        filtered = asyncio.run(bot_module.moderation_unban_autocomplete(interaction, "raid"))
+        self.assertEqual([choice.value for choice in filtered], ["22"])
+        by_id = asyncio.run(bot_module.moderation_unban_autocomplete(interaction, "11"))
+        self.assertEqual([choice.value for choice in by_id], ["11"])
+        self.assertEqual(asyncio.run(bot_module.moderation_unban_autocomplete(SimpleNamespace(guild=None), "")), [])
+
+        class BrokenBans:
+            def __aiter__(self):
+                return self
+
+            async def __anext__(self):
+                raise discord.HTTPException(SimpleNamespace(status=500, reason="boom"), "no")
+
+        broken = SimpleNamespace(guild=SimpleNamespace(bans=lambda limit: BrokenBans()), user=SimpleNamespace(id=1))
+        self.assertEqual(asyncio.run(bot_module.moderation_unban_autocomplete(broken, "")), [])
+
+    def test_moderation_commands_record_the_member_id_for_history(self):
+        import inspect
+
+        import grid_a1.bot as bot_module
+        from grid_a1.guides import ACCESS_LABELS, COMMAND_ACCESS, catalog, render_guide
+
+        for command, marker in (
+            (bot_module.moderation_kick, "member={member.id}; "),
+            (bot_module.moderation_ban, "member={member.id}; "),
+            (bot_module.moderation_unban, "member={target_id}; "),
+            (bot_module.moderation_untimeout, "member={member.id}; "),
+        ):
+            body = inspect.getsource(command.callback)
+            self.assertIn(marker, body, command.name)
+        purge_body = inspect.getsource(bot_module.moderation_purge.callback)
+        self.assertIn("set_footer", purge_body)
+        self.assertIn('"purge"', purge_body)
+
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(Path(directory) / "manager.sqlite3")
+            database.migrate()
+            database.audit(42, None, 900, "kick", "member=8801; spam")
+            database.audit(42, None, 900, "unban", "member=8801; appealed")
+            database.audit(42, None, 900, "untimeout", "member=8801; mistake")
+            database.audit(42, None, 900, "purge", "channel=5; deleted=10; cleanup")
+            actions = [row["action"] for row in database.member_history(42, 8801)]
+            self.assertEqual(actions, ["untimeout", "unban", "kick"])
+            self.assertNotIn("purge", actions)
+
+        entries = catalog(bot_module.bot.tree)
+        rendered = "\n".join(value for _, value in render_guide(entries, list(ACCESS_LABELS)))
+        for command in ("/unban", "/untimeout", "/purge", "/modlog", "/poll results", "/giveaway list"):
+            self.assertIn(command, rendered)
+        self.assertEqual(COMMAND_ACCESS["purge"], "manage_messages")
+        self.assertEqual(COMMAND_ACCESS["unban"], "staff")
+        self.assertEqual(COMMAND_ACCESS["poll results"], "poll_creator")
+        self.assertEqual(COMMAND_ACCESS["giveaway list"], "admin")
+
+    def test_timestamp_marker_handles_stored_and_missing_times(self):
+        from grid_a1.stats import timestamp_marker
+
+        marker = timestamp_marker("2026-11-16T12:00:00+00:00")
+        self.assertTrue(marker.startswith("<t:"))
+        self.assertTrue(marker.endswith(":R>"))
+        self.assertEqual(timestamp_marker(None), "an unknown time")
+        self.assertEqual(timestamp_marker("nonsense"), "an unknown time")
+
     def test_ticket_queue_overview_orders_by_priority_then_age(self):
         from grid_a1.stats import queue_overview, sort_open_queue
 
@@ -1061,7 +1170,7 @@ class CoreTests(unittest.TestCase):
                 )
                 if name:
                     registered.add(name)
-        self.assertEqual(registered, {"config", "create", "end", "remove"})
+        self.assertEqual(registered, {"config", "create", "end", "remove", "results"})
 
     def test_poll_and_giveaway_dashboards_expose_the_expected_controls(self):
         from grid_a1.giveaways import GiveawayDashboardView, GiveawayEntryView, GiveawayService
@@ -1092,7 +1201,7 @@ class CoreTests(unittest.TestCase):
         self.assertIsNotNone(giveaway_group)
         self.assertEqual(
             {command.name for command in giveaway_group.commands},
-            {"config", "end"},
+            {"config", "end", "list"},
         )
 
     def test_poll_subcommands_are_registered_on_the_runtime_tree(self):
@@ -1102,7 +1211,7 @@ class CoreTests(unittest.TestCase):
         self.assertIsNotNone(poll_group)
         self.assertEqual(
             {command.name for command in poll_group.commands},
-            {"config", "create", "end", "remove"},
+            {"config", "create", "end", "remove", "results"},
         )
 
     def test_optional_postgres_baseline_lists_poll_tables(self):
