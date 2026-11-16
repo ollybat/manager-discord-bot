@@ -22,7 +22,7 @@ from .brand import (
 )
 from .embeds import embed
 from .stats import timestamp_marker
-from .utils import rules_custom_id, utcnow
+from .utils import rules_custom_id, server_emoji, utcnow
 
 log = logging.getLogger(__name__)
 
@@ -42,16 +42,6 @@ def rules_section_meta(section: str) -> tuple[str, str, str, str]:
 def guild_section_key(section: str) -> str:
     """Normalize a section argument to a known key."""
     return rules_section_meta(section)[0]
-
-
-def server_emoji(guild: Any, names: tuple[str, ...]) -> str:
-    """The first of these emoji names the server itself defines, as Discord markup, else an empty string."""
-    emojis = getattr(guild, "emojis", None) or ()
-    for name in names:
-        for candidate in emojis:
-            if str(getattr(candidate, "name", "")).lower() == str(name).lower():
-                return str(candidate)
-    return ""
 
 
 def resolved_emojis(service: "RulesService", guild: Any = None) -> dict[str, str]:
