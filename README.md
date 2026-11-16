@@ -1,4 +1,4 @@
-# Grid A1 Manager Discord Bot
+# SpinBack Manager Discord Bot
 
 This repository preserves the existing SQLite deployment and `DATABASE_PATH` contract. SQLite migrations are additive and schema version 23; use `Database.backup()` before upgrades. A startup schema/integrity check runs before the Discord client starts.
 
@@ -35,6 +35,10 @@ Staff run `/ticket priority` inside a ticket to set it to 🟢 Low, 🔵 Normal,
 ### Wipe announcements
 
 Wipes are scheduled per region instead of announced by hand. `/wipe config` opens a panel for the announcement channel, an optional ping role, and automatic posting; `/wipe add` accepts a wipe as an ISO timestamp or a relative offset (`+2d`, `6h`), `/wipe list` shows what is scheduled soonest-first with a copy-ready countdown, `/wipe remove` cancels one, and `/wipe announce` posts a chosen wipe immediately. With automatic posting on, a background job announces each wipe once when its time arrives and marks it announced, so nothing is posted twice across restarts. `!wipe` prints the same schedule from chat.
+
+### Rules panel
+
+`/rules post channel: #rules` publishes the SpinBack rules panel: a cyan embed titled "SpinBack Rules ✅" with the thank-you and purpose text, one line per rule set, and a button per set — **Discord 🎧 (All discord related rules.)** and **Game 🎮 (General in-game rules.)** — that opens that set privately for the member who pressed it. The starter texts are sensible Discord and in-game rules; `/rules edit section:` opens a form to replace one set with your own wording, and the posted panel refreshes immediately (the buttons never need re-posting). `/rules preview` shows the panel privately before you publish it, and the buttons keep working after a restart.
 
 ### Suggestions
 

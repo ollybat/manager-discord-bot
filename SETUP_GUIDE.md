@@ -1,4 +1,4 @@
-# Grid A1 setup guide
+# SpinBack Manager setup guide
 
 ## Configure the five staff roles
 
@@ -11,6 +11,14 @@ The parameter names and order are exactly `owner_role`, `co_owner_role`, `head_a
 Only the configured owner and co-owner roles can run `/dashboard`. The server owner, bot owner, head admin, admin, moderator, and other staff do not receive dashboard access unless they also hold one of those two configured roles. All five configured roles are nevertheless included in staff permission checks.
 
 Use `/setup roles owner_role: ... co_owner_role: ... head_admin_role: ... admin_role: ... moderator_role: ...` for the five staff roles. Use `/setup roles` to configure the five staff roles; those roles are also pinged for new tickets.
+
+## Name the Discord application
+
+The name members see above every message (for example `Spinback | Manager`) is the Discord application's username, set in the Developer Portal under **General Information → App name**. Every panel, embed, footer, and transcript the bot sends already says **SpinBack Manager**; the portal name is the only part code cannot change for you.
+
+## Publish the rules panel
+
+`/rules post channel: #rules` publishes the rules panel — a cyan embed titled "SpinBack Rules ✅" with the welcome text and one line per rule set, and a button per set (Discord, Game) that opens that set privately. The starter texts cover Discord conduct and in-game conduct, and `/rules edit section: ...` replaces one set with your own wording; the posted panel refreshes straight away, and `/rules preview` shows it privately first. Buttons keep working after a restart.
 
 ## Other commands
 
@@ -32,7 +40,7 @@ Two clean options:
 1. **Remove the public domain** in Railway (service → Settings → Networking → delete the generated domain). A gateway-only bot has nothing to serve, so this is the simplest fix and needs no code change.
 2. **Keep the domain and serve a status page.** The bot already includes a small read-only endpoint (`grid_a1/health.py`). It binds the port Railway injects (`PORT`, falling back to 8080) and answers the domain root, `/health`, `/healthz`, and `/status` with a compact JSON document:
    ```json
-   {"checked_at": "2026-11-16T15:12:42+00:00", "connected_servers": 1, "gateway_latency_ms": 42, "schema_version": 21, "service": "grid-a1-manager", "status": "ok", "uptime_seconds": 5400}
+   {"checked_at": "2026-11-16T15:12:42+00:00", "connected_servers": 1, "gateway_latency_ms": 42, "schema_version": 24, "service": "spinback-manager", "status": "ok", "uptime_seconds": 5400}
    ```
    It exposes no tokens, IDs, guild names, ticket contents, or member data. Unknown paths answer 404, anything other than GET/HEAD answers 405, and a failing status report answers 503 so the bot's own uptime monitor can detect it. `HEALTH_DISABLED=1` turns the endpoint off; `HEALTH_PORT` and `HEALTH_HOST` override the port and bind address. Use this when you want Railway health checks or an external uptime monitor to see a 200.
 
