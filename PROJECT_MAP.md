@@ -8,7 +8,7 @@ Startup loads `.env`, validates settings, configures logging, runs SQLite migrat
 
 ## Modules
 
-- `grid_a1/bot.py`: bot composition, commands, lifecycle, sync safety, event/error handling, anti-links, and loops. `/ticket stats` renders the workload panel, `/ticket priority` sets a ticket's triage priority, and `/ticket transcript` writes an on-demand `.txt` transcript without closing the ticket.
+- `grid_a1/bot.py`: bot composition, commands, lifecycle, sync safety, event/error handling, anti-links, and loops. `/ticket stats` renders the workload panel, `/ticket priority` sets a ticket's triage priority, and `/ticket transcript` writes an on-demand `.txt` transcript without closing the ticket. Identifier options (`/giveaway end`, `/poll end`, `/poll remove`) are autocompleted from live records, heavy commands carry per-member cooldowns, and the shared error handler answers every failure once with a clear ephemeral message.
 - `grid_a1/config.py`: environment settings, logging, and Railway volume/path persistence warnings.
 - `grid_a1/database.py`: SQLite schema repair/migration, ticket/poll/giveaway persistence, owner feedback records, indexes, backup, and audit log.
 - `grid_a1/postgres.py`: optional operator-only PostgreSQL connection/schema sketch; not imported by the bot and not a data migration tool.
@@ -20,13 +20,14 @@ Startup loads `.env`, validates settings, configures logging, runs SQLite migrat
 - `grid_a1/giveaways.py`: private giveaway setup, persistent entry buttons, timer-based winner draws, and active giveaway dashboard.
 - `grid_a1/stats.py`: read-only ticket workload statistics (queue split, closed-ticket windows, first-claim and closure averages, per-region load, per-priority load, claim leaderboard with each claimer's first-claim average, owner rating average).
 - `grid_a1/utils.py`: topic parsing, staff checks, link normalization, safe JSON parsing, and the shared priority/feedback constants.
+- `grid_a1/guides.py`: live command catalog built from the running application-command tree, permission-aware `/help` rendering, per-command detail text, and the autocomplete helpers for poll and giveaway identifiers.
 - `grid_a1/health.py`: optional read-only status endpoint (stdlib HTTP server on the host PORT) used when a public domain is attached; disabled with HEALTH_DISABLED=1.
 - `grid_a1/embeds.py`, `welcomer.py`: user-facing presentation and welcome rendering.
 - `grid_a1/transcript.py`: plain-text ticket transcript renderer (60-column bordered header, indented message blocks, attachment links, no image downloads).
 
 ## Configuration contract
 
-`/setup roles owner_role co_owner_role head_admin_role admin_role moderator_role` accepts exactly five distinct normal roles and is server-owner-only. Those five roles grant staff permissions and are the ticket notification targets. There is no `/setup staff` command. `/dashboard` is restricted to configured owner/co-owner roles and its checks are repeated on every interaction; setup flows use Discord role/channel selectors. Any server member may use `/report`; reports are delivered to the staff-only channel selected in the dashboard. Ticket inactivity is persisted in SQLite and views are re-registered at startup.
+`/setup roles owner_role co_owner_role head_admin_role admin_role moderator_role` accepts exactly five distinct normal roles and is server-owner-only. Those five roles grant staff permissions and are the ticket notification targets. There is no `/setup staff` command. `/dashboard` is restricted to configured owner/co-owner roles and its checks are repeated on every interaction; setup flows use Discord role/channel selectors. Any server member may use `/report`; reports are delivered to the staff-only channel selected in the dashboard. Ticket inactivity is persisted in SQLite and views are re-registered at startup. `/help` is rendered from the live command tree, so it stays accurate without hand-written lists.
 
 ## Reliability notes
 

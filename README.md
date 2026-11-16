@@ -30,6 +30,12 @@ Staff run `/ticket priority` inside a ticket to set it to 🟢 Low, 🔵 Normal,
 
 Run `/setup roles owner_role: ... co_owner_role: ... head_admin_role: ... admin_role: ... moderator_role: ...` if you need to initialize dashboard access first. These five roles are both permission roles and ticket notification targets. There is no `/setup staff` command.
 
+### Command experience
+
+`/help` is generated from the bot's live command tree, so it can never drift out of date: it lists every command the member may use, grouped into sections, with each usage line and the access that command needs, and it hides sections the member cannot use. `/help command:` opens a searchable picker and shows one command in full — purpose, usage, options, and access.
+
+Command identifiers are autocompleted instead of copied by hand: `/giveaway end` suggests this server's active giveaways by reward, `/poll end` suggests its open polls by question, and `/poll remove` lists every poll in the server with its status. Expensive commands (`/report`, `/ticket stats`, `/ticket transcript`, `/info server`, `/embed`, `/embed-edit`) are rate-limited per member, and every failure answers once, privately and in plain language: a cooldown says how long to wait, a permission problem names the missing permission or points at `/help command:<name>`, and an unexpected error is logged while the member still gets a short explanation.
+
 ### Optional status endpoint (public domain / health checks)
 
 The bot only connects outward to Discord, so a host that attaches a public domain gets nothing to answer with and shows `502 Application failed to respond` — that never affects commands, which run over the gateway connection. Two options: remove the domain in the host's settings (a gateway-only bot has nothing to serve), or keep it and let the built-in read-only endpoint answer. It binds the port the host injects (`PORT`, falling back to 8080) and answers `/`, `/health`, `/healthz`, and `/status` with a small JSON document (status, uptime, connected servers, gateway latency, schema version). It never exposes tokens, IDs, guild names, ticket contents, or member data; a failing report answers 503, unknown paths 404, and anything but GET/HEAD 405. `HEALTH_DISABLED=1` turns it off, `HEALTH_PORT` and `HEALTH_HOST` override the port and bind address, and startup keeps running normally if the port cannot be bound.
