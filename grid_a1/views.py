@@ -291,6 +291,45 @@ class VerificationConfirm(discord.ui.View):
         except discord.Forbidden: return await interaction.followup.send("❌ I cannot assign the role. Check Manage Roles and role order.", ephemeral=True)
         await interaction.edit_original_response(embed=embed("💜 Verification complete", f"🎉 Welcome, {interaction.user.mention}! You now have {role.mention}."), view=None)
 
+class ConfirmView(discord.ui.View):
+    """Ask the caller to confirm a destructive action before it runs."""
+
+    def __init__(self, on_confirm, *, author_id: int, confirm_label: str = "Confirm", timeout: float = 90.0):
+        super().__init__(timeout=timeout)
+        self._on_confirm = on_confirm
+        self.author_id = author_id
+        self.message: discord.Message | None = None
+        confirm = discord.ui.Button(label=confirm_label[:80], style=discord.ButtonStyle.danger, emoji="✅")
+        confirm.callback = self._confirm
+        cancel = discord.ui.Button(label="Cancel", style=discord.ButtonStyle.secondary, emoji="✖️")
+        cancel.callback = self._cancel
+        self.add_item(confirm)
+        self.add_item(cancel)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message("🔒 Only the member who ran the command can answer this prompt.", ephemeral=True)
+            return False
+        return True
+
+    async def _confirm(self, interaction: discord.Interaction) -> None:
+        self.stop()
+        await self._on_confirm(interaction)
+
+    async def _cancel(self, interaction: discord.Interaction) -> None:
+        self.stop()
+        await interaction.response.edit_message(embed=embed("✖️ Cancelled", "Nothing was changed."), view=None)
+
+    async def on_timeout(self) -> None:
+        """Explain the expired prompt instead of leaving dead buttons."""
+        if self.message is None:
+            return
+        try:
+            await self.message.edit(embed=embed("⌛ Confirmation expired", "Nothing was changed. Run the command again if you still want it."), view=None)
+        except discord.HTTPException:
+            log.debug("Could not update an expired confirmation prompt", exc_info=True)
+
+
 class OwnerInactivityView(discord.ui.View):
     """Buttons sent privately to a ticket owner after a red inactivity warning."""
     def __init__(self, service: TicketService, ticket_id: str):
