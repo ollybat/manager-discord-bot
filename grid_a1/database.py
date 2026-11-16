@@ -7,9 +7,21 @@ from pathlib import Path
 from typing import Any
 from .utils import DEFAULT_PRIORITY, FEEDBACK_SCORES, PRIORITIES, utcnow, safe_json_list
 SCHEMA_VERSION = 21
+
+PERMISSION_ROLE_FIELDS = (
+    "owner_role",
+    "co_owner_role",
+    "head_admin_role",
+    "admin_role",
+    "moderator_role",
+)
+ADMIN_ROLE_FIELDS = PERMISSION_ROLE_FIELDS[:4]
 NOTE_ACTION = "note"
 MODERATION_ACTIONS = ("kick", "ban", "warn", "timeout", "unban", "untimeout")
 class Database:
+    PERMISSION_ROLE_FIELDS = PERMISSION_ROLE_FIELDS
+    ADMIN_ROLE_FIELDS = ADMIN_ROLE_FIELDS
+
     def __init__(self, path: Path) -> None:
         self.path = path
 
@@ -1190,7 +1202,21 @@ class Database:
         self.upsert_config(guild_id,anti_links_allowed_roles=json.dumps(roles[:100]));return role_id in roles
     def configured_permission_role_ids(self,guild_id):
         row=self.config(guild_id)
-        return [int(row[n]) for n in ('owner_role','co_owner_role','head_admin_role','admin_role','moderator_role') if row and row[n]]
+        return [int(row[n]) for n in self.PERMISSION_ROLE_FIELDS if row and row[n]]
+
+    def configured_admin_role_ids(self, guild_id):
+        """Role IDs that satisfy the elevated setup and moderation commands."""
+        row = self.config(guild_id)
+        return [int(row[n]) for n in self.ADMIN_ROLE_FIELDS if row and row[n]]
+
+    def missing_permission_roles(self, guild_id) -> list[str]:
+        """Names of the staff tiers that still need configuring."""
+        row = self.config(guild_id)
+        return [name for name in self.PERMISSION_ROLE_FIELDS if not row or not row[name]]
+
+    def permission_roles_ready(self, guild_id) -> bool:
+        """True only when /setup roles has configured every staff tier."""
+        return not self.missing_permission_roles(guild_id)
 
     def ticket_access_role_ids(self, guild_id):
         """Role IDs allowed to view tickets, deduplicated in permission-first order."""
