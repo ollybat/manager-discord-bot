@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import discord
+import logging
 import time
 
 from .embeds import embed
 from .tickets import TicketService, claim
-from .utils import active_ticket_owner, inactivity_custom_id, is_ticket, parse_ticket_topic, staff_member
+from .utils import active_ticket_owner, feedback_custom_id, inactivity_custom_id, is_ticket, parse_ticket_topic, staff_member
+
+log = logging.getLogger(__name__)
 
 QUESTION_SETS = {
     "general": ("What do you need help with?", "Which server or area is involved?"),
@@ -349,6 +352,41 @@ class OwnerInactivityView(discord.ui.View):
     async def close(self, interaction: discord.Interaction, button: discord.ui.Button):
         if not await self._owner_check(interaction): return
         await self.service.close_owner_from_dm(interaction, self.ticket_id, "Closed by ticket owner from inactivity notice")
+
+
+class TicketFeedbackView(discord.ui.View):
+    """Star-rating buttons sent privately to a ticket owner after closure."""
+    def __init__(self, service: TicketService, ticket_id: str):
+        super().__init__(timeout=None); self.service = service; self.ticket_id = ticket_id
+        for item in self.children:
+            if isinstance(item, discord.ui.Button) and item.custom_id:
+                item.custom_id = feedback_custom_id(int(item.custom_id.rsplit(":", 1)[-1]), ticket_id)
+    async def _rate(self, interaction: discord.Interaction, score: int) -> None:
+        row = self.service.db.ticket(self.ticket_id)
+        if not row or int(row["owner_id"]) != interaction.user.id:
+            return await interaction.response.send_message("🔒 Only the ticket owner can rate this ticket.", ephemeral=True)
+        if not interaction.response.is_done(): await interaction.response.defer(ephemeral=True)
+        try:
+            self.service.db.save_feedback(self.ticket_id, int(row["guild_id"]), interaction.user.id, score)
+        except Exception:
+            log.exception("Could not record feedback for ticket %s", self.ticket_id)
+            return await interaction.followup.send("⚠️ I could not save your rating. Please try again later.", ephemeral=True)
+        await interaction.followup.send(f"{'⭐' * score} Thanks — your rating of **{score}/5** was recorded. Tap another star to change it.", ephemeral=True)
+    @discord.ui.button(label="1", emoji="⭐", style=discord.ButtonStyle.danger, custom_id="grid-a1:feedback:1")
+    async def rate_one(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await self._rate(interaction, 1)
+    @discord.ui.button(label="2", emoji="⭐", style=discord.ButtonStyle.secondary, custom_id="grid-a1:feedback:2")
+    async def rate_two(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await self._rate(interaction, 2)
+    @discord.ui.button(label="3", emoji="⭐", style=discord.ButtonStyle.secondary, custom_id="grid-a1:feedback:3")
+    async def rate_three(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await self._rate(interaction, 3)
+    @discord.ui.button(label="4", emoji="⭐", style=discord.ButtonStyle.success, custom_id="grid-a1:feedback:4")
+    async def rate_four(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await self._rate(interaction, 4)
+    @discord.ui.button(label="5", emoji="⭐", style=discord.ButtonStyle.success, custom_id="grid-a1:feedback:5")
+    async def rate_five(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await self._rate(interaction, 5)
 
 
 class TicketControls(discord.ui.View):
