@@ -25,9 +25,14 @@ from .polls import (
     poll_dashboard_embed,
     poll_embed,
 )
-from .stats import collect as collect_ticket_stats
+from .stats import (
+    collect as collect_ticket_stats,
+    moderation_history_lines,
+    note_lines,
+    queue_overview,
+)
 from .utils import PRIORITIES, PRIORITY_LABELS, anti_link_config_updates, is_http_url, is_ticket, parse_ticket_topic, staff_member, detected_external_links, normalize_domain, safe_json_list, utcnow
-from .views import DashboardView, OwnerInactivityView, TicketControls, TicketFeedbackView, TicketPanel, VerifyPanel
+from .views import ConfirmView, DashboardView, OwnerInactivityView, TicketControls, TicketFeedbackView, TicketPanel, VerifyPanel
 from .welcomer import missing, send_welcome, welcome_embed
 from .commands import OwnerConfigurationError, OwnerOnlyError, register_commands
 settings = Settings.from_env(); configure_logging(settings.log_level)
@@ -479,6 +484,25 @@ async def dashboard(i: discord.Interaction):
     view = DashboardView(bot.database, settings.owner_id)
     await i.followup.send(embed=view.dashboard_embed(i.guild), view=view, ephemeral=True)
 
+@bot.tree.command(name="modlog", description="🧾 Show a member's recorded moderation history")
+@staff()
+@app_commands.guild_only()
+@app_commands.describe(member="Member whose recorded kick, ban, warn, and timeout history you want")
+@app_commands.checks.cooldown(5, 60.0, key=lambda i: (i.guild_id, i.user.id))
+async def modlog(i: discord.Interaction, member: discord.Member):
+    """Summarise the moderation actions recorded against one member."""
+    rows = bot.database.member_history(i.guild.id, member.id)
+    result = embed(
+        "🧾 Moderation history",
+        f"Recorded actions against {member.mention}, newest first.",
+    )
+    result.add_field(
+        name=f"Records ({len(rows)})",
+        value="\n".join(moderation_history_lines(rows)) or "Nothing recorded for this member.",
+        inline=False,
+    )
+    result.set_footer(text="Kick, ban, warn, and timeout records only; warnings are recorded, not applied automatically.")
+    await i.response.send_message(embed=result, ephemeral=True)
 @bot.tree.command(name="kick", description="👢 Remove a member from this server with a recorded reason")
 @staff()
 @app_commands.describe(member="Member to kick", reason="Why the member is being kicked")
@@ -747,6 +771,55 @@ async def ticket_priority(i: discord.Interaction, priority: app_commands.Choice[
     if row["priority"] == priority.value: return await i.response.send_message(f"ℹ️ This ticket is already **{PRIORITY_LABELS[priority.value]}**.", ephemeral=True)
     if not bot.database.set_priority(row["ticket_id"], priority.value, i.user.id): return await i.response.send_message("⚠️ This ticket closed while the priority was being set.", ephemeral=True)
     await i.response.send_message(embed=priority_embed(priority.value, i.user))
+@ticket_group.command(name="list", description="🗂️ List this server's open tickets, most urgent first")
+@staff()
+@app_commands.checks.cooldown(5, 60.0, key=lambda i: (i.guild_id, i.user.id))
+async def ticket_list(i: discord.Interaction):
+    if not i.guild:
+        return await i.response.send_message("❌ Open the ticket queue inside a server.", ephemeral=True)
+    rows = bot.database.open_tickets(i.guild.id)
+    lines, hidden = queue_overview(rows)
+    result = embed(
+        f"🗂️ Open ticket queue — {i.guild.name}",
+        f"**{len(rows)}** open ticket{'s' if len(rows) != 1 else ''}, most urgent first, oldest at the top of each priority.",
+    )
+    result.add_field(
+        name="Tickets",
+        value="\n".join(lines) or "Nothing is open right now. 🎉",
+        inline=False,
+    )
+    if hidden:
+        result.set_footer(text=f"…and {hidden} more not shown. Clear the oldest tickets first.")
+    await i.response.send_message(embed=result, ephemeral=True)
+@ticket_group.command(name="note", description="🗒️ Save an internal staff note on this ticket")
+@staff()
+@app_commands.describe(text="Note only staff can read; the ticket owner never sees it")
+async def ticket_note(i: discord.Interaction, text: str):
+    if not isinstance(i.channel, discord.TextChannel) or not is_ticket(i.channel):
+        return await i.response.send_message("❌ This command only works inside an active ticket.", ephemeral=True)
+    row = bot.database.ticket_by_channel(i.channel.id)
+    if not row:
+        return await i.response.send_message("⚠️ This ticket is already closed or unavailable.", ephemeral=True)
+    try:
+        stored = bot.database.add_ticket_note(row["ticket_id"], i.guild.id, i.user.id, text)
+    except ValueError as error:
+        return await i.response.send_message(f"❌ {error}", ephemeral=True)
+    await i.response.send_message(
+        embed=embed("🗒️ Note saved", f"Internal note recorded on this ticket:\n> {stored}\n\nUse /ticket notes to read the history."),
+        ephemeral=True,
+    )
+@ticket_group.command(name="notes", description="🗂️ Read the internal staff notes on this ticket")
+@staff()
+async def ticket_notes(i: discord.Interaction):
+    if not isinstance(i.channel, discord.TextChannel) or not is_ticket(i.channel):
+        return await i.response.send_message("❌ This command only works inside an active ticket.", ephemeral=True)
+    row = bot.database.ticket_by_channel(i.channel.id)
+    if not row:
+        return await i.response.send_message("⚠️ This ticket is already closed or unavailable.", ephemeral=True)
+    lines = note_lines(bot.database.ticket_notes(i.guild.id, row["ticket_id"]))
+    result = embed("🗂️ Internal ticket notes", f"Staff-only notes on {i.channel.mention}, newest first.")
+    result.add_field(name="Notes", value="\n".join(lines) or "No notes yet. Add one with /ticket note.", inline=False)
+    await i.response.send_message(embed=result, ephemeral=True)
 @ticket_group.command(name="stats", description="📊 Show ticket workload, response times, and top claimers")
 @staff()
 @app_commands.checks.cooldown(5, 60.0, key=lambda i: (i.guild_id, i.user.id))
@@ -802,26 +875,44 @@ async def giveaway_end(interaction: discord.Interaction, giveaway_id: str) -> No
     normalized_id = giveaway_id.strip().upper()
     if not bot.database.giveaway_for_guild(guild.id, normalized_id):
         return await interaction.response.send_message("⚠️ I could not find that giveaway in this server.", ephemeral=True)
-    await interaction.response.defer(ephemeral=True)
+    entries = bot.database.giveaway_entry_count(normalized_id)
+
+    async def draw_winners(target: discord.Interaction) -> None:
+        await target.response.defer(ephemeral=True)
+        try:
+            state, winners, panel_updated = await bot.giveaways.finish(
+                guild,
+                normalized_id,
+                ended_by=interaction.user.id,
+                force=True,
+            )
+        except Exception:
+            log.exception("Manual giveaway end failed for %s", normalized_id)
+            return await target.followup.send("❌ I could not end that giveaway. Check its public panel and try again.", ephemeral=True)
+        if state == "already_ended":
+            return await target.followup.send("ℹ️ That giveaway has already ended.", ephemeral=True)
+        if state != "ended":
+            return await target.followup.send("⚠️ That giveaway is no longer active.", ephemeral=True)
+        winner_text = ", ".join(f"<@{user_id}>" for user_id in winners) if winners else "No one entered."
+        message = f"✅ Giveaway `{normalized_id}` ended. Winners: {winner_text}"
+        if not panel_updated:
+            message += " The winner draw was saved, but I could not refresh the public panel."
+        await target.followup.send(message, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
+
+    view = ConfirmView(draw_winners, author_id=interaction.user.id, confirm_label="Draw winners now")
+    await interaction.response.send_message(
+        embed=embed(
+            "🎉 End this giveaway now?",
+            f"Giveaway `{normalized_id}` currently has **{entries}** entr{'y' if entries == 1 else 'ies'}.\n"
+            "Ending it draws the winners straight away and cannot be undone.",
+        ),
+        view=view,
+        ephemeral=True,
+    )
     try:
-        state, winners, panel_updated = await bot.giveaways.finish(
-            guild,
-            normalized_id,
-            ended_by=interaction.user.id,
-            force=True,
-        )
-    except Exception:
-        log.exception("Manual giveaway end failed for %s", normalized_id)
-        return await interaction.followup.send("❌ I could not end that giveaway. Check its public panel and try again.", ephemeral=True)
-    if state == "already_ended":
-        return await interaction.followup.send("ℹ️ That giveaway has already ended.", ephemeral=True)
-    if state != "ended":
-        return await interaction.followup.send("⚠️ That giveaway is no longer active.", ephemeral=True)
-    winner_text = ", ".join(f"<@{user_id}>" for user_id in winners) if winners else "No one entered."
-    message = f"✅ Giveaway `{normalized_id}` ended. Winners: {winner_text}"
-    if not panel_updated:
-        message += " The winner draw was saved, but I could not refresh the public panel."
-    await interaction.followup.send(message, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
+        view.message = await interaction.original_response()
+    except discord.HTTPException:
+        log.debug("Could not capture the giveaway confirmation prompt for its timeout message")
 
 
 def _may_manage_poll(interaction: discord.Interaction, poll) -> bool:
@@ -1153,46 +1244,65 @@ async def poll_remove(interaction: discord.Interaction, poll_id: str) -> None:
         )
         return
 
-    await interaction.response.defer(ephemeral=True)
-    try:
-        await bot.polls.remove_public_message(guild, poll)
-    except discord.Forbidden:
-        await interaction.followup.send(
-            "❌ I could not delete the poll message. The poll and votes were kept; check Manage Messages.",
-            ephemeral=True,
-        )
-        return
-    except discord.HTTPException as error:
-        log.warning("Could not remove poll message %s: %s", normalized_poll_id, error)
-        await interaction.followup.send(
-            "⚠️ Discord could not remove the poll message right now. The poll data was kept.",
-            ephemeral=True,
-        )
-        return
+    async def remove_poll(target: discord.Interaction) -> None:
+        await target.response.defer(ephemeral=True)
+        try:
+            await bot.polls.remove_public_message(guild, poll)
+        except discord.Forbidden:
+            await target.followup.send(
+                "❌ I could not delete the poll message. The poll and votes were kept; check Manage Messages.",
+                ephemeral=True,
+            )
+            return
+        except discord.HTTPException as error:
+            log.warning("Could not remove poll message %s: %s", normalized_poll_id, error)
+            await target.followup.send(
+                "⚠️ Discord could not remove the poll message right now. The poll data was kept.",
+                ephemeral=True,
+            )
+            return
 
-    try:
-        removed = bot.database.remove_poll(
-            normalized_poll_id,
-            removed_by=interaction.user.id,
-        )
-    except Exception:
-        log.exception("Public poll %s was removed but database cleanup failed", normalized_poll_id)
-        await interaction.followup.send(
-            "⚠️ The public message was removed, but I could not remove its stored record. Contact an admin before recreating it.",
-            ephemeral=True,
-        )
-        return
-    if not removed:
-        await interaction.followup.send(
-            "⚠️ The poll message was removed, but its record was already gone.",
-            ephemeral=True,
-        )
-        return
+        try:
+            removed = bot.database.remove_poll(
+                normalized_poll_id,
+                removed_by=interaction.user.id,
+            )
+        except Exception:
+            log.exception("Public poll %s was removed but database cleanup failed", normalized_poll_id)
+            await target.followup.send(
+                "⚠️ The public message was removed, but I could not remove its stored record. Contact an admin before recreating it.",
+                ephemeral=True,
+            )
+            return
+        if not removed:
+            await target.followup.send(
+                "⚠️ The poll message was removed, but its record was already gone.",
+                ephemeral=True,
+            )
+            return
 
-    await interaction.followup.send(
-        f"🗑️ Poll `{normalized_poll_id}` and its stored votes were removed.",
+        await target.followup.send(
+            f"🗑️ Poll `{normalized_poll_id}` and its stored votes were removed.",
+            ephemeral=True,
+        )
+
+    view = ConfirmView(
+        remove_poll,
+        author_id=interaction.user.id,
+        confirm_label="Delete this poll",
+    )
+    await interaction.response.send_message(
+        embed=embed(
+            "🗑️ Delete this poll?",
+            f"Poll `{normalized_poll_id}` and the votes stored for it will be removed for everyone. This cannot be undone.",
+        ),
+        view=view,
         ephemeral=True,
     )
+    try:
+        view.message = await interaction.original_response()
+    except discord.HTTPException:
+        log.debug("Could not capture the poll confirmation prompt for its timeout message")
 
 
 @poll_remove.autocomplete("poll_id")
