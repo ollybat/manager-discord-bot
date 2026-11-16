@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import platform
 import time
+from datetime import timedelta
 from typing import Optional
 
 import discord
@@ -12,6 +13,8 @@ from discord import app_commands
 
 from .brand import BRAND_SHORT
 from .embeds import embed
+from .stats import moderation_history_lines, row_value
+from .utils import staff_member, utcnow
 from .guides import (
     catalog,
     command_detail,
@@ -57,7 +60,7 @@ def register_commands(bot: discord.Client) -> None:
 
     @bot.tree.command(
         name="help",
-        description="📚 Browse every command you can use, with usage and access",
+        description="Browse every command you can use, with usage and access",
     )
     @app_commands.describe(
         command="Leave empty for the full guide, or pick one command for details"
@@ -126,7 +129,7 @@ def register_commands(bot: discord.Client) -> None:
         ]
     @bot.tree.command(
         name="ping",
-        description="🏓 View private bot health, latency, and runtime details (owner only)",
+        description="View private bot health, latency, and runtime details (owner only)",
     )
     async def ping_command(interaction: discord.Interaction) -> None:
         """Return health information without exposing environment values or tokens."""
@@ -184,7 +187,7 @@ def register_commands(bot: discord.Client) -> None:
 
     @bot.tree.command(
         name="embed",
-        description="🎨 Post a custom embed with an optional image (Manage Messages)",
+        description="Post a custom embed with an optional image (Manage Messages)",
     )
     @app_commands.checks.has_permissions(manage_messages=True, send_messages=True)
     @app_commands.checks.cooldown(5, 60.0, key=lambda i: (i.guild_id, i.user.id))
@@ -221,7 +224,7 @@ def register_commands(bot: discord.Client) -> None:
 
     @bot.tree.command(
         name="sync",
-        description="🔄 Synchronize application commands (bot owner only)",
+        description="Synchronize application commands (bot owner only)",
     )
     async def sync_command(interaction: discord.Interaction) -> None:
         """Run the globally rate-limited application-command synchronization."""
@@ -259,7 +262,7 @@ def register_commands(bot: discord.Client) -> None:
 
     @bot.tree.command(
         name="embed-edit",
-        description="🖊️ Edit a bot-authored embed in this channel",
+        description="Edit a bot-authored embed in this channel",
     )
     @app_commands.checks.has_permissions(manage_messages=True)
     @app_commands.checks.cooldown(5, 60.0, key=lambda i: (i.guild_id, i.user.id))
@@ -338,3 +341,237 @@ def register_commands(bot: discord.Client) -> None:
             attachments=[attachment] if attachment else discord.utils.MISSING,
         )
         await interaction.followup.send("✅ Embed updated.", ephemeral=True)
+
+    def _staff_only():
+        """Refuse members without a configured staff role, matching the runtime access checks."""
+        async def predicate(interaction: discord.Interaction) -> bool:
+            if staff_member(interaction.user, bot.database):
+                return True
+            raise app_commands.CheckFailure("Only members with a configured staff role can use that command.")
+        return app_commands.check(predicate)
+
+    @bot.tree.command(
+        name="avatar",
+        description="Show a member's avatar, and their banner when they have one",
+    )
+    @app_commands.guild_only()
+    @app_commands.describe(member="Member whose avatar you want; omit for your own")
+    async def avatar_command(
+        interaction: discord.Interaction,
+        member: Optional[discord.Member] = None,
+    ) -> None:
+        """Show the full-size avatar so members can save or share it."""
+        target = member or interaction.user
+        if not isinstance(target, (discord.Member, discord.User)):
+            await interaction.response.send_message(
+                "❌ Pick a member or user first.",
+                ephemeral=True,
+            )
+            return
+        full_size = target.display_avatar.replace(size=1024, static_format="png").url
+        card = embed(f"{target.display_name} • Avatar", f"[Open full size]({full_size})")
+        card.set_image(url=full_size)
+        banner = getattr(target, "display_banner", None) or getattr(target, "banner", None)
+        if banner is not None:
+            card.add_field(name="Banner", value=f"[Open full size]({banner.url})", inline=False)
+        await interaction.response.send_message(embed=card, ephemeral=True)
+
+    @bot.tree.command(
+        name="slowmode",
+        description="Set this channel's slowmode in seconds (staff only)",
+    )
+    @app_commands.guild_only()
+    @_staff_only()
+    @app_commands.describe(
+        seconds="Seconds members must wait between messages; 0 turns slowmode off",
+        channel="Channel to change; omit for this channel",
+        reason="Why slowmode is changing",
+    )
+    async def slowmode_command(
+        interaction: discord.Interaction,
+        seconds: app_commands.Range[int, 0, 21600],
+        channel: Optional[discord.TextChannel] = None,
+        reason: str = "No reason provided",
+    ) -> None:
+        """Apply a slowmode change and record it in the audit log."""
+        target = channel or interaction.channel
+        if not isinstance(target, discord.TextChannel):
+            await interaction.response.send_message(
+                "❌ Slowmode needs a normal text channel.",
+                ephemeral=True,
+            )
+            return
+        try:
+            await target.edit(
+                slowmode_delay=seconds,
+                reason=f"{reason} • Moderator: {interaction.user}",
+            )
+        except (discord.Forbidden, discord.HTTPException):
+            await interaction.response.send_message(
+                "❌ I cannot change that channel's slowmode. Check Manage Channels.",
+                ephemeral=True,
+            )
+            return
+        if interaction.guild is not None:
+            bot.database.audit(
+                interaction.guild.id,
+                target.id,
+                interaction.user.id,
+                "slowmode",
+                f"seconds={seconds}; {discord.utils.escape_markdown(reason)[:400]}",
+            )
+        state = "turned off" if seconds == 0 else f"set to {seconds} second(s)"
+        await interaction.response.send_message(
+            embed=embed("Slowmode updated", f"Slowmode in {target.mention} is now {state}."),
+            ephemeral=True,
+        )
+
+    @bot.tree.command(
+        name="modstats",
+        description="Summarise this server's recorded moderation activity (staff only)",
+    )
+    @app_commands.guild_only()
+    @_staff_only()
+    @app_commands.describe(days="How many days back to count (1-90)")
+    async def modstats_command(
+        interaction: discord.Interaction,
+        days: app_commands.Range[int, 1, 90] = 7,
+    ) -> None:
+        """Count recorded moderation actions per type and per moderator."""
+        since = (utcnow() - timedelta(days=days)).isoformat()
+        rows = bot.database.moderation_activity(interaction.guild.id, since)
+        per_action: dict[str, int] = {}
+        per_actor: dict[int, int] = {}
+        for row in rows:
+            action = str(row_value(row, "action", "unknown"))
+            per_action[action] = per_action.get(action, 0) + 1
+            actor = row_value(row, "actor_id")
+            if actor:
+                per_actor[int(actor)] = per_actor.get(int(actor), 0) + 1
+        card = embed(
+            "Moderation activity",
+            f"Recorded actions in the last {days} day(s): {len(rows)}",
+        )
+        card.add_field(
+            name="By action",
+            value="\n".join(
+                f"{action}: {count}"
+                for action, count in sorted(per_action.items(), key=lambda item: (-item[1], item[0]))
+            )[:1024]
+            or "Nothing recorded in this window.",
+            inline=False,
+        )
+        card.add_field(
+            name="Most active moderators",
+            value="\n".join(
+                f"<@{actor}>: {count}"
+                for actor, count in sorted(per_actor.items(), key=lambda item: (-item[1], item[0]))[:5]
+            )[:1024]
+            or "No staff actions recorded.",
+            inline=False,
+        )
+        if rows:
+            card.add_field(
+                name="Newest record",
+                value="\n".join(moderation_history_lines(rows, 1))[:1024],
+                inline=False,
+            )
+        card.set_footer(text="Counts the newest 500 records in the window; timestamps are UTC.")
+        await interaction.response.send_message(embed=card, ephemeral=True)
+
+
+def register_info_commands(bot: discord.Client, info_group: app_commands.Group) -> None:
+    """Attach the /info subcommands once bot.py has published the group on the tree."""
+    @info_group.command(
+        name="user",
+        description="Show a member's account age, join date, roles, staff access, and records",
+    )
+    @app_commands.guild_only()
+    @app_commands.describe(member="Member to inspect; omit to inspect yourself")
+    async def info_user(
+        interaction: discord.Interaction,
+        member: Optional[discord.Member] = None,
+    ) -> None:
+        """Render a member card from live Discord data plus recorded moderation history."""
+        target = member or interaction.user
+        if interaction.guild is None or not isinstance(target, discord.Member):
+            await interaction.response.send_message(
+                "❌ Use this inside a server, on a server member.",
+                ephemeral=True,
+            )
+            return
+        rows = bot.database.member_history(interaction.guild.id, target.id, 25)
+        roles = [role.mention for role in reversed(target.roles) if not role.is_default()]
+        card = embed(f"{target.display_name}", f"Member card for {target.mention}.")
+        card.set_thumbnail(url=target.display_avatar.url)
+        card.add_field(
+            name="Account created",
+            value=f"<t:{int(target.created_at.timestamp())}:R>\n<t:{int(target.created_at.timestamp())}:D>",
+            inline=True,
+        )
+        if target.joined_at is not None:
+            card.add_field(
+                name="Joined this server",
+                value=f"<t:{int(target.joined_at.timestamp())}:R>\n<t:{int(target.joined_at.timestamp())}:D>",
+                inline=True,
+            )
+        card.add_field(
+            name=f"Roles ({len(roles)})",
+            value=", ".join(roles[:20])[:1024] or "No roles yet.",
+            inline=False,
+        )
+        card.add_field(
+            name="Staff access",
+            value="Yes — holds a role chosen in /setup roles."
+            if staff_member(target, bot.database)
+            else "No — member access only.",
+            inline=False,
+        )
+        card.add_field(
+            name=f"Moderation records ({len(rows)})",
+            value="\n".join(moderation_history_lines(rows, 3))[:1024]
+            or "Nothing recorded for this member.",
+            inline=False,
+        )
+        card.set_footer(text="Records are the newest 25 kick, ban, warn, and timeout entries.")
+        await interaction.response.send_message(embed=card, ephemeral=True)
+
+    @info_group.command(
+        name="bot",
+        description="Show this bot's latency, uptime, servers, and stored data status",
+    )
+    async def info_bot(interaction: discord.Interaction) -> None:
+        """Public liveness card; never publishes tokens, secrets, or owner-only details."""
+        uptime_seconds = max(0, int(time.time() - getattr(bot, "started_at", time.time())))
+        days, remaining = divmod(uptime_seconds, 86_400)
+        hours, remaining = divmod(remaining, 3_600)
+        minutes, seconds = divmod(remaining, 60)
+        gateway_ms = round(bot.latency * 1_000) if bot.latency >= 0 else None
+        health = bot.database.schema_check()
+        members = sum(getattr(guild, "member_count", 0) or 0 for guild in bot.guilds)
+        card = embed(
+            f"{BRAND_SHORT} • Bot status",
+            "Live health check for the running bot instance.",
+        )
+        card.add_field(
+            name="Gateway",
+            value=f"`{gateway_ms} ms`" if gateway_ms is not None else "`Unavailable`",
+            inline=True,
+        )
+        card.add_field(
+            name="Uptime",
+            value=f"`{days}d {hours}h {minutes}m {seconds}s`",
+            inline=True,
+        )
+        card.add_field(name="Servers", value=f"`{len(bot.guilds)}`", inline=True)
+        card.add_field(name="Members reached", value=f"`{members}`", inline=True)
+        card.add_field(name="Commands", value=f"`{len(catalog(bot.tree))}`", inline=True)
+        card.add_field(
+            name="Stored data",
+            value="`Healthy`"
+            if health.get("ok")
+            else f"`Needs attention` — schema {health.get('schema')}",
+            inline=True,
+        )
+        card.set_footer(text="Counts are per instance and exclude tokens and secret values.")
+        await interaction.response.send_message(embed=card, ephemeral=True)
