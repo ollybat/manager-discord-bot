@@ -18,6 +18,8 @@ Server managers can use `/giveaway config` to choose an announcement channel, op
 
 Closing a ticket uploads a plain-text transcript to the transcript channel before the channel is deleted: a bordered header with the server, ticket channel, message count, created and closed times, the ticket owner and the staff member who claimed it, then one indented block per message, then a generated-by footer. All times are UTC. Attachments are kept as links, so transcripts stay small and upload quickly.
 
+Staff can run `/ticket stats` for a live workload panel: queue size split into claimed and unclaimed, closures in the last 7 and 30 days, average time to first staff claim, average time to closure, open tickets per region, and the most active claimers. `/ticket transcript` writes a plain-text transcript of the current ticket on demand without closing it.
+
 Run `/setup roles owner_role: ... co_owner_role: ... head_admin_role: ... admin_role: ... moderator_role: ...` if you need to initialize dashboard access first. These five roles are both permission roles and ticket notification targets. There is no `/setup staff` command.
 
 ### Keep data across Railway restarts and redeploys
