@@ -31,6 +31,8 @@ The name members see above every message (for example `Spinback | Manager`) is t
 `/verifypanel channel role`
 `/anti-links enabled:true action:delete_warn`
 
+Day to day, `/info user` shows a member card (account age, join date, roles, staff access, and their recorded moderation history), `/info bot` shows this instance has latency, uptime, servers, command count, and stored-data check, `/avatar` posts a full-size avatar, `/slowmode seconds: 30` sets a channel slowmode (staff only), and `/modstats days: 7` summarises the recorded moderation activity in that window.
+
 ## Keep data across Railway restarts and redeploys
 
 The bot stores its SQLite database at `DATABASE_PATH`. For Railway, attach a persistent Volume to the bot service and set the volume mount path to `/data`; set the service variable `DATABASE_PATH=/data/manager.sqlite3`. The application cannot create or attach the Railway Volume from source code. On startup it now warns if Railway reports no volume mount or if the database path is outside the mounted directory. Keep the Volume attached when redeploying; deleting it removes the database.
