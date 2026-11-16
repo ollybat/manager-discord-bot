@@ -255,22 +255,53 @@ class SpinBackFeatureTests(unittest.TestCase):
         self.assertIn("suggestion channel is missing", second.sent.calls[0][0][0].lower())
 
 
-    def test_rules_panel_matches_the_published_layout(self):
+    def test_rules_panel_puts_the_buttons_inside_the_container(self):
         from grid_a1.brand import BRAND_NAME, BRAND_SHORT
-        from grid_a1.rules import RULES_COLOUR, rules_panel_embed
+        from grid_a1.rules import RULES_COLOUR, RulesService, rules_panel_view
 
         self.assertEqual(BRAND_NAME, "SpinBack Manager")
         self.assertEqual(BRAND_SHORT, "SpinBack")
-        panel = rules_panel_embed()
-        self.assertEqual(panel.title, "SpinBack Rules ✅")
-        self.assertIn("Thank you all for reading and respecting these rules.", panel.description)
-        self.assertIn("best competitive server", panel.description)
+
+        class FakeDatabase:
+            def rule_text(self, guild_id, section):
+                return None
+
+            def rule_row(self, guild_id, section):
+                return None
+
+        view = rules_panel_view(RulesService(FakeDatabase()))
+        self.assertIsInstance(view, discord.ui.LayoutView)
+        self.assertIsNone(view.timeout)
+        self.assertEqual(len(view.children), 1)
+        container = view.children[0]
+        self.assertIsInstance(container, discord.ui.Container)
+        self.assertEqual(container.accent_colour, RULES_COLOUR)
+
+        walk = list(view.walk_children())
+        texts = [item.content for item in walk if isinstance(item, discord.ui.TextDisplay)]
+        self.assertEqual(texts[0], "# SpinBack Rules ✅")
+        self.assertIn("Thank you all for reading and respecting these rules.", texts[1])
+        self.assertIn("best competitive server", texts[1])
+        self.assertIn("**Discord 🎧**", texts[2])
+        self.assertIn("All discord related rules.", texts[2])
+        self.assertIn("**Game 🎮**", texts[3])
+        self.assertIn("General in-game rules.", texts[3])
+        self.assertIn("Powered by SpinBack", texts[-1])
+
+        separators = [item for item in walk if isinstance(item, discord.ui.Separator)]
+        self.assertEqual(len(separators), 1)
+        sections = [item for item in walk if isinstance(item, discord.ui.Section)]
+        self.assertEqual(len(sections), 2)
+        buttons = [item for item in walk if isinstance(item, discord.ui.Button)]
+        self.assertEqual([button.label for button in buttons], ["Discord", "Game"])
         self.assertEqual(
-            [(field.name, field.value) for field in panel.fields],
-            [("Discord 🎧", "All discord related rules."), ("Game 🎮", "General in-game rules.")],
+            [button.custom_id for button in buttons],
+            ["grid-a1:rules:discord", "grid-a1:rules:game"],
         )
-        self.assertEqual(panel.footer.text, "Powered by SpinBack")
-        self.assertEqual(panel.colour, RULES_COLOUR)
+        for button in buttons:
+            self.assertIsNotNone(button.callback)
+        self.assertIs(view.children[0].children[-1].__class__, discord.ui.TextDisplay)
+        self.assertIsInstance(view.children[0].children[0], discord.ui.TextDisplay)
 
     def test_rules_storage_defaults_and_service_reads(self):
         from grid_a1.brand import RULES_DEFAULTS
@@ -307,8 +338,8 @@ class SpinBackFeatureTests(unittest.TestCase):
             config = database.config(42)
             self.assertEqual((config["rules_channel"], config["rules_message"]), (500, 600))
 
-    def test_rules_view_buttons_and_edit_modal(self):
-        from grid_a1.rules import RULES_COLOUR, RulesEditModal, RulesService, RulesView, rules_section_meta
+    def test_rules_buttons_and_edit_modal(self):
+        from grid_a1.rules import RulesEditModal, RulesService, rules_panel_view, rules_section_meta
         from grid_a1.utils import rules_custom_id
 
         with tempfile.TemporaryDirectory() as directory:
@@ -322,9 +353,9 @@ class SpinBackFeatureTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 rules_custom_id("")
 
-            view = RulesView(service)
-            self.assertEqual({item.custom_id for item in view.children}, {"grid-a1:rules:discord", "grid-a1:rules:game"})
-            self.assertEqual([item.label for item in view.children], ["Discord", "Game"])
+            view = rules_panel_view(service)
+            buttons = [item for item in view.walk_children() if isinstance(item, discord.ui.Button)]
+            self.assertEqual([item.custom_id for item in buttons], ["grid-a1:rules:discord", "grid-a1:rules:game"])
 
             class Recorder:
                 def __init__(self):
@@ -339,7 +370,7 @@ class SpinBackFeatureTests(unittest.TestCase):
                     self.response = SimpleNamespace(send_message=Recorder(), is_done=lambda: False)
 
             interaction = FakeInteraction()
-            asyncio.run(view.show(interaction, "game"))
+            asyncio.run(buttons[1].callback(interaction))
             sent = interaction.response.send_message.calls[0][1]
             self.assertIn("No cheating", sent["embed"].description)
             self.assertIn("Game", sent["embed"].title)
