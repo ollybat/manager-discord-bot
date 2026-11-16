@@ -85,6 +85,25 @@ async def _respond(interaction: discord.Interaction, *args, **kwargs) -> None:
         await interaction.response.send_message(*args, **kwargs)
 
 
+async def _delete_previous_panel(database: Any, guild: discord.Guild) -> None:
+    """Remove the panel a previous post left behind, so re-posting replaces it instead of duplicating it."""
+    config = database.config(guild.id)
+    if not config or not config["rules_channel"] or not config["rules_message"]:
+        return
+    channel = guild.get_channel(int(config["rules_channel"]))
+    if channel is None or not hasattr(channel, "fetch_message"):
+        return
+    try:
+        message = await channel.fetch_message(int(config["rules_message"]))
+    except (discord.Forbidden, discord.HTTPException, discord.NotFound):
+        log.info("Could not find the previous rules panel in guild %s", guild.id, exc_info=True)
+        return
+    try:
+        await message.delete()
+    except (discord.Forbidden, discord.HTTPException, discord.NotFound):
+        log.info("Could not remove the previous rules panel in guild %s", guild.id, exc_info=True)
+
+
 async def _show_rules(service: "RulesService", interaction: discord.Interaction, section: str) -> None:
     """Open one set of rules privately for the member who pressed its button."""
     if interaction.guild is None:
@@ -146,6 +165,7 @@ class RulesService:
         if guild is None:
             return await interaction.response.send_message("❌ Post the rules inside a server.", ephemeral=True)
         await interaction.response.defer(ephemeral=True)
+        await _delete_previous_panel(self.database, guild)
         try:
             message = await channel.send(view=self.panel())
         except discord.Forbidden:
@@ -159,8 +179,8 @@ class RulesService:
         self.database.set_rules_panel(guild.id, channel.id, message.id)
         await interaction.followup.send(
             "✅ Rules posted in "
-            f"{channel.mention}. Members open each set with the buttons inside the panel, and you can "
-            "change the text later with /rules edit.",
+            f"{channel.mention} — the buttons sit inside the panel, on the right of each rule set. "
+            "Posting again replaces this panel, and /rules edit changes the text later.",
             ephemeral=True,
         )
 
@@ -170,7 +190,7 @@ class RulesService:
         if not config or not config["rules_channel"] or not config["rules_message"]:
             return False
         channel = guild.get_channel(int(config["rules_channel"]))
-        if not isinstance(channel, discord.TextChannel):
+        if channel is None or not hasattr(channel, "fetch_message"):
             return False
         try:
             message = await channel.fetch_message(int(config["rules_message"]))
