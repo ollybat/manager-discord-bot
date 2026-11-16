@@ -14,6 +14,9 @@ import discord
 
 TICKET_TOPIC_PREFIX = "grid-a1-ticket"
 FEEDBACK_SCORES = (1, 2, 3, 4, 5)
+PRIORITIES = ("low", "normal", "high", "urgent")
+DEFAULT_PRIORITY = "normal"
+PRIORITY_LABELS = {"low": "🟢 Low", "normal": "🔵 Normal", "high": "🟠 High", "urgent": "🔴 Urgent"}
 
 T = TypeVar("T")
 

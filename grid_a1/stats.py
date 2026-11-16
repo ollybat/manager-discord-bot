@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from .database import Database
-from .utils import utcnow
+from .utils import DEFAULT_PRIORITY, PRIORITIES, utcnow
 
 RECENT_WINDOW_DAYS = 7
 MONTH_WINDOW_DAYS = 30
@@ -31,7 +31,8 @@ class TicketStats:
     average_claim_minutes: float | None = None
     average_close_minutes: float | None = None
     regions: tuple[tuple[str, int], ...] = ()
-    top_claimers: tuple[tuple[int, int], ...] = ()
+    priorities: tuple[tuple[str, int], ...] = ()
+    top_claimers: tuple[tuple[int, int, float | None], ...] = ()
     rating_average: float | None = None
     rating_count: int = 0
 
@@ -76,6 +77,14 @@ def format_duration(minutes: float | None) -> str:
         return f"{hours}h {remainder}m"
     days, remaining_hours = divmod(hours, 24)
     return f"{days}d {remaining_hours}h"
+
+
+def row_value(row: Any, key: str, default: Any = None) -> Any:
+    """Read one column from a sqlite3.Row or a plain mapping."""
+    try:
+        return row[key]
+    except (IndexError, KeyError, TypeError):
+        return default
 
 
 def _count(values: Iterable[Any]) -> dict[Any, int]:
@@ -139,9 +148,18 @@ def build_stats(
         ((region, count) for region, count in _count(row["region"] for row in open_tickets).items()),
         key=lambda item: (-item[1], str(item[0])),
     )
+    priority_counts = _count(row_value(row, "priority", DEFAULT_PRIORITY) for row in open_tickets)
+    priorities = tuple((priority, priority_counts.get(priority, 0)) for priority in PRIORITIES)
+    opened_by_ticket = {row["ticket_id"]: row["opened_at"] for row in tickets}
+    staff_minutes: dict[int, list[float]] = {}
+    for event in first_claims.values():
+        assignee = claim_assignee(event)
+        minutes = minutes_between(opened_by_ticket.get(event["ticket_id"]), event["created_at"])
+        if assignee is not None and minutes is not None:
+            staff_minutes.setdefault(assignee, []).append(minutes)
     leaderboard = sorted(
         (
-            (assignee, count)
+            (assignee, count, average(staff_minutes.get(assignee, [])))
             for assignee, count in _count(claim_assignee(event) for event in claims).items()
         ),
         key=lambda item: (-item[1], item[0]),
@@ -165,6 +183,7 @@ def build_stats(
         average_claim_minutes=average(claim_minutes),
         average_close_minutes=average(close_minutes),
         regions=tuple(regions),
+        priorities=priorities,
         top_claimers=tuple(leaderboard),
         rating_average=average(float(score) for score in ratings),
         rating_count=len(ratings),
@@ -175,7 +194,7 @@ def collect(database: Database, guild_id: int, *, now: datetime | None = None) -
     """Read one guild's tickets and claim history, then summarise them."""
     with database.connect() as db:
         tickets = db.execute(
-            "SELECT ticket_id, status, region, opened_at, closed_at, claimed_by "
+            "SELECT ticket_id, status, region, opened_at, closed_at, claimed_by, priority "
             "FROM tickets WHERE guild_id=?",
             (guild_id,),
         ).fetchall()
