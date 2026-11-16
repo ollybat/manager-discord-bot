@@ -44,6 +44,9 @@ SECTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
         "🌐 Everyone",
         (
             "info server",
+            "info user",
+            "info bot",
+            "avatar",
             "report",
             "reimburse",
             "suggestion send",
@@ -72,7 +75,7 @@ SECTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ),
     (
         "🛡️ Moderation",
-        ("modlog", "kick", "ban", "unban", "warn", "timeout", "untimeout", "purge"),
+        ("modlog", "modstats", "slowmode", "kick", "ban", "unban", "warn", "timeout", "untimeout", "purge"),
     ),
     (
         "⚙️ Server setup",
@@ -147,7 +150,10 @@ COMMAND_ACCESS: dict[str, str] = {
     "help": EVERYONE,
     "dashboard": DASHBOARD,
     "info server": EVERYONE,
+    "info user": EVERYONE,
+    "info bot": EVERYONE,
     "report": EVERYONE,
+    "avatar": EVERYONE,
     "poll end": POLL_CREATOR,
     "poll results": POLL_CREATOR,
     "poll remove": POLL_CREATOR,
@@ -163,6 +169,8 @@ COMMAND_ACCESS: dict[str, str] = {
     "ticket stats": STAFF,
     "ticket transcript": STAFF,
     "modlog": STAFF,
+    "modstats": STAFF,
+    "slowmode": STAFF,
     "kick": STAFF,
     "ban": STAFF,
     "unban": STAFF,
@@ -335,6 +343,10 @@ def format_entry(entry: CommandEntry) -> str:
     return f"`{entry.usage}` — {entry.description}{suffix}"
 
 
+NOTICE_BUDGET = 200
+"""Characters reserved so the trimmed-field pointer still fits the embed budget."""
+
+
 def _section_of(path: str) -> str:
     for title, paths in SECTIONS:
         if path in paths:
@@ -386,9 +398,11 @@ def render_guide(
 
     kept: list[tuple[str, str]] = []
     total = 0
-    for name, value in fields:
+    for index, (name, value) in enumerate(fields):
         size = len(name) + len(value) + 2
-        if kept and total + size > max_total:
+        # Leave room for the "not shown here" pointer that replaces trimmed fields.
+        room = max_total if index == len(fields) - 1 else max_total - NOTICE_BUDGET
+        if kept and total + size > room:
             break
         kept.append((name, value))
         total += size
