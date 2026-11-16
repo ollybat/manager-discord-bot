@@ -8,17 +8,17 @@ Startup loads `.env`, validates settings, configures logging, runs SQLite migrat
 
 ## Modules
 
-- `grid_a1/bot.py`: bot composition, commands, lifecycle, sync safety, event/error handling, anti-links, and loops. `/ticket stats` renders the workload panel, `/ticket priority` sets a ticket's triage priority, and `/ticket transcript` writes an on-demand `.txt` transcript without closing the ticket. Identifier options (`/giveaway end`, `/poll end`, `/poll remove`) are autocompleted from live records, heavy commands carry per-member cooldowns, and the shared error handler answers every failure once with a clear ephemeral message.
+- `grid_a1/bot.py`: bot composition, commands, lifecycle, sync safety, event/error handling, anti-links, and loops. `/ticket stats` renders the workload panel, `/ticket priority` sets a ticket's triage priority, and `/ticket transcript` writes an on-demand `.txt` transcript without closing the ticket. Identifier options (`/giveaway end`, `/poll end`, `/poll remove`) are autocompleted from live records, heavy commands carry per-member cooldowns, and the shared error handler answers every failure once with a clear ephemeral message. Staff also get `/ticket list` (priority-ordered queue), `/ticket note` and `/ticket notes` (internal notes stored as audit records), and `/modlog member:` (recorded kick/ban/warn/timeout history); `/giveaway end` and `/poll remove` require the caller to confirm in a button prompt.
 - `grid_a1/config.py`: environment settings, logging, and Railway volume/path persistence warnings.
 - `grid_a1/database.py`: SQLite schema repair/migration, ticket/poll/giveaway persistence, owner feedback records, indexes, backup, and audit log.
 - `grid_a1/postgres.py`: optional operator-only PostgreSQL connection/schema sketch; not imported by the bot and not a data migration tool.
 - `grid_a1/commands.py`: standalone commands and owner diagnostics.
-- `grid_a1/views.py`: dashboard shell, persistent ticket and verification views, and the persistent 1–5 star feedback view sent privately to ticket owners after closure.
+- `grid_a1/views.py`: dashboard shell, persistent ticket and verification views, the shared destructive-action confirmation view, and the persistent 1–5 star feedback view sent privately to ticket owners after closure.
 - `grid_a1/dashboard_setup.py`: role/channel dropdown setup wizards, explicit panel publishing, and report routing.
 - `grid_a1/tickets.py`: ticket creation, permissions, defer/followup closure, transcripts, and archive.
 - `grid_a1/polls.py`: poll dashboard/metadata modal, persistent poll creation, result embeds, vote controls, and message refresh service.
 - `grid_a1/giveaways.py`: private giveaway setup, persistent entry buttons, timer-based winner draws, and active giveaway dashboard.
-- `grid_a1/stats.py`: read-only ticket workload statistics (queue split, closed-ticket windows, first-claim and closure averages, per-region load, per-priority load, claim leaderboard with each claimer's first-claim average, owner rating average).
+- `grid_a1/stats.py`: read-only ticket workload statistics, plus the shared queue/moderation/note line formatters (queue split, closed-ticket windows, first-claim and closure averages, per-region load, per-priority load, claim leaderboard with each claimer's first-claim average, owner rating average).
 - `grid_a1/utils.py`: topic parsing, staff checks, link normalization, safe JSON parsing, and the shared priority/feedback constants.
 - `grid_a1/guides.py`: live command catalog built from the running application-command tree, permission-aware `/help` rendering, per-command detail text, and the autocomplete helpers for poll and giveaway identifiers.
 - `grid_a1/health.py`: optional read-only status endpoint (stdlib HTTP server on the host PORT) used when a public domain is attached; disabled with HEALTH_DISABLED=1.
