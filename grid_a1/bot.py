@@ -12,7 +12,12 @@ from .config import Settings, configure_logging, validate_runtime
 from .database import SCHEMA_VERSION, Database
 from .embeds import embed, support_panel, inactivity_indicator, priority_embed, ticket_stats_embed
 from .tickets import ReimburseModal, TicketService, claim
-from .giveaways import GiveawayDashboardView, GiveawayEntryView, GiveawayService
+from .giveaways import (
+    GiveawayDashboardView,
+    GiveawayEntryView,
+    GiveawayService,
+    register_giveaway_commands,
+)
 from .suggestions import SuggestionModal, SuggestionService, SuggestionVoteView, suggestion_line
 from .brand import BRAND_NAME, BRAND_SHORT, RULES_SECTIONS
 from .rules import RulesEditModal, RulesService, rules_panel_view
@@ -28,6 +33,7 @@ from .polls import (
     parse_poll_options,
     poll_dashboard_embed,
     poll_embed,
+    register_poll_commands,
 )
 from .wipes import (
     WipeDashboardView,
@@ -46,7 +52,12 @@ from .stats import (
 from .utils import PRIORITIES, PRIORITY_LABELS, anti_link_config_updates, is_http_url, is_ticket, parse_ticket_topic, staff_member, detected_external_links, normalize_domain, safe_json_list, utcnow
 from .views import ConfirmView, DashboardView, OwnerInactivityView, TicketControls, TicketFeedbackView, TicketPanel, VerifyPanel
 from .welcomer import missing, send_welcome, welcome_embed
-from .commands import OwnerConfigurationError, OwnerOnlyError, register_commands
+from .commands import (
+    OwnerConfigurationError,
+    OwnerOnlyError,
+    register_commands,
+    register_info_commands,
+)
 settings = Settings.from_env(); configure_logging(settings.log_level)
 log = logging.getLogger("spinback-manager")
 intents = discord.Intents.default(); intents.members = True; intents.message_content = True
@@ -368,11 +379,11 @@ class GridA1Bot(commands.Bot):
     @refresh_panels.before_loop
     async def before_refresh_panels(self): await self.wait_until_ready()
 bot = GridA1Bot()
-setup_group = app_commands.Group(name="setup", description="⚙️ Configure server roles and support systems")
-welcomer_group = app_commands.Group(name="welcomer", description="👋 Preview and test welcome messages")
-ticket_group = app_commands.Group(name="ticket", description="🎫 Manage and assign support tickets")
-poll_group = app_commands.Group(name="poll", description="📊 Create, vote on, and manage server polls")
-giveaway_group = app_commands.Group(name="giveaway", description="🎁 Configure and manage timed giveaways")
+setup_group = app_commands.Group(name="setup", description="Configure server roles and support systems")
+welcomer_group = app_commands.Group(name="welcomer", description="Preview and test welcome messages")
+ticket_group = app_commands.Group(name="ticket", description="Manage and assign support tickets")
+poll_group = app_commands.Group(name="poll", description="Create, vote on, and manage server polls")
+giveaway_group = app_commands.Group(name="giveaway", description="Configure and manage timed giveaways")
 bot.tree.add_command(setup_group)
 bot.tree.add_command(welcomer_group)
 bot.tree.add_command(ticket_group)
@@ -439,7 +450,7 @@ def server_owner_only():
         return bool(interaction.guild and interaction.user and interaction.user.id == interaction.guild.owner_id)
     return app_commands.check(predicate)
 
-@bot.tree.command(name="anti-links", description="🛡️ Configure protection against outside links and invites")
+@bot.tree.command(name="anti-links", description="Configure protection against outside links and invites")
 @app_commands.guild_only()
 @admin()
 @app_commands.describe(
@@ -448,7 +459,7 @@ def server_owner_only():
     log_channel="Optional moderation log channel; omit to keep the current value",
     clear_log_channel="Clear the configured moderation log channel",
 )
-@app_commands.choices(action=[app_commands.Choice(name="🗑️ Delete", value="delete"),app_commands.Choice(name="⚠️ Delete and warn", value="delete_warn"),app_commands.Choice(name="📋 Delete and log", value="delete_log")])
+@app_commands.choices(action=[app_commands.Choice(name="Delete", value="delete"),app_commands.Choice(name="Delete and warn", value="delete_warn"),app_commands.Choice(name="Delete and log", value="delete_log")])
 async def anti_links(
     i: discord.Interaction,
     enabled: bool | None = None,
@@ -484,7 +495,7 @@ async def anti_links(
         ephemeral=True,
     )
 
-@bot.tree.command(name="report", description="🚩 Privately report a server member to staff")
+@bot.tree.command(name="report", description="Privately report a server member to staff")
 @app_commands.guild_only()
 @app_commands.checks.cooldown(3, 60.0, key=lambda i: (i.guild_id, i.user.id))
 @app_commands.describe(member="Member being reported", reason="What happened?", proof_link="Optional link to supporting evidence", proof_file="Optional screenshot or evidence file")
@@ -524,7 +535,7 @@ async def report_member(i: discord.Interaction, member: discord.Member, reason: 
     except Exception: log.exception("Report was delivered but its audit row could not be recorded (guild %s)", guild.id)
     await i.followup.send("✅ Your report was sent privately to the server's report channel. Thank you.", ephemeral=True)
 
-@bot.tree.command(name="dashboard", description="🎛️ Open your private server setup and status dashboard")
+@bot.tree.command(name="dashboard", description="Open your private server setup and status dashboard")
 async def dashboard(i: discord.Interaction):
     await i.response.defer(ephemeral=True)
     if not _dashboard_access(i):
@@ -533,7 +544,7 @@ async def dashboard(i: discord.Interaction):
     view = DashboardView(bot.database, settings.owner_id)
     await i.followup.send(embed=view.dashboard_embed(i.guild), view=view, ephemeral=True)
 
-@bot.tree.command(name="modlog", description="🧾 Show a member's recorded moderation history")
+@bot.tree.command(name="modlog", description="Show a member's recorded moderation history")
 @staff()
 @app_commands.guild_only()
 @app_commands.describe(member="Member whose recorded kick, ban, warn, and timeout history you want")
@@ -552,7 +563,7 @@ async def modlog(i: discord.Interaction, member: discord.Member):
     )
     result.set_footer(text="Kick, ban, warn, and timeout records only; warnings are recorded, not applied automatically.")
     await i.response.send_message(embed=result, ephemeral=True)
-@bot.tree.command(name="kick", description="👢 Remove a member from this server with a recorded reason")
+@bot.tree.command(name="kick", description="Remove a member from this server with a recorded reason")
 @staff()
 @app_commands.describe(member="Member to kick", reason="Why the member is being kicked")
 async def moderation_kick(i: discord.Interaction, member: discord.Member, reason: str = "No reason provided"):
@@ -565,7 +576,7 @@ async def moderation_kick(i: discord.Interaction, member: discord.Member, reason
     bot.database.audit(i.guild.id, None, i.user.id, "kick", f"member={member.id}; {discord.utils.escape_markdown(reason)[:450]}")
     await i.followup.send(embed=embed("💜 Member kicked", f"✅ {member.mention} was removed from the server.\n\n**Reason:** {discord.utils.escape_markdown(reason)[:500]}"), ephemeral=True)
 
-@bot.tree.command(name="ban", description="🔨 Ban a member from this server with a recorded reason")
+@bot.tree.command(name="ban", description="Ban a member from this server with a recorded reason")
 @staff()
 @app_commands.describe(member="Member to ban", reason="Why the member is being banned")
 async def moderation_ban(i: discord.Interaction, member: discord.Member, reason: str = "No reason provided"):
@@ -578,7 +589,7 @@ async def moderation_ban(i: discord.Interaction, member: discord.Member, reason:
     bot.database.audit(i.guild.id, None, i.user.id, "ban", f"member={member.id}; {discord.utils.escape_markdown(reason)[:450]}")
     await i.followup.send(embed=embed("💜 Member banned", f"🔨 {member.mention} was banned from the server.\n\n**Reason:** {discord.utils.escape_markdown(reason)[:500]}"), ephemeral=True)
 
-@bot.tree.command(name="warn", description="⚠️ Record a moderation warning for a member")
+@bot.tree.command(name="warn", description="Record a moderation warning for a member")
 @staff()
 @app_commands.describe(member="Member receiving the warning", reason="What rule or behavior the warning concerns")
 async def moderation_warn(i: discord.Interaction, member: discord.Member, reason: str):
@@ -599,7 +610,7 @@ async def moderation_timeout(i: discord.Interaction, member: discord.Member, min
     bot.database.audit(i.guild.id, None, i.user.id, "timeout", f"member={member.id}; minutes={minutes}; {discord.utils.escape_markdown(reason)[:400]}")
     await i.followup.send(embed=embed("💜 Member timed out", f"⏳ {member.mention} was timed out for **{minutes} minute(s)**.\n\n**Reason:** {discord.utils.escape_markdown(reason)[:500]}"), ephemeral=True)
 
-@bot.tree.command(name="unban", description="♻️ Lift a ban so the member can rejoin")
+@bot.tree.command(name="unban", description="Lift a ban so the member can rejoin")
 @staff()
 @app_commands.guild_only()
 @app_commands.describe(user_id="Start typing to pick a banned member, or paste their numeric user ID", reason="Why the ban is being lifted")
@@ -634,7 +645,7 @@ async def moderation_unban_autocomplete(i: discord.Interaction, current: str):
         return []
     return choices
 
-@bot.tree.command(name="untimeout", description="🔓 End a member's timeout early")
+@bot.tree.command(name="untimeout", description="End a member's timeout early")
 @staff()
 @app_commands.guild_only()
 @app_commands.describe(member="Member whose timeout should end now", reason="Why the timeout is being lifted")
@@ -649,7 +660,7 @@ async def moderation_untimeout(i: discord.Interaction, member: discord.Member, r
     bot.database.audit(i.guild.id, None, i.user.id, "untimeout", f"member={member.id}; {discord.utils.escape_markdown(reason)[:450]}")
     await i.followup.send(embed=embed("💜 Timeout lifted", f"🔓 {member.mention} can talk again.\n\n**Reason:** {discord.utils.escape_markdown(reason)[:500]}"), ephemeral=True)
 
-@bot.tree.command(name="purge", description="🧹 Bulk-delete recent messages, or empty the channel")
+@bot.tree.command(name="purge", description="Bulk-delete recent messages, or empty the channel")
 @app_commands.guild_only()
 @app_commands.checks.has_permissions(manage_messages=True)
 @app_commands.checks.cooldown(3, 60.0, key=lambda i: (i.guild_id, i.user.id))
@@ -664,14 +675,14 @@ async def moderation_purge(i: discord.Interaction, count: app_commands.Range[int
     async def reply(embed=None, **kwargs): await i.followup.send(embed=embed, ephemeral=True, **kwargs)
     await _report_clear(reply, i.channel, i.user, None if everything else int(count), reason)
 
-@bot.command(name="lock", help="🔒 Prevent members from sending messages in this channel (staff only).")
+@bot.command(name="lock", help="Prevent members from sending messages in this channel (staff only).")
 async def prefix_lock(ctx):
     if not ctx.guild or not _prefix_privileged(ctx, True): return await ctx.send(_access_notice(ctx.guild))
     try: await ctx.channel.set_permissions(ctx.guild.default_role, send_messages=False, reason=f"Channel locked by {ctx.author}")
     except discord.Forbidden: return await ctx.send("❌ I cannot lock this channel. Check Manage Channels and Manage Permissions.")
     await ctx.send("🔒 This channel is now locked for members.")
 
-@bot.command(name="unlock", help="🔓 Restore member messaging in this channel (staff only).")
+@bot.command(name="unlock", help="Restore member messaging in this channel (staff only).")
 async def prefix_unlock(ctx):
     if not ctx.guild or not _prefix_privileged(ctx, True): return await ctx.send(_access_notice(ctx.guild))
     try: await ctx.channel.set_permissions(ctx.guild.default_role, send_messages=None, reason=f"Channel unlocked by {ctx.author}")
@@ -717,7 +728,7 @@ def _hierarchy_error(guild, author, member, me) -> str | None:
     if me is None or member.top_role >= me.top_role: return "❌ My bot role must be above that member."
     return None
 
-@bot.command(name="help", help="💜 Show the prefix commands and point at the slash guide.")
+@bot.command(name="help", help="Show the prefix commands and point at the slash guide.")
 async def prefix_help(ctx):
     guide = embed(
         f"💜 {BRAND_SHORT} • Prefix commands",
@@ -729,11 +740,11 @@ async def prefix_help(ctx):
     guide.set_footer(text="Staff commands need one of the roles saved by /setup roles.")
     await ctx.send(embed=guide)
 
-@bot.command(name="ping", help="🏓 Check that the bot answers.")
+@bot.command(name="ping", help="Check that the bot answers.")
 async def prefix_ping(ctx):
     await ctx.send(f"🏓 Pong! Gateway latency {round(bot.latency * 1000)} ms.")
 
-@bot.command(name="whois", help="🔎 Show a member's account age, join date, roles, and records.")
+@bot.command(name="whois", help="Show a member's account age, join date, roles, and records.")
 async def prefix_whois(ctx, member: discord.Member):
     if not ctx.guild: return await ctx.send("❌ Member details are only available inside a server.")
     records = bot.database.member_history(ctx.guild.id, member.id)
@@ -747,7 +758,7 @@ async def prefix_whois(ctx, member: discord.Member):
     if records: detail.add_field(name="Latest record", value=moderation_history_lines(records[:1])[0][:1024], inline=False)
     await ctx.send(embed=detail)
 
-@bot.command(name="serverinfo", help="🌐 Show this server's size, age, and staff setup state.")
+@bot.command(name="serverinfo", help="Show this server's size, age, and staff setup state.")
 async def prefix_serverinfo(ctx):
     if not ctx.guild: return await ctx.send("❌ Server details are only available inside a server.")
     guild = ctx.guild
@@ -766,7 +777,7 @@ async def prefix_serverinfo(ctx):
     )
     await ctx.send(embed=detail)
 
-@bot.command(name="warn", help="⚠️ Record a moderation warning (staff only).")
+@bot.command(name="warn", help="Record a moderation warning (staff only).")
 async def prefix_warn(ctx, member: discord.Member, *, reason: str):
     if not await _require_staff_prefix(ctx): return
     problem = _hierarchy_error(ctx.guild, ctx.author, member, ctx.guild.me)
@@ -787,7 +798,7 @@ async def prefix_timeout(ctx, member: discord.Member, minutes: int, *, reason: s
     bot.database.audit(ctx.guild.id, ctx.channel.id, ctx.author.id, "timeout", f"member={member.id}; minutes={minutes}; {body}")
     await ctx.send(embed=embed("💜 Member timed out", f"⏳ {member.mention} was timed out for **{minutes} minute(s)**.\n\n**Reason:** {body}"))
 
-@bot.command(name="untimeout", help="🔓 End a member's timeout early (staff only).")
+@bot.command(name="untimeout", help="End a member's timeout early (staff only).")
 async def prefix_untimeout(ctx, member: discord.Member, *, reason: str = "No reason provided"):
     if not await _require_staff_prefix(ctx): return
     if member.timed_out_until is None: return await ctx.send("ℹ️ That member is not timed out right now.")
@@ -798,7 +809,7 @@ async def prefix_untimeout(ctx, member: discord.Member, *, reason: str = "No rea
     bot.database.audit(ctx.guild.id, ctx.channel.id, ctx.author.id, "untimeout", f"member={member.id}; {body}")
     await ctx.send(embed=embed("💜 Timeout lifted", f"🔓 {member.mention} can talk again.\n\n**Reason:** {body}"))
 
-@bot.command(name="kick", help="👢 Remove a member with a recorded reason (staff only).")
+@bot.command(name="kick", help="Remove a member with a recorded reason (staff only).")
 async def prefix_kick(ctx, member: discord.Member, *, reason: str = "No reason provided"):
     if not await _require_staff_prefix(ctx): return
     problem = _hierarchy_error(ctx.guild, ctx.author, member, ctx.guild.me)
@@ -809,7 +820,7 @@ async def prefix_kick(ctx, member: discord.Member, *, reason: str = "No reason p
     bot.database.audit(ctx.guild.id, ctx.channel.id, ctx.author.id, "kick", f"member={member.id}; {body}")
     await ctx.send(embed=embed("💜 Member kicked", f"✅ {member.mention} was removed from the server.\n\n**Reason:** {body}"))
 
-@bot.command(name="ban", help="🔨 Ban a member with a recorded reason (staff only).")
+@bot.command(name="ban", help="Ban a member with a recorded reason (staff only).")
 async def prefix_ban(ctx, member: discord.Member, *, reason: str = "No reason provided"):
     if not await _require_staff_prefix(ctx): return
     problem = _hierarchy_error(ctx.guild, ctx.author, member, ctx.guild.me)
@@ -820,7 +831,7 @@ async def prefix_ban(ctx, member: discord.Member, *, reason: str = "No reason pr
     bot.database.audit(ctx.guild.id, ctx.channel.id, ctx.author.id, "ban", f"member={member.id}; {body}")
     await ctx.send(embed=embed("💜 Member banned", f"🔨 {member.mention} was banned from the server.\n\n**Reason:** {body}"))
 
-@bot.command(name="unban", help="♻️ Lift a ban by user ID (staff only).")
+@bot.command(name="unban", help="Lift a ban by user ID (staff only).")
 async def prefix_unban(ctx, user_id: int, *, reason: str = "No reason provided"):
     if not await _require_staff_prefix(ctx): return
     try: entry = await ctx.guild.fetch_ban(discord.Object(id=int(user_id)))
@@ -832,7 +843,7 @@ async def prefix_unban(ctx, user_id: int, *, reason: str = "No reason provided")
     bot.database.audit(ctx.guild.id, ctx.channel.id, ctx.author.id, "unban", f"member={entry.user.id}; {body}")
     await ctx.send(embed=embed("💜 Ban lifted", f"♻️ {entry.user} can join the server again.\n\n**Reason:** {body}"))
 
-@bot.command(name="modlog", help="🧾 Show a member's recorded moderation history (staff only).")
+@bot.command(name="modlog", help="Show a member's recorded moderation history (staff only).")
 async def prefix_modlog(ctx, member: discord.Member):
     if not await _require_staff_prefix(ctx): return
     rows = bot.database.member_history(ctx.guild.id, member.id)
@@ -840,7 +851,7 @@ async def prefix_modlog(ctx, member: discord.Member):
     detail.add_field(name=f"Records ({len(rows)})", value="\n".join(moderation_history_lines(rows)) or "Nothing recorded for this member.", inline=False)
     await ctx.send(embed=detail)
 
-@bot.command(name="stats", help="📊 Show ticket workload and response times (staff only).")
+@bot.command(name="stats", help="Show ticket workload and response times (staff only).")
 @commands.cooldown(3, 60.0, commands.BucketType.user)
 async def prefix_stats(ctx):
     if not await _require_staff_prefix(ctx): return
@@ -873,7 +884,7 @@ async def _report_clear(respond, channel, actor, count: int | None, reason: str)
     result.set_footer(text="Messages older than 14 days cannot be bulk-deleted, so those are removed one at a time.")
     await respond(embed=result)
 
-@bot.command(name="clear", help="🧹 Delete the newest messages, or the whole channel when you give no count (staff only).")
+@bot.command(name="clear", help="Delete the newest messages, or the whole channel when you give no count (staff only).")
 @commands.cooldown(2, 60.0, commands.BucketType.user)
 async def prefix_clear(ctx, count: int | None = None, *, reason: str = "No reason provided"):
     if not await _require_staff_prefix(ctx): return
@@ -899,7 +910,7 @@ async def prefix_clear(ctx, count: int | None = None, *, reason: str = "No reaso
     view = ConfirmView(confirmed, author_id=ctx.author.id, confirm_label="Delete everything")
     view.message = await ctx.send(embed=prompt, view=view)
 
-@bot.command(name="slowmode", help="🐌 Set this channel's slowmode in seconds (staff only, 0 disables).")
+@bot.command(name="slowmode", help="Set this channel's slowmode in seconds (staff only, 0 disables).")
 async def prefix_slowmode(ctx, seconds: int, *, reason: str = "No reason provided"):
     if not await _require_staff_prefix(ctx): return
     if not isinstance(ctx.channel, discord.TextChannel): return await ctx.send("❌ Slowmode needs a normal text channel.")
@@ -911,7 +922,7 @@ async def prefix_slowmode(ctx, seconds: int, *, reason: str = "No reason provide
     await ctx.send(embed=embed("🐌 Slowmode updated", f"Slowmode in {ctx.channel.mention} is now {state}."))
 
 
-@setup_group.command(name="roles", description="🎭 Set the five distinct staff permission roles")
+@setup_group.command(name="roles", description="Set the five distinct staff permission roles")
 @server_owner_only()
 @app_commands.describe(owner_role="Owner staff role", co_owner_role="Co-owner staff role", head_admin_role="Head administrator staff role", admin_role="Administrator staff role", moderator_role="Moderator staff role")
 async def setup_roles(i: discord.Interaction, owner_role: discord.Role, co_owner_role: discord.Role, head_admin_role: discord.Role, admin_role: discord.Role, moderator_role: discord.Role):
@@ -930,7 +941,7 @@ async def setup_roles(i: discord.Interaction, owner_role: discord.Role, co_owner
     e.set_footer(text=f"{BRAND_SHORT} • Permission configuration • Changes saved to SQLite")
     await i.followup.send(embed=e, ephemeral=True)
 
-@setup_group.command(name="status", description="🩺 Check which parts of this server's setup are finished")
+@setup_group.command(name="status", description="Check which parts of this server's setup are finished")
 @app_commands.guild_only()
 @admin()
 async def setup_status(interaction: discord.Interaction) -> None:
@@ -970,7 +981,7 @@ async def setup_status(interaction: discord.Interaction) -> None:
     result.set_footer(text="Run /setup roles, /setup tickets, or /setup welcomer to fill in what is missing.")
     await interaction.response.send_message(embed=result, ephemeral=True)
 
-@bot.tree.command(name="verifypanel", description="✅ Publish a verification panel and assignable role")
+@bot.tree.command(name="verifypanel", description="Publish a verification panel and assignable role")
 @app_commands.guild_only()
 @admin()
 @app_commands.describe(channel="Text channel where the public panel will appear", role="Role granted after successful verification")
@@ -987,7 +998,7 @@ async def verifypanel(i: discord.Interaction, channel: discord.TextChannel, role
     await i.followup.send(embed=embed("💜 Verification panel created", f"✅ Panel posted in {channel.mention}.\n🎭 Role: {role.mention}"), ephemeral=True)
 
 
-@ticket_group.command(name="remove", description="👤 Remove a member from the current ticket")
+@ticket_group.command(name="remove", description="Remove a member from the current ticket")
 @staff()
 @app_commands.describe(user="Member who should lose access to this ticket")
 async def ticket_remove(i: discord.Interaction, user: discord.Member):
@@ -1001,7 +1012,7 @@ async def ticket_remove(i: discord.Interaction, user: discord.Member):
     bot.database.audit(i.guild.id, row["ticket_id"], i.user.id, "member_removed", json.dumps({"member_id": user.id}))
     await i.followup.send(f"✅ Removed {user.mention} from this ticket.", ephemeral=True)
 
-wipe_group = app_commands.Group(name="wipe", description="🌍 Configure wipe announcements and the wipe schedule")
+wipe_group = app_commands.Group(name="wipe", description="Configure wipe announcements and the wipe schedule")
 bot.tree.add_command(wipe_group)
 
 def _wipe_embed(title: str, rows: list, empty: str):
@@ -1015,7 +1026,7 @@ def _wipe_embed(title: str, rows: list, empty: str):
         result.set_footer(text=f"…and {hidden} more not shown. Raise the limit to see them.")
     return result
 
-@wipe_group.command(name="config", description="🎛️ Open the wipe panel: channel, ping role, automatic posting, and the schedule")
+@wipe_group.command(name="config", description="Open the wipe panel: channel, ping role, automatic posting, and the schedule")
 @app_commands.guild_only()
 @admin()
 async def wipe_config(i: discord.Interaction):
@@ -1023,7 +1034,7 @@ async def wipe_config(i: discord.Interaction):
     view = WipeDashboardView(bot.wipes, i.guild.id, i.user.id, i.guild)
     await i.response.send_message(embed=view.panel(), view=view, ephemeral=True)
 
-@wipe_group.command(name="add", description="➕ Schedule a wipe")
+@wipe_group.command(name="add", description="Schedule a wipe")
 @app_commands.guild_only()
 @admin()
 @app_commands.describe(
@@ -1041,7 +1052,7 @@ async def wipe_add(i: discord.Interaction, region: str, when: str, title: str):
     result.set_footer(text="Members can read the schedule with /wipe list or !wipe.")
     await i.response.send_message(embed=result, ephemeral=True)
 
-@wipe_group.command(name="list", description="📋 Show every wipe this server has scheduled")
+@wipe_group.command(name="list", description="Show every wipe this server has scheduled")
 @app_commands.guild_only()
 @app_commands.describe(limit="How many wipes to show (1–50)")
 async def wipe_list(i: discord.Interaction, limit: app_commands.Range[int, 1, 50] = 15):
@@ -1049,7 +1060,7 @@ async def wipe_list(i: discord.Interaction, limit: app_commands.Range[int, 1, 50
     rows = bot.wipes.listing(i.guild.id, limit=int(limit))
     await i.response.send_message(embed=_wipe_embed(f"🌍 Wipe schedule — {i.guild.name}", rows, "Nothing is scheduled yet. Staff can add one with /wipe add."), ephemeral=True)
 
-@wipe_group.command(name="remove", description="🗑️ Delete a scheduled wipe")
+@wipe_group.command(name="remove", description="Delete a scheduled wipe")
 @app_commands.guild_only()
 @admin()
 @app_commands.describe(wipe_id="Start typing to pick a scheduled wipe, or paste its ID")
@@ -1080,7 +1091,7 @@ async def wipe_remove_autocomplete(i: discord.Interaction, current: str):
         )
     ]
 
-@wipe_group.command(name="announce", description="📣 Post a wipe now")
+@wipe_group.command(name="announce", description="Post a wipe now")
 @app_commands.guild_only()
 @admin()
 @app_commands.describe(wipe_id="Start typing to pick a wipe, or paste its ID")
@@ -1105,17 +1116,18 @@ async def wipe_announce_autocomplete(i: discord.Interaction, current: str):
         )
     ]
 
-@bot.command(name="wipe", help="🌍 Show every wipe this server has scheduled.")
+@bot.command(name="wipe", help="Show every wipe this server has scheduled.")
 async def prefix_wipe(ctx, limit: int = 15):
     if not ctx.guild: return await ctx.send("❌ Wipe schedules only exist inside a server.")
     count = max(1, min(int(limit), 50))
     rows = bot.wipes.listing(ctx.guild.id, limit=count)
     await ctx.send(embed=_wipe_embed(f"🌍 Wipe schedule — {ctx.guild.name}", rows, "Nothing is scheduled yet. Staff can add one with /wipe add."))
 
-info_group = app_commands.Group(name="info", description="🌐 View server information")
+info_group = app_commands.Group(name="info", description="View server information")
 bot.tree.add_command(info_group)
+register_info_commands(bot, info_group)
 
-@info_group.command(name="server", description="🏰 View server members, channels, roles, and settings")
+@info_group.command(name="server", description="View server members, channels, roles, and settings")
 @app_commands.checks.cooldown(5, 60.0, key=lambda i: (i.guild_id, i.user.id))
 async def info_server(i: discord.Interaction):
     g = i.guild
@@ -1146,9 +1158,9 @@ async def info_server(i: discord.Interaction):
     e.set_footer(text=f"{BRAND_SHORT} • Server information")
     await i.response.send_message(embed=e)
 
-roles_group = app_commands.Group(name="roles", description="🎭 Display and publish the server role directory")
+roles_group = app_commands.Group(name="roles", description="Display and publish the server role directory")
 bot.tree.add_command(roles_group)
-@roles_group.command(name="setchannel", description="📋 Post the server role directory in a text channel")
+@roles_group.command(name="setchannel", description="Post the server role directory in a text channel")
 @app_commands.guild_only()
 @admin()
 @app_commands.describe(channel="Text channel where the role directory should be posted")
@@ -1164,7 +1176,7 @@ async def roles_setchannel(i: discord.Interaction, channel: discord.TextChannel)
     except discord.Forbidden: return await i.followup.send("❌ I cannot post in that channel.", ephemeral=True)
     await i.followup.send(f"✅ Role directory posted in {channel.mention}.", ephemeral=True)
 
-@setup_group.command(name="tickets", description="🎫 Configure ticket channels and publish the support panel")
+@setup_group.command(name="tickets", description="Configure ticket channels and publish the support panel")
 @admin()
 @app_commands.describe(panel_channel="Public channel for the support panel", logs_channel="Private channel for ticket logs", category="Category used for newly opened tickets", inactivity_hours="Hours before the ticket inactivity reminder (1–720)")
 async def setup_tickets(i, panel_channel: discord.TextChannel, logs_channel: discord.TextChannel, category: discord.CategoryChannel, inactivity_hours: app_commands.Range[int,1,720]):
@@ -1192,17 +1204,17 @@ async def setup_tickets(i, panel_channel: discord.TextChannel, logs_channel: dis
     bot.database.upsert_config(g.id, panel_message=message.id)
     await i.followup.send(f"✅ {BRAND_SHORT} support panel updated in {panel_channel.mention}; logs go to {logs_channel.mention}.", ephemeral=True)
 
-@setup_group.command(name="welcomer", description="👋 Configure welcome, shop, links, and community channels")
+@setup_group.command(name="welcomer", description="Configure welcome, shop, links, and community channels")
 @admin()
 @app_commands.describe(welcome_channel="Channel for new-member greetings", link_channel="Channel containing server links", bot_commands_channel="Channel for bot commands", shop_channel="Channel for store information", verify_channel="Channel for verification guidance")
 async def setup_welcomer(i,welcome_channel:discord.TextChannel,link_channel:discord.TextChannel,bot_commands_channel:discord.TextChannel,shop_channel:discord.TextChannel,verify_channel:discord.TextChannel): bot.database.upsert_config(guild(i).id,welcome_channel=welcome_channel.id,link_channel=link_channel.id,bot_commands_channel=bot_commands_channel.id,shop_channel=shop_channel.id,verify_channel=verify_channel.id); await i.response.send_message(f"✅ Welcomer configured for {welcome_channel.mention}.",ephemeral=True)
-@welcomer_group.command(name="preview", description="👀 Preview the welcome message privately")
+@welcomer_group.command(name="preview", description="Preview the welcome message privately")
 @admin()
 async def welcomer_preview(i):
     config=bot.database.config(guild(i).id); problems=missing(guild(i),config)
     if problems: return await i.response.send_message(embed=embed("⚠️ Welcomer is not set up","\n".join(f"• {p}" for p in problems),discord.Colour.red()),ephemeral=True)
     await i.response.send_message(embed=welcome_embed(bot,guild(i),i.user,config),ephemeral=True)
-@welcomer_group.command(name="test", description="✉️ Send a test welcome message to the configured channel")
+@welcomer_group.command(name="test", description="Send a test welcome message to the configured channel")
 @admin()
 async def welcomer_test(i):
     config=bot.database.config(guild(i).id); problems=missing(guild(i),config)
@@ -1211,14 +1223,14 @@ async def welcomer_test(i):
     if not isinstance(channel,discord.TextChannel): return await i.response.send_message("❌ The configured welcome channel is missing. Update it in `/dashboard`.",ephemeral=True)
     await i.response.defer(ephemeral=True)
     await channel.send(embed=welcome_embed(bot,guild(i),i.user,config)); await i.followup.send(f"✅ Welcome test sent to {channel.mention}.",ephemeral=True)
-@ticket_group.command(name="claim", description="🙋 Claim the current support ticket")
+@ticket_group.command(name="claim", description="Claim the current support ticket")
 @staff()
 async def ticket_claim(i): await claim(i,bot.tickets)
-@ticket_group.command(name="transfer", description="🔁 Assign the current ticket to another staff member")
+@ticket_group.command(name="transfer", description="Assign the current ticket to another staff member")
 @staff()
 @app_commands.describe(target_member="Staff member who should receive the ticket")
 async def ticket_transfer(i,target_member:discord.Member): await claim(i,bot.tickets,target_member)
-@ticket_group.command(name="requestclose", description="🔒 Request closure of the current ticket with a reason")
+@ticket_group.command(name="requestclose", description="Request closure of the current ticket with a reason")
 @app_commands.describe(reason="Why the ticket should be closed")
 async def ticket_requestclose(i,reason:str):
     if not isinstance(i.channel, discord.TextChannel) or not is_ticket(i.channel): return await i.response.send_message("❌ This command only works inside an active ticket.",ephemeral=True)
@@ -1229,11 +1241,11 @@ async def ticket_requestclose(i,reason:str):
     if not bot.database.request_ticket_close(row['ticket_id'],i.user.id): return await i.response.send_message("⚠️ This ticket closed while the request was being submitted.",ephemeral=True)
     bot.database.audit(guild(i).id,row['ticket_id'],i.user.id,'close_requested',json.dumps({'reason':discord.utils.escape_markdown(reason)[:500]}))
     await i.response.send_message(embed=embed("🔒 Ticket closure requested", f"A staff member requested closure.\n\n**Reason:** {discord.utils.escape_markdown(reason)[:500]}"))
-@ticket_group.command(name="close", description="📦 Save the transcript and close the current ticket")
+@ticket_group.command(name="close", description="Save the transcript and close the current ticket")
 @staff()
 @app_commands.describe(reason="Resolution or closure reason saved with the transcript")
 async def ticket_close(i,reason:str="No reason provided"): await bot.tickets.close(i,reason)
-@ticket_group.command(name="priority", description="🚦 Set how urgent this ticket is")
+@ticket_group.command(name="priority", description="Set how urgent this ticket is")
 @staff()
 @app_commands.describe(priority="Priority this ticket should be worked at")
 @app_commands.choices(priority=[app_commands.Choice(name=PRIORITY_LABELS[value], value=value) for value in PRIORITIES])
@@ -1246,7 +1258,7 @@ async def ticket_priority(i: discord.Interaction, priority: app_commands.Choice[
     await i.response.send_message(embed=priority_embed(priority.value, i.user))
     if await bot.tickets.sync_channel_name(i.channel, row, priority.value):
         await i.followup.send("🏷️ Renamed the channel to match its new priority.", ephemeral=True)
-@ticket_group.command(name="list", description="🗂️ List this server's open tickets, most urgent first")
+@ticket_group.command(name="list", description="List this server's open tickets, most urgent first")
 @staff()
 @app_commands.checks.cooldown(5, 60.0, key=lambda i: (i.guild_id, i.user.id))
 async def ticket_list(i: discord.Interaction):
@@ -1266,7 +1278,7 @@ async def ticket_list(i: discord.Interaction):
     if hidden:
         result.set_footer(text=f"…and {hidden} more not shown. Clear the oldest tickets first.")
     await i.response.send_message(embed=result, ephemeral=True)
-@ticket_group.command(name="note", description="🗒️ Save an internal staff note on this ticket")
+@ticket_group.command(name="note", description="Save an internal staff note on this ticket")
 @staff()
 @app_commands.describe(text="Note only staff can read; the ticket owner never sees it")
 async def ticket_note(i: discord.Interaction, text: str):
@@ -1283,7 +1295,7 @@ async def ticket_note(i: discord.Interaction, text: str):
         embed=embed("🗒️ Note saved", f"Internal note recorded on this ticket:\n> {stored}\n\nUse /ticket notes to read the history."),
         ephemeral=True,
     )
-@ticket_group.command(name="notes", description="🗂️ Read the internal staff notes on this ticket")
+@ticket_group.command(name="notes", description="Read the internal staff notes on this ticket")
 @staff()
 async def ticket_notes(i: discord.Interaction):
     if not isinstance(i.channel, discord.TextChannel) or not is_ticket(i.channel):
@@ -1295,7 +1307,7 @@ async def ticket_notes(i: discord.Interaction):
     result = embed("🗂️ Internal ticket notes", f"Staff-only notes on {i.channel.mention}, newest first.")
     result.add_field(name="Notes", value="\n".join(lines) or "No notes yet. Add one with /ticket note.", inline=False)
     await i.response.send_message(embed=result, ephemeral=True)
-@ticket_group.command(name="stats", description="📊 Show ticket workload, response times, and top claimers")
+@ticket_group.command(name="stats", description="Show ticket workload, response times, and top claimers")
 @staff()
 @app_commands.checks.cooldown(5, 60.0, key=lambda i: (i.guild_id, i.user.id))
 async def ticket_stats(i: discord.Interaction):
@@ -1303,7 +1315,7 @@ async def ticket_stats(i: discord.Interaction):
     if g is None: return await i.response.send_message("❌ Statistics are only available inside a server.", ephemeral=True)
     await i.response.defer(ephemeral=True)
     await i.followup.send(embed=ticket_stats_embed(g, collect_ticket_stats(bot.database, g.id)), ephemeral=True)
-@ticket_group.command(name="transcript", description="📄 Get a plain-text transcript without closing the ticket")
+@ticket_group.command(name="transcript", description="Get a plain-text transcript without closing the ticket")
 @staff()
 @app_commands.checks.cooldown(3, 60.0, key=lambda i: (i.guild_id, i.user.id))
 async def ticket_transcript(i: discord.Interaction):
@@ -1314,587 +1326,10 @@ async def ticket_transcript(i: discord.Interaction):
         log.warning("Could not render an on-demand transcript for channel %s", i.channel.id)
         return await i.followup.send("❌ I could not read this channel's history. Please retry.", ephemeral=True)
     await i.followup.send(f"📄 Transcript for {i.channel.mention}. The ticket stays open.", file=discord.File(io.BytesIO(text.encode("utf-8")), filename=f"{i.channel.name}-transcript.txt"), ephemeral=True)
-@giveaway_group.command(
-    name="list",
-    description="📋 List this server's active giveaways with entry counts",
-)
-@app_commands.guild_only()
-@admin()
-@app_commands.describe(limit="How many giveaways to show (1–25)")
-async def giveaway_list(
-    interaction: discord.Interaction,
-    limit: app_commands.Range[int, 1, 25] = 10,
-) -> None:
-    """Show open giveaways ending soonest first, with entries and winner counts."""
-    guild = interaction.guild
-    if guild is None:
-        return await interaction.response.send_message(
-            "❌ Giveaways are only available inside a server.",
-            ephemeral=True,
-        )
-    rows = sorted(
-        bot.database.active_giveaways(guild.id, limit=int(limit)),
-        key=lambda row: row["ends_at"] or "",
-    )
-    shown: list[str] = []
-    used = 0
-    for row in rows:
-        entries = bot.database.giveaway_entry_count(row["giveaway_id"])
-        ping = f"pings <@&{row['ping_role_id']}>" if row["ping_role_id"] else "no ping"
-        line = (
-            f"🎁 **{discord.utils.escape_markdown(row['reward_type'])[:80]}** • `{row['giveaway_id']}`\n"
-            f"┗ {entries} {'entry' if entries == 1 else 'entries'} • "
-            f"{int(row['winner_count'])} winner(s) • {timestamp_marker(row['ends_at'])} • "
-            f"{ping} • <#{row['channel_id']}>"
-        )
-        if used + len(line) + 1 > 1000:
-            break
-        shown.append(line)
-        used += len(line) + 1
-    listing = embed(
-        f"📋 Active giveaways — {guild.name}",
-        f"**{len(rows)}** open giveaway(s), ending soonest first.",
-    )
-    listing.add_field(
-        name="Giveaways",
-        value="\n".join(shown) or "Nothing is open right now. Start one with /giveaway config.",
-        inline=False,
-    )
-    if len(shown) < len(rows):
-        listing.set_footer(text=f"…and {len(rows) - len(shown)} more not shown. End the soonest ones first.")
-    await interaction.response.send_message(embed=listing, ephemeral=True)
+register_giveaway_commands(bot, giveaway_group, admin=admin)
 
 
-@giveaway_group.command(
-    name="config",
-    description="🎛️ Open the private giveaway setup and active list",
-)
-@app_commands.guild_only()
-@admin()
-async def giveaway_config(interaction: discord.Interaction) -> None:
-    guild = interaction.guild
-    if guild is None:
-        return await interaction.response.send_message("❌ Giveaways are only available inside a server.", ephemeral=True)
-    active = bot.database.active_giveaways(guild.id)
-    dashboard = discord.Embed(
-        title=f"🎁 Giveaway Dashboard — {guild.name}",
-        description="Create a giveaway, optionally ping a role, set the free-text reward and winner count, and draw winners automatically after its timer expires.",
-        colour=discord.Colour.gold(),
-    )
-    dashboard.add_field(name="Active giveaways", value=str(len(active)), inline=True)
-    dashboard.add_field(name="Default duration", value="24 hours", inline=True)
-    view = GiveawayDashboardView(bot.giveaways, guild.id, interaction.user.id)
-    await interaction.response.send_message(embed=dashboard, view=view, ephemeral=True)
-
-
-@giveaway_group.command(
-    name="end",
-    description="🎉 End an active giveaway and draw its winners now",
-)
-@app_commands.guild_only()
-@admin()
-@app_commands.describe(giveaway_id="Start typing to pick an active giveaway, or paste its ID")
-async def giveaway_end(interaction: discord.Interaction, giveaway_id: str) -> None:
-    guild = interaction.guild
-    if guild is None:
-        return await interaction.response.send_message("❌ Giveaways can only be managed inside a server.", ephemeral=True)
-    normalized_id = giveaway_id.strip().upper()
-    if not bot.database.giveaway_for_guild(guild.id, normalized_id):
-        return await interaction.response.send_message("⚠️ I could not find that giveaway in this server.", ephemeral=True)
-    entries = bot.database.giveaway_entry_count(normalized_id)
-
-    async def draw_winners(target: discord.Interaction) -> None:
-        await target.response.defer(ephemeral=True)
-        try:
-            state, winners, panel_updated = await bot.giveaways.finish(
-                guild,
-                normalized_id,
-                ended_by=interaction.user.id,
-                force=True,
-            )
-        except Exception:
-            log.exception("Manual giveaway end failed for %s", normalized_id)
-            return await target.followup.send("❌ I could not end that giveaway. Check its public panel and try again.", ephemeral=True)
-        if state == "already_ended":
-            return await target.followup.send("ℹ️ That giveaway has already ended.", ephemeral=True)
-        if state != "ended":
-            return await target.followup.send("⚠️ That giveaway is no longer active.", ephemeral=True)
-        winner_text = ", ".join(f"<@{user_id}>" for user_id in winners) if winners else "No one entered."
-        message = f"✅ Giveaway `{normalized_id}` ended. Winners: {winner_text}"
-        if not panel_updated:
-            message += " The winner draw was saved, but I could not refresh the public panel."
-        await target.followup.send(message, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
-
-    view = ConfirmView(draw_winners, author_id=interaction.user.id, confirm_label="Draw winners now")
-    await interaction.response.send_message(
-        embed=embed(
-            "🎉 End this giveaway now?",
-            f"Giveaway `{normalized_id}` currently has **{entries}** entr{'y' if entries == 1 else 'ies'}.\n"
-            "Ending it draws the winners straight away and cannot be undone.",
-        ),
-        view=view,
-        ephemeral=True,
-    )
-    try:
-        view.message = await interaction.original_response()
-    except discord.HTTPException:
-        log.debug("Could not capture the giveaway confirmation prompt for its timeout message")
-
-
-def _may_manage_poll(interaction: discord.Interaction, poll) -> bool:
-    """Allow a poll creator or server-level manager to control that poll."""
-    return bool(
-        interaction.guild
-        and (
-            interaction.user.id == poll["creator_id"]
-            or _privileged(interaction)
-        )
-    )
-
-
-@giveaway_end.autocomplete("giveaway_id")
-async def giveaway_end_autocomplete(
-    interaction: discord.Interaction,
-    current: str,
-) -> list[app_commands.Choice[str]]:
-    """Offer this server's active giveaways instead of a raw identifier."""
-    if interaction.guild_id is None:
-        return []
-    rows = bot.database.active_giveaways(interaction.guild_id)
-    return [
-        app_commands.Choice(name=label, value=value)
-        for label, value in build_choices(
-            rows,
-            ("reward_type", "giveaway_id"),
-            "giveaway_id",
-            current,
-        )
-    ]
-
-
-@poll_group.command(
-    name="config",
-    description="🎛️ Open the private poll configuration dashboard",
-)
-@app_commands.guild_only()
-@admin()
-async def poll_config(interaction: discord.Interaction) -> None:
-    guild = interaction.guild
-    if guild is None:
-        return await interaction.response.send_message("❌ Polls are only available inside a server.", ephemeral=True)
-    dashboard = poll_dashboard_embed(bot.database, guild)
-    fallback_channel_id = interaction.channel.id if isinstance(interaction.channel, discord.TextChannel) else 0
-    view = PollDashboardView(
-        bot.database,
-        bot.polls,
-        guild.id,
-        interaction.user.id,
-        fallback_channel_id,
-    )
-    await interaction.response.send_message(embed=dashboard, view=view, ephemeral=True)
-
-
-@poll_group.command(
-    name="create",
-    description="🗳️ Create a poll members can vote on and change their vote",
-)
-@app_commands.guild_only()
-@admin()
-@app_commands.describe(
-    question="The question shown on the poll panel (up to 256 characters)",
-    options="Two to ten choices separated by | (example: Island | Ragnarok)",
-    duration_hours="Optional poll duration; defaults to /poll config",
-    description="Optional context shown under the poll title",
-)
-async def poll_create(
-    interaction: discord.Interaction,
-    question: str,
-    options: str,
-    duration_hours: app_commands.Range[int, 1, MAX_POLL_DURATION_HOURS] | None = None,
-    description: str | None = None,
-) -> None:
-    """Validate and publish a persistent, single-choice poll."""
-    guild = interaction.guild
-    if guild is None:
-        await interaction.response.send_message(
-            "❌ Polls can only be created inside a server.",
-            ephemeral=True,
-        )
-        return
-
-    cleaned_question = question.strip()
-    if not cleaned_question:
-        await interaction.response.send_message(
-            "❌ Poll question cannot be empty.",
-            ephemeral=True,
-        )
-        return
-    if len(cleaned_question) > MAX_POLL_QUESTION_LENGTH:
-        await interaction.response.send_message(
-            f"❌ Poll questions must be {MAX_POLL_QUESTION_LENGTH} characters or fewer.",
-            ephemeral=True,
-        )
-        return
-
-    try:
-        choices = parse_poll_options(options)
-    except ValueError as error:
-        await interaction.response.send_message(
-            f"❌ {error}",
-            ephemeral=True,
-        )
-        return
-
-    settings_row = bot.database.poll_settings(guild.id)
-    configured_channel_id = settings_row["channel_id"] if settings_row else None
-    if configured_channel_id:
-        target_channel = guild.get_channel(configured_channel_id)
-        if target_channel is None:
-            try:
-                target_channel = await guild.fetch_channel(configured_channel_id)
-            except discord.NotFound:
-                target_channel = None
-            except discord.HTTPException:
-                log.exception("Could not fetch configured poll channel %s", configured_channel_id)
-                await interaction.response.send_message(
-                    "⚠️ I could not check the configured poll channel. Try again shortly or choose another channel with `/poll config`.",
-                    ephemeral=True,
-                )
-                return
-        if not isinstance(target_channel, discord.TextChannel):
-            await interaction.response.send_message(
-                "⚠️ The configured poll channel is missing or is not a text channel. Run `/poll config` to choose a new one.",
-                ephemeral=True,
-            )
-            return
-    elif isinstance(interaction.channel, discord.TextChannel):
-        target_channel = interaction.channel
-    else:
-        await interaction.response.send_message(
-            "⚠️ Choose a default poll channel with `/poll config` before creating a poll here.",
-            ephemeral=True,
-        )
-        return
-
-    if guild.me:
-        permissions = target_channel.permissions_for(guild.me)
-        missing = [
-            label
-            for name, label in (
-                ("view_channel", "View Channel"),
-                ("send_messages", "Send Messages"),
-                ("embed_links", "Embed Links"),
-            )
-            if not getattr(permissions, name)
-        ]
-        if missing:
-            await interaction.response.send_message(
-                f"⚠️ The bot is missing poll-channel permissions: {', '.join(missing)}.",
-                ephemeral=True,
-            )
-            return
-
-    cleaned_description = (description or "").strip()
-    if len(cleaned_description) > 1000:
-        await interaction.response.send_message(
-            "❌ Poll descriptions must be 1,000 characters or fewer.",
-            ephemeral=True,
-        )
-        return
-
-    configured_duration = (
-        int(settings_row["default_duration_hours"])
-        if settings_row
-        else DEFAULT_POLL_DURATION_HOURS
-    )
-    poll_duration = int(duration_hours) if duration_hours is not None else configured_duration
-    await interaction.response.defer(ephemeral=True)
-    try:
-        poll_id, message = await bot.polls.create(
-            guild,
-            target_channel,
-            interaction.user.id,
-            cleaned_question,
-            choices,
-            poll_duration,
-            description=cleaned_description,
-        )
-    except discord.Forbidden:
-        log.exception("Poll creation was denied in channel %s", target_channel.id)
-        await interaction.followup.send(
-            "❌ I could not post the poll. Check the bot's channel permissions and try again.",
-            ephemeral=True,
-        )
-        return
-    except discord.HTTPException as error:
-        log.exception("Discord rejected poll creation in guild %s: %s", guild.id, error)
-        await interaction.followup.send(
-            "⚠️ Discord could not publish the poll right now. Please try again shortly.",
-            ephemeral=True,
-        )
-        return
-    except Exception:
-        log.exception("Poll creation failed for guild %s", guild.id)
-        await interaction.followup.send(
-            "❌ I could not finish creating the poll. Check the poll channel before retrying; if the post is missing, contact an admin.",
-            ephemeral=True,
-        )
-        return
-
-    await interaction.followup.send(
-        embed=embed(
-            "✅ Poll created",
-            f"📊 **Poll ID:** `{poll_id}`\n"
-            f"📣 **Posted in:** {target_channel.mention}\n"
-            f"🔗 [Jump to poll]({message.jump_url})\n"
-            f"⏳ **Duration:** {poll_duration} hours\n\n"
-            "Members can change their vote until the poll closes.",
-            discord.Colour.green(),
-        ),
-        ephemeral=True,
-    )
-
-
-@poll_group.command(
-    name="results",
-    description="📈 Show a poll's current results without ending it",
-)
-@app_commands.guild_only()
-@app_commands.describe(poll_id="Start typing to pick a poll, or paste its ID")
-async def poll_results(
-    interaction: discord.Interaction,
-    poll_id: str,
-) -> None:
-    """Show live standings to the creator or a server manager, without ending the poll."""
-    guild = interaction.guild
-    if guild is None:
-        await interaction.response.send_message(
-            "❌ Polls can only be managed inside a server.",
-            ephemeral=True,
-        )
-        return
-
-    poll = bot.database.poll_for_guild(guild.id, poll_id.strip().upper())
-    if not poll:
-        await interaction.response.send_message(
-            "⚠️ I could not find that poll in this server. Check the poll ID and try again.",
-            ephemeral=True,
-        )
-        return
-    if not _may_manage_poll(interaction, poll):
-        await interaction.response.send_message(
-            "🔒 Only the poll creator or a server manager can see results before the poll ends.",
-            ephemeral=True,
-        )
-        return
-
-    standings = poll_embed(
-        poll,
-        bot.database.poll_options(poll["poll_id"]),
-        bot.database.poll_results(poll["poll_id"]),
-    )
-    if poll["status"] == "open":
-        lead = "📊 Live standings — the poll is still open, so these numbers can still change."
-    else:
-        lead = "🔒 Final results — this poll has ended."
-    standings.description = f"{lead}\n\n{standings.description}"
-    await interaction.response.send_message(embed=standings, ephemeral=True)
-
-
-@poll_group.command(
-    name="end",
-    description="🔒 End a poll and publish its final results",
-)
-@app_commands.guild_only()
-@app_commands.describe(poll_id="Start typing to pick an open poll, or paste its ID")
-async def poll_end(interaction: discord.Interaction, poll_id: str) -> None:
-    """End a poll if the caller created it or manages the server."""
-    guild = interaction.guild
-    if guild is None:
-        await interaction.response.send_message(
-            "❌ Polls can only be managed inside a server.",
-            ephemeral=True,
-        )
-        return
-
-    poll = bot.database.poll_for_guild(guild.id, poll_id.strip().upper())
-    if not poll:
-        await interaction.response.send_message(
-            "⚠️ I could not find that poll in this server. Check the poll ID and try again.",
-            ephemeral=True,
-        )
-        return
-    if not _may_manage_poll(interaction, poll):
-        await interaction.response.send_message(
-            "🔒 Only the poll creator or a server manager can end this poll.",
-            ephemeral=True,
-        )
-        return
-
-    await interaction.response.defer(ephemeral=True)
-    try:
-        ended_poll, changed, message_updated = await bot.polls.finish(
-            guild,
-            poll["poll_id"],
-            interaction.user.id,
-        )
-    except Exception:
-        log.exception("Poll end failed for %s", poll["poll_id"])
-        await interaction.followup.send(
-            "❌ I could not end this poll right now. Check its status before trying again.",
-            ephemeral=True,
-        )
-        return
-
-    if not ended_poll:
-        await interaction.followup.send(
-            "⚠️ The poll was removed before it could be ended.",
-            ephemeral=True,
-        )
-        return
-
-    result_embed = poll_embed(
-        ended_poll,
-        bot.database.poll_options(ended_poll["poll_id"]),
-        bot.database.poll_results(ended_poll["poll_id"]),
-    )
-    summary = "✅ Poll ended." if changed else "ℹ️ Poll was already ended."
-    if not message_updated:
-        summary += " The status was saved, but its public panel could not be refreshed."
-    result_embed.description = f"{summary}\n\n{result_embed.description}"
-    await interaction.followup.send(embed=result_embed, ephemeral=True)
-
-
-@poll_end.autocomplete("poll_id")
-async def poll_end_autocomplete(
-    interaction: discord.Interaction,
-    current: str,
-) -> list[app_commands.Choice[str]]:
-    """Offer this server's open polls with their questions."""
-    if interaction.guild_id is None:
-        return []
-    rows = bot.database.active_polls(interaction.guild_id)
-    return [
-        app_commands.Choice(name=label, value=value)
-        for label, value in build_choices(
-            rows,
-            ("question", "poll_id"),
-            "poll_id",
-            current,
-        )
-    ]
-
-
-@poll_group.command(
-    name="remove",
-    description="🗑️ Remove a poll message and its stored votes",
-)
-@app_commands.guild_only()
-@app_commands.describe(poll_id="Start typing to pick any of this server's polls, or paste its ID")
-async def poll_remove(interaction: discord.Interaction, poll_id: str) -> None:
-    """Delete the poll message and its stored votes for its creator or a manager."""
-    guild = interaction.guild
-    if guild is None:
-        await interaction.response.send_message(
-            "❌ Polls can only be managed inside a server.",
-            ephemeral=True,
-        )
-        return
-
-    normalized_poll_id = poll_id.strip().upper()
-    poll = bot.database.poll_for_guild(guild.id, normalized_poll_id)
-    if not poll:
-        await interaction.response.send_message(
-            "⚠️ I could not find that poll in this server. Check the poll ID and try again.",
-            ephemeral=True,
-        )
-        return
-    if not _may_manage_poll(interaction, poll):
-        await interaction.response.send_message(
-            "🔒 Only the poll creator or a server manager can remove this poll.",
-            ephemeral=True,
-        )
-        return
-
-    async def remove_poll(target: discord.Interaction) -> None:
-        await target.response.defer(ephemeral=True)
-        try:
-            await bot.polls.remove_public_message(guild, poll)
-        except discord.Forbidden:
-            await target.followup.send(
-                "❌ I could not delete the poll message. The poll and votes were kept; check Manage Messages.",
-                ephemeral=True,
-            )
-            return
-        except discord.HTTPException as error:
-            log.warning("Could not remove poll message %s: %s", normalized_poll_id, error)
-            await target.followup.send(
-                "⚠️ Discord could not remove the poll message right now. The poll data was kept.",
-                ephemeral=True,
-            )
-            return
-
-        try:
-            removed = bot.database.remove_poll(
-                normalized_poll_id,
-                removed_by=interaction.user.id,
-            )
-        except Exception:
-            log.exception("Public poll %s was removed but database cleanup failed", normalized_poll_id)
-            await target.followup.send(
-                "⚠️ The public message was removed, but I could not remove its stored record. Contact an admin before recreating it.",
-                ephemeral=True,
-            )
-            return
-        if not removed:
-            await target.followup.send(
-                "⚠️ The poll message was removed, but its record was already gone.",
-                ephemeral=True,
-            )
-            return
-
-        await target.followup.send(
-            f"🗑️ Poll `{normalized_poll_id}` and its stored votes were removed.",
-            ephemeral=True,
-        )
-
-    view = ConfirmView(
-        remove_poll,
-        author_id=interaction.user.id,
-        confirm_label="Delete this poll",
-    )
-    await interaction.response.send_message(
-        embed=embed(
-            "🗑️ Delete this poll?",
-            f"Poll `{normalized_poll_id}` and the votes stored for it will be removed for everyone. This cannot be undone.",
-        ),
-        view=view,
-        ephemeral=True,
-    )
-    try:
-        view.message = await interaction.original_response()
-    except discord.HTTPException:
-        log.debug("Could not capture the poll confirmation prompt for its timeout message")
-
-
-@poll_remove.autocomplete("poll_id")
-async def poll_remove_autocomplete(
-    interaction: discord.Interaction,
-    current: str,
-) -> list[app_commands.Choice[str]]:
-    """Offer every poll in this server, with its status, for removal."""
-    if interaction.guild_id is None:
-        return []
-    rows = bot.database.guild_polls(interaction.guild_id)
-    return [
-        app_commands.Choice(name=label, value=value)
-        for label, value in build_choices(
-            rows,
-            ("question", "poll_id", "status"),
-            "poll_id",
-            current,
-        )
-    ]
+register_poll_commands(bot, poll_group, admin=admin, privileged=_privileged)
 
 
 @bot.event
@@ -2056,11 +1491,11 @@ async def on_app_command_error(i, error):
 
 
 # --- Suggestions and reimbursement -------------------------------------------
-suggestion_group = app_commands.Group(name="suggestion", description="💡 Send, read, and configure member suggestions")
+suggestion_group = app_commands.Group(name="suggestion", description="Send, read, and configure member suggestions")
 bot.tree.add_command(suggestion_group)
 
 
-@suggestion_group.command(name="send", description="💡 Send an idea and let the server vote on it")
+@suggestion_group.command(name="send", description="Send an idea and let the server vote on it")
 @app_commands.guild_only()
 @app_commands.checks.cooldown(3, 600.0, key=lambda i: (i.guild_id, i.user.id))
 async def suggestion_send(i: discord.Interaction):
@@ -2068,7 +1503,7 @@ async def suggestion_send(i: discord.Interaction):
     await i.response.send_modal(SuggestionModal(bot.suggestions))
 
 
-@suggestion_group.command(name="list", description="💡 Show the newest suggestions and how the server voted")
+@suggestion_group.command(name="list", description="Show the newest suggestions and how the server voted")
 @app_commands.guild_only()
 @app_commands.checks.cooldown(4, 60.0, key=lambda i: (i.guild_id, i.user.id))
 async def suggestion_list(i: discord.Interaction):
@@ -2098,7 +1533,7 @@ async def suggestion_list(i: discord.Interaction):
     await i.response.send_message(embed=panel)
 
 
-@suggestion_group.command(name="config", description="⚙️ Choose the channel that receives new suggestions (admin)")
+@suggestion_group.command(name="config", description="Choose the channel that receives new suggestions (admin)")
 @admin()
 @app_commands.guild_only()
 @app_commands.describe(channel="Text channel where new suggestions should be posted for voting")
@@ -2112,7 +1547,7 @@ async def suggestion_config(i: discord.Interaction, channel: discord.TextChannel
     )
 
 
-@bot.tree.command(name="reimburse", description="🧾 Ask staff for reimbursement of lost items or progress")
+@bot.tree.command(name="reimburse", description="Ask staff for reimbursement of lost items or progress")
 @app_commands.guild_only()
 @app_commands.checks.cooldown(3, 900.0, key=lambda i: (i.guild_id, i.user.id))
 async def reimburse(i: discord.Interaction):
@@ -2121,11 +1556,11 @@ async def reimburse(i: discord.Interaction):
 
 
 # --- Rules panel (SpinBack branding) -----------------------------------------
-rules_group = app_commands.Group(name="rules", description="📜 Post and edit the SpinBack rules panel")
+rules_group = app_commands.Group(name="rules", description="Post and edit the SpinBack rules panel")
 bot.tree.add_command(rules_group)
 
 
-@rules_group.command(name="post", description="📜 Post the rules panel with its Discord and Game buttons")
+@rules_group.command(name="post", description="Post the rules panel with its Discord and Game buttons")
 @admin()
 @app_commands.guild_only()
 @app_commands.describe(channel="Text channel that should hold the rules panel")
@@ -2133,7 +1568,7 @@ async def rules_post(i: discord.Interaction, channel: discord.TextChannel):
     await bot.rules.post(i, channel)
 
 
-@rules_group.command(name="edit", description="✏️ Replace the text of one rules section and refresh the panel")
+@rules_group.command(name="edit", description="Replace the text of one rules section and refresh the panel")
 @admin()
 @app_commands.guild_only()
 @app_commands.describe(section="Which set of rules to rewrite")
@@ -2145,7 +1580,7 @@ async def rules_edit(i: discord.Interaction, section: app_commands.Choice[str]):
     await i.response.send_modal(RulesEditModal(bot.rules, section.value).with_current_text(current))
 
 
-@rules_group.command(name="preview", description="👀 Show the rules panel privately before you post it")
+@rules_group.command(name="preview", description="Show the rules panel privately before you post it")
 @admin()
 @app_commands.guild_only()
 async def rules_preview(i: discord.Interaction):
