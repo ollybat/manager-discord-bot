@@ -8,7 +8,7 @@ from .utils import PRIORITY_LABELS
 from .utils import utcnow
 
 NEON_PURPLE = discord.Colour.from_rgb(177, 77, 255)
-COLOURS = {"general": NEON_PURPLE, "base": discord.Colour.green(), "clan": discord.Colour.purple(), "shop": discord.Colour.gold(), "raid": discord.Colour.red(), "bug": discord.Colour.orange()}
+COLOURS = {"reimburse": discord.Colour.teal(), "general": NEON_PURPLE, "base": discord.Colour.green(), "clan": discord.Colour.purple(), "shop": discord.Colour.gold(), "raid": discord.Colour.red(), "bug": discord.Colour.orange()}
 
 
 def embed(title: str, description: str, colour: discord.Colour = NEON_PURPLE) -> discord.Embed:
@@ -31,6 +31,7 @@ def support_panel(guild: discord.Guild, database: Database) -> discord.Embed:
         ("💎 Ticket Shop", "Questions about the online store, products, or purchases."),
         ("⚠️ Ticket Raid", "Bounty raids and other raid-related issues."),
         ("🐛 Ticket Bug", "Bugs or glitches found in-game or with our bots."),
+        ("🧾 Ticket Reimbursement", "Items, progress, or rewards lost to a wipe, crash, or bug."),
     )
     for name, details in categories:
         result.add_field(name=name, value=details, inline=True)
@@ -58,13 +59,71 @@ def inactivity_indicator(last_activity_at: str, inactivity_hours: int, owner_lef
     return "🟢", duration
 
 
-def ticket_embed(issue: str, region: str, details: str, status: str = "🟢", inactive_for: str = "0m") -> discord.Embed:
-    result = embed(f"{status} 🎫 Grid A1 • Support ticket opened", "Your request is now in the support queue. A moderator will review it shortly.", COLOURS.get(issue, discord.Colour.blurple()))
+TICKET_FIELD_EMOJI = (
+    ("gamertag", "🎮"),
+    ("clan", "🛡️"),
+    ("grid", "📍"),
+    ("location", "📍"),
+    ("what happened", "📝"),
+    ("reason", "📝"),
+)
+"""Field labels used by the ticket forms, mapped to a matching emoji."""
+
+
+def ticket_detail_fields(details: str) -> list[tuple[str, str]]:
+    """Split a form answer like 'Gamertag: X' into (label, value) pairs."""
+    fields: list[tuple[str, str]] = []
+    current: tuple[str, list[str]] | None = None
+    for raw_line in (details or "").splitlines():
+        line = raw_line.rstrip()
+        head, separator, tail = line.partition(":")
+        if separator and len(head) <= 40 and tail.strip():
+            if current:
+                fields.append((current[0], " ".join(current[1]).strip()))
+            current = (head.strip(), [tail.strip()])
+        elif current and line.strip():
+            current[1].append(line.strip())
+        elif line.strip():
+            fields.append(("Details", line.strip()))
+    if current:
+        fields.append((current[0], " ".join(current[1]).strip()))
+    return [(label, value) for label, value in fields if value]
+
+
+def ticket_embed(
+    issue: str,
+    region: str,
+    details: str,
+    status: str = "🟢",
+    inactive_for: str = "0m",
+    requester: str | None = None,
+    ticket_id: str | None = None,
+) -> discord.Embed:
+    """Welcome panel for one ticket: who asked, what it is, and the submitted form."""
+    result = embed(
+        f"{status} 🎫 {issue.title()} • Support ticket",
+        "Your request is in the staff queue. Everything you write here stays private to you and staff.",
+        COLOURS.get(issue, discord.Colour.blurple()),
+    )
+    if requester:
+        result.add_field(name="👤 Requested by", value=requester[:1024], inline=True)
     result.add_field(name="🗂️ Category", value=issue.title()[:1024], inline=True)
-    result.add_field(name="🌍 Region", value=f"🇪🇺 {region}", inline=True)
-    result.add_field(name="📝 Initial report", value=discord.utils.escape_markdown(details)[:1024], inline=False)
-    result.add_field(name="🕒 Activity", value=(f"Active • **{inactive_for}**" if status == "🟢" and inactive_for == "0m" else f"Inactive for **{inactive_for}**"), inline=True)
-    result.set_footer(text="Please keep replies in this channel • Times shown in UTC")
+    result.add_field(name="🌍 Region", value=f"🇪🇺 {region}"[:1024], inline=True)
+    if ticket_id:
+        result.add_field(name="🆔 Reference", value=f"{ticket_id}"[:1024], inline=True)
+    fields = ticket_detail_fields(details)
+    if fields:
+        for label, value in fields[:6]:
+            emoji = next((mark for key, mark in TICKET_FIELD_EMOJI if key in label.lower()), "•")
+            result.add_field(name=f"{emoji} {label}"[:256], value=discord.utils.escape_markdown(value)[:1024], inline=False)
+    else:
+        result.add_field(name="📝 Initial report", value=discord.utils.escape_markdown(details)[:1024] or "No details were given.", inline=False)
+    result.add_field(
+        name="🕒 Activity",
+        value=(f"Active • **{inactive_for}**" if status == "🟢" and inactive_for == "0m" else f"Inactive for **{inactive_for}**"),
+        inline=True,
+    )
+    result.set_footer(text="Keep replies in this channel • Times shown in UTC")
     return result
 
 
