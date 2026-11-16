@@ -44,17 +44,20 @@ SECTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
         "🎫 Tickets",
         (
+            "ticket list",
             "ticket claim",
             "ticket transfer",
             "ticket remove",
             "ticket requestclose",
             "ticket close",
             "ticket priority",
+            "ticket note",
+            "ticket notes",
             "ticket stats",
             "ticket transcript",
         ),
     ),
-    ("🛡️ Moderation", ("kick", "ban", "warn", "timeout")),
+    ("🛡️ Moderation", ("modlog", "kick", "ban", "warn", "timeout")),
     (
         "⚙️ Server setup",
         (
@@ -92,14 +95,18 @@ COMMAND_ACCESS: dict[str, str] = {
     "report": EVERYONE,
     "poll end": POLL_CREATOR,
     "poll remove": POLL_CREATOR,
+    "ticket list": STAFF,
     "ticket claim": STAFF,
     "ticket transfer": STAFF,
     "ticket remove": STAFF,
     "ticket requestclose": TICKET_PARTICIPANT,
     "ticket close": STAFF,
     "ticket priority": STAFF,
+    "ticket note": STAFF,
+    "ticket notes": STAFF,
     "ticket stats": STAFF,
     "ticket transcript": STAFF,
+    "modlog": STAFF,
     "kick": STAFF,
     "ban": STAFF,
     "warn": STAFF,
@@ -285,7 +292,7 @@ def render_guide(
     entries: Iterable[CommandEntry],
     rights: Iterable[str],
     max_chars: int = 1000,
-    max_total: int = 4200,
+    max_total: int = 5200,
 ) -> list[tuple[str, str]]:
     """Group the commands a viewer may use into embed fields, in section order.
 
