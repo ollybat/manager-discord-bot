@@ -5,8 +5,8 @@ import secrets
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
-from .utils import FEEDBACK_SCORES, utcnow, safe_json_list
-SCHEMA_VERSION = 20
+from .utils import DEFAULT_PRIORITY, FEEDBACK_SCORES, PRIORITIES, utcnow, safe_json_list
+SCHEMA_VERSION = 21
 class Database:
     def __init__(self, path: Path) -> None:
         self.path = path
@@ -31,7 +31,7 @@ class Database:
             for n,d in cols.items():
                 if n not in existing: db.execute(f'ALTER TABLE guild_config ADD COLUMN {n} {d}')
             existing={r[1] for r in db.execute('PRAGMA table_info(tickets)')}
-            for n,d in {'claimed_by':'INTEGER','close_requested_by':'INTEGER','inactivity_notice_at':'TEXT','owner_left':'INTEGER NOT NULL DEFAULT 0','auto_close_at':'TEXT','auto_close_reason':'TEXT','closed_at':'TEXT','closed_by':'INTEGER','close_reason':'TEXT','transcript_filename':'TEXT','urgent_at':'TEXT','urgent_by':'INTEGER'}.items():
+            for n,d in {'claimed_by':'INTEGER','close_requested_by':'INTEGER','inactivity_notice_at':'TEXT','owner_left':'INTEGER NOT NULL DEFAULT 0','auto_close_at':'TEXT','auto_close_reason':'TEXT','closed_at':'TEXT','closed_by':'INTEGER','close_reason':'TEXT','transcript_filename':'TEXT','urgent_at':'TEXT','urgent_by':'INTEGER','priority':f"TEXT NOT NULL DEFAULT '{DEFAULT_PRIORITY}'"}.items():
                 if n not in existing: db.execute(f'ALTER TABLE tickets ADD COLUMN {n} {d}')
             # Create audit_log before any index that references it.
             db.execute('''CREATE TABLE IF NOT EXISTS audit_log (id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id INTEGER NOT NULL, ticket_id TEXT, actor_id INTEGER NOT NULL, action TEXT NOT NULL, metadata TEXT NOT NULL DEFAULT '{}', created_at TEXT NOT NULL)''')
@@ -252,11 +252,13 @@ class Database:
             "status", "claimed_by", "close_requested_by", "last_activity_at",
             "inactivity_notice_at", "owner_left", "auto_close_at", "auto_close_reason",
             "closed_at", "closed_by", "close_reason", "transcript_filename",
-            "urgent_at", "urgent_by",
+            "urgent_at", "urgent_by", "priority",
         }
         unknown_fields = set(values) - allowed_fields
         if unknown_fields:
             raise ValueError(f"unknown ticket fields: {unknown_fields}")
+        if values.get("priority") is not None and values["priority"] not in PRIORITIES:
+            raise ValueError("unknown priority")
         if not values:
             return
 
@@ -974,6 +976,50 @@ class Database:
         with self.connect() as db:
             changed = db.execute(query, (requested_by, ticket_id)).rowcount
         return bool(changed)
+
+    def set_priority(self, ticket_id: str, priority: str, actor_id: int) -> bool:
+        """Set an active ticket's priority and audit the change."""
+        if priority not in PRIORITIES:
+            raise ValueError("unknown priority")
+        with self.connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            try:
+                row = db.execute(
+                    "SELECT guild_id, priority FROM tickets WHERE ticket_id=? "
+                    "AND status IN ('open','close_requested')",
+                    (ticket_id,),
+                ).fetchone()
+                if not row:
+                    db.execute("COMMIT")
+                    return False
+                db.execute("UPDATE tickets SET priority=? WHERE ticket_id=?", (priority, ticket_id))
+                db.execute(
+                    "INSERT INTO audit_log(guild_id, ticket_id, actor_id, action, metadata, created_at) "
+                    "VALUES(?,?,?,?,?,?)",
+                    (
+                        row["guild_id"],
+                        ticket_id,
+                        actor_id,
+                        "priority_changed",
+                        json.dumps({"from": row["priority"], "to": priority}),
+                        utcnow().isoformat(),
+                    ),
+                )
+                db.execute("COMMIT")
+            except Exception:
+                db.execute("ROLLBACK")
+                raise
+        return True
+
+    def priority_counts(self, guild_id: int) -> dict[str, int]:
+        """Open-ticket counts keyed by priority."""
+        query = (
+            "SELECT priority, COUNT(*) AS tickets FROM tickets "
+            "WHERE guild_id=? AND status IN ('open','close_requested') GROUP BY priority"
+        )
+        with self.connect() as db:
+            rows = db.execute(query, (guild_id,)).fetchall()
+        return {row["priority"]: int(row["tickets"]) for row in rows}
 
     def set_claim(self, ticket_id: str, claimed_by: int | None) -> None:
         """Set or clear a ticket's current staff assignee."""
