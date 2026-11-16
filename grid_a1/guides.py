@@ -40,7 +40,10 @@ CONTEXTUAL_ACCESS = frozenset({TICKET_PARTICIPANT, POLL_CREATOR})
 
 SECTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("🚀 Start here", ("help", "dashboard")),
-    ("🌐 Everyone", ("info server", "report", "poll end", "poll remove")),
+    (
+        "🌐 Everyone",
+        ("info server", "report", "poll end", "poll results", "poll remove"),
+    ),
     (
         "🎫 Tickets",
         (
@@ -57,7 +60,10 @@ SECTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "ticket transcript",
         ),
     ),
-    ("🛡️ Moderation", ("modlog", "kick", "ban", "warn", "timeout")),
+    (
+        "🛡️ Moderation",
+        ("modlog", "kick", "ban", "unban", "warn", "timeout", "untimeout", "purge"),
+    ),
     (
         "⚙️ Server setup",
         (
@@ -79,6 +85,7 @@ SECTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "poll config",
             "poll create",
             "giveaway config",
+            "giveaway list",
             "giveaway end",
             "embed",
             "embed-edit",
@@ -94,6 +101,7 @@ COMMAND_ACCESS: dict[str, str] = {
     "info server": EVERYONE,
     "report": EVERYONE,
     "poll end": POLL_CREATOR,
+    "poll results": POLL_CREATOR,
     "poll remove": POLL_CREATOR,
     "ticket list": STAFF,
     "ticket claim": STAFF,
@@ -109,8 +117,11 @@ COMMAND_ACCESS: dict[str, str] = {
     "modlog": STAFF,
     "kick": STAFF,
     "ban": STAFF,
+    "unban": STAFF,
     "warn": STAFF,
     "timeout": STAFF,
+    "untimeout": STAFF,
+    "purge": MANAGE_MESSAGES,
     "setup roles": SERVER_OWNER,
     "setup tickets": ADMIN,
     "setup welcomer": ADMIN,
@@ -124,6 +135,7 @@ COMMAND_ACCESS: dict[str, str] = {
     "poll config": ADMIN,
     "poll create": ADMIN,
     "giveaway config": ADMIN,
+    "giveaway list": ADMIN,
     "giveaway end": ADMIN,
     "embed": MANAGE_MESSAGES,
     "embed-edit": MANAGE_MESSAGES,

@@ -8,7 +8,7 @@ from typing import Any
 from .utils import DEFAULT_PRIORITY, FEEDBACK_SCORES, PRIORITIES, utcnow, safe_json_list
 SCHEMA_VERSION = 21
 NOTE_ACTION = "note"
-MODERATION_ACTIONS = ("kick", "ban", "warn", "timeout")
+MODERATION_ACTIONS = ("kick", "ban", "warn", "timeout", "unban", "untimeout")
 class Database:
     def __init__(self, path: Path) -> None:
         self.path = path

@@ -86,6 +86,12 @@ PRIORITY_ORDER = {
 _MEMBER_PREFIX = re.compile(r"^member=\d+;?\s*")
 
 
+def timestamp_marker(timestamp: Any) -> str:
+    """Discord relative timestamp marker for a stored UTC timestamp."""
+    moment = parse_time(timestamp)
+    return f"<t:{int(moment.timestamp())}:R>" if moment else "an unknown time"
+
+
 def relative_age(timestamp: Any, now: datetime | None = None) -> str:
     """Human age of a stored UTC timestamp, such as '3h 20m'."""
     minutes = minutes_between(timestamp, (now or utcnow()).isoformat())
