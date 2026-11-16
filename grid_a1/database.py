@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 from .utils import DEFAULT_PRIORITY, FEEDBACK_SCORES, PRIORITIES, utcnow, safe_json_list
-SCHEMA_VERSION = 23
+SCHEMA_VERSION = 24
 
 PERMISSION_ROLE_FIELDS = (
     "owner_role",
@@ -41,7 +41,7 @@ class Database:
             db.execute('''CREATE TABLE IF NOT EXISTS tickets (ticket_id TEXT PRIMARY KEY, guild_id INTEGER NOT NULL, channel_id INTEGER UNIQUE NOT NULL, owner_id INTEGER NOT NULL, issue TEXT NOT NULL, region TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'open', claimed_by INTEGER, close_requested_by INTEGER, opened_at TEXT NOT NULL, last_activity_at TEXT NOT NULL, inactivity_notice_at TEXT, owner_left INTEGER NOT NULL DEFAULT 0, auto_close_at TEXT, auto_close_reason TEXT, closed_at TEXT, closed_by INTEGER, close_reason TEXT, transcript_filename TEXT, urgent_at TEXT, urgent_by INTEGER)''')
             existing={r[1] for r in db.execute('PRAGMA table_info(guild_config)')}
             if 'panel_fingerprint' not in existing: db.execute("ALTER TABLE guild_config ADD COLUMN panel_fingerprint TEXT")
-            cols={**{n:'INTEGER' for n in ('report_channel','verify_panel_channel','verify_panel_message','verify_role',*[f'staff_role_{x}' for x in range(1,11)],'urgent_by','owner_role','moderator_role','admin_role','co_owner_role','head_admin_role','anti_links_enabled','anti_links_log_channel','wipe_channel','wipe_ping_role','wipe_announce_enabled','suggestion_channel')},'urgent_at':'TEXT','anti_links_action':"TEXT NOT NULL DEFAULT 'delete_warn'",'anti_links_whitelist_domains':"TEXT NOT NULL DEFAULT '[]'",'anti_links_bypass_roles':"TEXT NOT NULL DEFAULT '[]'",'anti_links_allowed_roles':"TEXT NOT NULL DEFAULT '[]'"}
+            cols={**{n:'INTEGER' for n in ('report_channel','verify_panel_channel','verify_panel_message','verify_role',*[f'staff_role_{x}' for x in range(1,11)],'urgent_by','owner_role','moderator_role','admin_role','co_owner_role','head_admin_role','anti_links_enabled','anti_links_log_channel','wipe_channel','wipe_ping_role','wipe_announce_enabled','suggestion_channel','rules_channel','rules_message')},'urgent_at':'TEXT','anti_links_action':"TEXT NOT NULL DEFAULT 'delete_warn'",'anti_links_whitelist_domains':"TEXT NOT NULL DEFAULT '[]'",'anti_links_bypass_roles':"TEXT NOT NULL DEFAULT '[]'",'anti_links_allowed_roles':"TEXT NOT NULL DEFAULT '[]'"}
             for n,d in cols.items():
                 if n not in existing: db.execute(f'ALTER TABLE guild_config ADD COLUMN {n} {d}')
             db.execute('''CREATE TABLE IF NOT EXISTS wipes (wipe_id TEXT PRIMARY KEY, guild_id INTEGER NOT NULL, region TEXT NOT NULL, title TEXT NOT NULL, scheduled_at TEXT NOT NULL, created_by INTEGER, created_at TEXT NOT NULL, announced_at TEXT, message_id INTEGER, channel_id INTEGER, status TEXT NOT NULL DEFAULT 'scheduled')''')
@@ -49,6 +49,7 @@ class Database:
             db.execute('''CREATE TABLE IF NOT EXISTS suggestions (suggestion_id TEXT PRIMARY KEY, guild_id INTEGER NOT NULL, channel_id INTEGER, message_id INTEGER, author_id INTEGER NOT NULL, body TEXT NOT NULL, created_at TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'open')''')
             db.execute("CREATE INDEX IF NOT EXISTS idx_suggestions_guild ON suggestions(guild_id, created_at)")
             db.execute('''CREATE TABLE IF NOT EXISTS suggestion_votes (suggestion_id TEXT NOT NULL, user_id INTEGER NOT NULL, value INTEGER NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY (suggestion_id, user_id))''')
+            db.execute('''CREATE TABLE IF NOT EXISTS guild_rules (guild_id INTEGER NOT NULL, section TEXT NOT NULL, body TEXT NOT NULL, updated_at TEXT NOT NULL, updated_by INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (guild_id, section))''')
             existing={r[1] for r in db.execute('PRAGMA table_info(tickets)')}
             for n,d in {'claimed_by':'INTEGER','close_requested_by':'INTEGER','inactivity_notice_at':'TEXT','owner_left':'INTEGER NOT NULL DEFAULT 0','auto_close_at':'TEXT','auto_close_reason':'TEXT','closed_at':'TEXT','closed_by':'INTEGER','close_reason':'TEXT','transcript_filename':'TEXT','urgent_at':'TEXT','urgent_by':'INTEGER','details':'TEXT','priority':f"TEXT NOT NULL DEFAULT '{DEFAULT_PRIORITY}'"}.items():
                 if n not in existing: db.execute(f'ALTER TABLE tickets ADD COLUMN {n} {d}')
@@ -175,6 +176,7 @@ class Database:
             "staff_role_2", "staff_role_3", "staff_role_4", "staff_role_5", "staff_role_6",
             "staff_role_7", "staff_role_8", "staff_role_9", "staff_role_10",
             "wipe_announce_enabled", "wipe_channel", "wipe_ping_role", "suggestion_channel",
+            "rules_channel", "rules_message",
             "owner_role", "moderator_role",
             "admin_role", "co_owner_role", "head_admin_role", "anti_links_enabled",
             "anti_links_log_channel", "anti_links_action", "anti_links_whitelist_domains",
@@ -897,6 +899,41 @@ class Database:
                 counts["announced"] += 1
             counts["past"] += 1
         return counts
+
+    def rule_row(self, guild_id: int, section: str) -> sqlite3.Row | None:
+        """One stored rule section, or None when the guild still uses the starter text."""
+        with self.connect() as db:
+            return db.execute(
+                "SELECT * FROM guild_rules WHERE guild_id=? AND section=?",
+                (guild_id, str(section).strip().lower()),
+            ).fetchone()
+
+    def rule_text(self, guild_id: int, section: str) -> str | None:
+        """Stored rule text for one section (None means the built-in default applies)."""
+        row = self.rule_row(guild_id, section)
+        return str(row["body"]) if row else None
+
+    def rules_texts(self, guild_id: int) -> dict[str, str]:
+        """Every stored rule section for one guild."""
+        with self.connect() as db:
+            rows = db.execute("SELECT section, body FROM guild_rules WHERE guild_id=?", (guild_id,)).fetchall()
+        return {str(row["section"]): str(row["body"]) for row in rows}
+
+    def set_rule_text(self, guild_id: int, section: str, body: str, actor_id: int = 0, when: str | None = None) -> None:
+        """Replace one rule section, keeping the audit trail of who last changed it."""
+        text = (body or "").strip()
+        if not text:
+            raise ValueError("Rule text cannot be empty.")
+        with self.connect() as db:
+            db.execute(
+                "INSERT INTO guild_rules(guild_id, section, body, updated_at, updated_by) VALUES (?, ?, ?, ?, ?) "
+                "ON CONFLICT(guild_id, section) DO UPDATE SET body=excluded.body, updated_at=excluded.updated_at, updated_by=excluded.updated_by",
+                (guild_id, str(section).strip().lower(), text[:4000], (when or utcnow().isoformat()), int(actor_id or 0)),
+            )
+
+    def set_rules_panel(self, guild_id: int, channel_id: int, message_id: int) -> None:
+        """Remember where the rules panel was posted so edits can refresh it."""
+        self.upsert_config(guild_id, rules_channel=int(channel_id), rules_message=int(message_id))
 
     def published_suggestions_all(self) -> list[sqlite3.Row]:
         """Every published suggestion across guilds, for persistent vote buttons."""
