@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import discord
 
+from .brand import BRAND_SHORT
 from .database import Database
 from .embeds import embed
 
@@ -18,12 +19,12 @@ def welcome_embed(bot: discord.Client, guild: discord.Guild, member: discord.Mem
     count = guild.member_count or len(guild.members)
     result = embed("🌙 Welcome to the community", f"Welcome {member.mention} — you are our **{ordinal(count)} member**!\n\nWelcome to the community. Start with verification, connect your account, and explore the useful channels below.")
     if bot.user:
-        result.set_author(name="Grid A1 • Manager", icon_url=bot.user.display_avatar.url)
+        result.set_author(name=f"{BRAND_SHORT} • Manager", icon_url=bot.user.display_avatar.url)
     else:
-        result.set_author(name="Grid A1 • Manager")
+        result.set_author(name=f"{BRAND_SHORT} • Manager")
     result.add_field(name="🧭 Server navigation", value=f"✅ **Verify / Server Selector**\nHead to <#{config['verify_channel']}>.\n\n🔗 **Link Your Account**\nLink your account in <#{config['link_channel']}>.\n\n🤖 **Bot Commands**\nUse <#{config['bot_commands_channel']}>.\n\n🛒 **Visit Our Store**\nCheck <#{config['shop_channel']}>.", inline=False)
-    result.add_field(name="🎫 Support", value="Open a ticket from the **Grid A1 Support Center** panel. EU support is available.", inline=False)
-    result.set_footer(text="💜 Grid A1 • Manager • Welcome to the community")
+    result.add_field(name="🎫 Support", value=f"Open a ticket from the **{BRAND_SHORT} Support Center** panel. EU support is available.", inline=False)
+    result.set_footer(text=f"💜 {BRAND_SHORT} • Manager • Welcome to the community")
     return result
 
 async def send_welcome(bot: discord.Client, database: Database, member: discord.Member) -> None:

@@ -6,6 +6,8 @@ from collections.abc import Iterable
 from datetime import datetime, timezone
 from typing import Any
 
+from .brand import BRAND_NAME
+
 BORDER = "═" * 60
 DIVIDER = "─" * 60
 LABEL_WIDTH = 13
@@ -133,7 +135,7 @@ async def render(
     topic = data or {}
     generated_at = datetime.now(timezone.utc)
     closed_at = record_value(record, "closed_at") or generated_at
-    bot_name = display_name(bot_user) if bot_user is not None else "Grid A1 Manager"
+    bot_name = display_name(bot_user) if bot_user is not None else BRAND_NAME
 
     lines = [BORDER, "  TICKET TRANSCRIPT", BORDER, ""]
     lines.append(_row("Server:", single_line(getattr(guild, "name", UNKNOWN))))
