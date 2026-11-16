@@ -2,13 +2,15 @@ from __future__ import annotations
 
 import discord
 
-from .brand import BRAND_NAME, BRAND_SHORT
+from .brand import BRAND_NAME, BRAND_SHORT, RULES_EMBLEM_NAMES
 from .database import Database
 from .stats import MONTH_WINDOW_DAYS, RECENT_WINDOW_DAYS, TicketStats, format_duration
 from .utils import PRIORITY_LABELS
-from .utils import utcnow
+from .utils import server_emoji, utcnow
 
 NEON_PURPLE = discord.Colour.from_rgb(177, 77, 255)
+PANEL_COLOUR = discord.Colour.from_rgb(94, 186, 255)
+TICKET_PANEL_FALLBACK_EMOJI = "🏓"
 COLOURS = {"reimburse": discord.Colour.teal(), "general": NEON_PURPLE, "base": discord.Colour.green(), "clan": discord.Colour.purple(), "shop": discord.Colour.gold(), "raid": discord.Colour.red(), "bug": discord.Colour.orange()}
 
 
@@ -16,32 +18,39 @@ def embed(title: str, description: str, colour: discord.Colour = NEON_PURPLE) ->
     return discord.Embed(title=title, description=description, colour=colour)
 
 
+TICKET_PANEL_TITLE = "📩 Spinback - Support"
+TICKET_PANEL_INTRO = "For any issue you encounter or questions you have plz select one of the following choices."
+TICKET_PANEL_HELP = (
+    "If you are looking for the commands list|how they work do `/help` this will provide you the full list of "
+    "commands and make response time quicker!"
+)
+TICKET_PANEL_CATEGORIES: tuple[tuple[str, str, str], ...] = (
+    ("📄", "Ticket General", "For any request or question that is not specified in the following categories"),
+    ("🏠", "Ticket Base", "Any questions or problems related to your base or your area can be discussed in this ticket"),
+    ("👥", "Ticket Clan", "Ticket made to respond to clan requests or possible specific problems"),
+    ("💎", "Ticket Shop", "Information about our online store or any product"),
+    ("⚠️", "Ticket Raid", "Ticket made for bounty raid or raid related problems"),
+    ("🐛", "Ticket Bug", "For any bug/glitch found in-game or with ours bots"),
+)
+"""The public ticket panel's category lines: emoji, bold heading, and the line under it."""
+
+
+def ticket_panel_emblem(guild: discord.Guild | None) -> str:
+    """The server's own logo emoji when it defines one, otherwise the design's mark."""
+    found = server_emoji(guild, RULES_EMBLEM_NAMES + ("support", "ticket", "tickets"))
+    return found or TICKET_PANEL_FALLBACK_EMOJI
+
+
 def support_panel(guild: discord.Guild, database: Database) -> discord.Embed:
-    counts = database.open_counts(guild.id)
-    bot_name = guild.me.display_name if guild.me else BRAND_NAME
+    """The public ticket panel: one heading, the guidance lines, then every issue type."""
     year = utcnow().year
-    description = (
-        "✨ Need help? Pick the closest category below to open a private ticket. Choose EU, add your in-game name, and answer the short form so staff can help faster.\n\n"
-        "🤖 Looking for bot commands? Use `/help` for the complete command guide."
-    )
-    result = embed(f"📩 {bot_name} • Support", description, NEON_PURPLE)
-    categories = (
-        ("📄 Ticket General", "Requests or questions not covered by another category."),
-        ("🏠 Ticket Base", "Questions or problems about your base or area."),
-        ("👥 Ticket Clan", "Clan requests or specific clan-related problems."),
-        ("💎 Ticket Shop", "Questions about the online store, products, or purchases."),
-        ("⚠️ Ticket Raid", "Bounty raids and other raid-related issues."),
-        ("🐛 Ticket Bug", "Bugs or glitches found in-game or with our bots."),
-        ("🧾 Ticket Reimbursement", "Items, progress, or rewards lost to a wipe, crash, or bug."),
-    )
-    for name, details in categories:
-        result.add_field(name=name, value=details, inline=True)
-    result.add_field(
-        name="📊 Support Status",
-        value=f"🟢 Open Tickets: **{sum(counts.values())}**\n⚡ Response Speed: **Fast**\n⏱️ Estimated Help Time: **12 mins**",
-        inline=False,
-    )
-    result.set_footer(text=f"Choose your issue type below • Support - {bot_name} • {year}")
+    lines = [TICKET_PANEL_INTRO, "", TICKET_PANEL_HELP]
+    for emoji, heading, details in TICKET_PANEL_CATEGORIES:
+        lines.append(f"**{emoji} {heading}**")
+        lines.append(details)
+    result = embed(TICKET_PANEL_TITLE, "\n".join(lines), PANEL_COLOUR)
+    name = guild.name if guild is not None else BRAND_SHORT
+    result.set_footer(text=f"{ticket_panel_emblem(guild)} Support - {name} • {year}")
     return result
 
 
