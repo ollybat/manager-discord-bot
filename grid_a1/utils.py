@@ -13,6 +13,7 @@ from urllib.parse import quote, unquote, urlsplit
 import discord
 
 TICKET_TOPIC_PREFIX = "grid-a1-ticket"
+FEEDBACK_SCORES = (1, 2, 3, 4, 5)
 
 T = TypeVar("T")
 
@@ -101,6 +102,18 @@ def inactivity_custom_id(action: str, ticket_id: str) -> str:
         raise ValueError("ticket_id is required")
 
     return f"grid-a1:inactive:{safe_ticket_id}:{action}"[:100]
+
+
+def feedback_custom_id(score: int, ticket_id: str) -> str:
+    """Give each rating button a persistent ID tied to its ticket."""
+    if score not in FEEDBACK_SCORES:
+        raise ValueError("unknown feedback score")
+
+    safe_ticket_id = re.sub(r"[^A-Za-z0-9_-]", "", str(ticket_id))[:32]
+    if not safe_ticket_id:
+        raise ValueError("ticket_id is required")
+
+    return f"grid-a1:feedback:{safe_ticket_id}:{score}"[:100]
 
 
 def ticket_topic(ticket_id: str, owner_id: int, issue: str, region: str) -> str:

@@ -67,6 +67,17 @@ def ticket_embed(issue: str, region: str, details: str, status: str = "🟢", in
     return result
 
 
+def feedback_embed() -> discord.Embed:
+    """Private rating request sent to a ticket owner after closure."""
+    result = embed(
+        "⭐ How did we do?",
+        "Thanks for using support. Tap a star to rate the help you received — it takes a second, and staff only ever see the average.",
+        NEON_PURPLE,
+    )
+    result.set_footer(text="1 star = poor • 5 stars = excellent • You can change your rating any time")
+    return result
+
+
 def ticket_stats_embed(guild: discord.Guild, stats: TicketStats) -> discord.Embed:
     """Render one guild's ticket workload as a staff-facing statistics panel."""
     server = getattr(guild, "name", "this server")
@@ -114,6 +125,15 @@ def ticket_stats_embed(guild: discord.Guild, stats: TicketStats) -> discord.Embe
         value=(
             "\n".join(f"<@{staff_id}> — **{count}**" for staff_id, count in stats.top_claimers)
             or "No claims recorded yet."
+        ),
+        inline=True,
+    )
+    result.add_field(
+        name="⭐ Feedback",
+        value=(
+            f"Average: **{stats.rating_average:.2f}/5**\nRatings: **{stats.rating_count}**"
+            if stats.rating_average is not None
+            else "No ratings yet. Owners are asked privately after closure."
         ),
         inline=True,
     )

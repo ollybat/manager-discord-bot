@@ -32,6 +32,8 @@ class TicketStats:
     average_close_minutes: float | None = None
     regions: tuple[tuple[str, int], ...] = ()
     top_claimers: tuple[tuple[int, int], ...] = ()
+    rating_average: float | None = None
+    rating_count: int = 0
 
 
 def parse_time(value: Any) -> datetime | None:
@@ -112,8 +114,14 @@ def claim_assignee(event: Any) -> int | None:
     return actor if isinstance(actor, int) else None
 
 
-def build_stats(tickets: Sequence[Any], claims: Sequence[Any], *, now: datetime) -> TicketStats:
-    """Summarise ticket rows and claim events without touching the database."""
+def build_stats(
+    tickets: Sequence[Any],
+    claims: Sequence[Any],
+    *,
+    now: datetime,
+    ratings: Sequence[int] = (),
+) -> TicketStats:
+    """Summarise ticket rows, claim events, and ratings without touching the database."""
     now = parse_time(now) or utcnow()
     recent = now - timedelta(days=RECENT_WINDOW_DAYS)
     month = now - timedelta(days=MONTH_WINDOW_DAYS)
@@ -158,6 +166,8 @@ def build_stats(tickets: Sequence[Any], claims: Sequence[Any], *, now: datetime)
         average_close_minutes=average(close_minutes),
         regions=tuple(regions),
         top_claimers=tuple(leaderboard),
+        rating_average=average(float(score) for score in ratings),
+        rating_count=len(ratings),
     )
 
 
@@ -176,4 +186,9 @@ def collect(database: Database, guild_id: int, *, now: datetime | None = None) -
             (guild_id, *CLAIM_ACTIONS),
         ).fetchall()
 
-    return build_stats(tickets, claims, now=now or utcnow())
+    return build_stats(
+        tickets,
+        claims,
+        now=now or utcnow(),
+        ratings=database.feedback_scores(guild_id),
+    )
