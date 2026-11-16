@@ -34,6 +34,14 @@ Run `/setup roles owner_role: ... co_owner_role: ... head_admin_role: ... admin_
 
 `/help` is generated from the bot's live command tree, so it can never drift out of date: it lists every command the member may use, grouped into sections, with each usage line and the access that command needs, and it hides sections the member cannot use. `/help command:` opens a searchable picker and shows one command in full — purpose, usage, options, and access.
 
+### Staff access comes from the server, not from Discord permissions
+
+Run `/setup roles` first. The five roles saved there (owner, co-owner, head admin, admin, moderator) are the **only** roles that pass a staff command — Discord's own Administrator and Manage Server permissions no longer grant access on their own. The server owner and the bot owner keep control of their own server, which is what makes the first `/setup roles` possible. `/setup status` shows every role and setting with ✅ or ❌ and tells you the next command to run.
+
+### Prefix commands
+
+The same moderation work is available with `!` for people who prefer typing: `!help`, `!ping`, `!whois`, `!serverinfo`, `!warn`, `!timeout`, `!untimeout`, `!kick`, `!ban`, `!unban`, `!modlog`, `!stats`, `!clear`, `!slowmode`, `!lock`, and `!unlock`. They share the role-based guard, the audit log, and the same plain-language errors as the slash commands, and `!help` lists them all.
+
 Moderation covers both directions: `/kick`, `/ban`, `/warn`, and `/timeout` record every action against the member, and `/unban` (with a picker built from the server's live ban list), `/untimeout`, and `/purge` are there for the clean-up side, each reporting exactly what changed and what Discord refused. `/poll results` shows the standings of a poll you created without ending it, and `/giveaway list` lists open giveaways soonest-ending first with entry and winner counts.
 
 Staff tooling is built into the same layer: `/ticket list` shows the open queue ordered by priority and age with claimer and age per ticket, `/ticket note` stores an internal staff note that the ticket owner never sees, `/ticket notes` reads the note history back, and `/modlog member:` lists the recorded kicks, bans, warnings, and timeouts for a member (newest first). Destructive commands ask first: `/giveaway end` and `/poll remove` send a confirmation prompt that only the member who ran the command can answer, and an unanswered prompt expires with a clear "nothing was changed" note.
