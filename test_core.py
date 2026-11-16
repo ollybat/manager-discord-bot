@@ -422,8 +422,10 @@ class CoreTests(unittest.TestCase):
             body = inspect.getsource(command.callback)
             self.assertIn(marker, body, command.name)
         purge_body = inspect.getsource(bot_module.moderation_purge.callback)
-        self.assertIn("set_footer", purge_body)
-        self.assertIn('"purge"', purge_body)
+        self.assertIn("_report_clear", purge_body)
+        report_body = inspect.getsource(bot_module._report_clear)
+        self.assertIn("set_footer", report_body)
+        self.assertIn('"purge"', report_body)
 
         with tempfile.TemporaryDirectory() as directory:
             database = Database(Path(directory) / "manager.sqlite3")
@@ -454,6 +456,61 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(timestamp_marker(None), "an unknown time")
         self.assertEqual(timestamp_marker("nonsense"), "an unknown time")
 
+
+
+    def test_clear_channel_batches_and_respects_budgets(self):
+        import grid_a1.bot as bot_module
+
+        class FakeChannel:
+            def __init__(self, total):
+                self.remaining = total
+                self.calls = []
+
+            async def purge(self, limit, reason=None):
+                taken = min(limit, self.remaining)
+                self.remaining -= taken
+                self.calls.append((limit, reason))
+                return [object()] * taken
+
+        channel = FakeChannel(250)
+        self.assertEqual(asyncio.run(bot_module._clear_channel(channel, count=None, reason="test")), (250, False))
+        self.assertEqual([limit for limit, _ in channel.calls], [100, 100, 100])
+        self.assertEqual(channel.remaining, 0)
+        self.assertIn("test", channel.calls[0][1])
+
+        limited = FakeChannel(250)
+        self.assertEqual(asyncio.run(bot_module._clear_channel(limited, count=150, reason="test")), (150, False))
+        self.assertEqual([limit for limit, _ in limited.calls], [100, 50])
+        self.assertEqual(limited.remaining, 100)
+
+        budget = FakeChannel(500)
+        self.assertEqual(asyncio.run(bot_module._clear_channel(budget, count=None, reason="test", seconds=0.0)), (100, True))
+        self.assertEqual(budget.remaining, 400)
+
+        self.assertEqual(asyncio.run(bot_module._clear_channel(FakeChannel(0), count=None, reason="test")), (0, False))
+        self.assertEqual(asyncio.run(bot_module._clear_channel(FakeChannel(9), count=0, reason="test")), (0, False))
+
+    def test_clear_empties_the_channel_behind_a_confirmation(self):
+        import grid_a1.bot as bot_module
+        from grid_a1.guides import prefix_guide_lines
+
+        source = inspect.getsource(bot_module.prefix_clear.callback)
+        self.assertIn("ConfirmView", source)
+        self.assertIn("_report_clear", source)
+        self.assertIn("count: int | None = None", source)
+        self.assertIn("Delete everything", source)
+        self.assertTrue(bot_module.prefix_clear._buckets)
+
+        report = inspect.getsource(bot_module._report_clear)
+        self.assertIn('"purge"', report)
+        self.assertIn("everything", report)
+        self.assertIn("stopped", report)
+
+        purge = bot_module.moderation_purge
+        self.assertIn("everything", inspect.getsource(purge.callback))
+        self.assertFalse(purge._params["everything"].required)
+        self.assertTrue(purge._params["count"].required)
+        self.assertIn("!clear [count] [reason]", "\n".join(prefix_guide_lines()))
 
     def test_staff_access_comes_only_from_the_configured_roles(self):
         import grid_a1.bot as bot_module
