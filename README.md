@@ -81,7 +81,7 @@ Keep tokens, databases, transcripts, and logs private. Validate with:
 ```text
 python validate_bot.py
 python validate_dashboard.py
-python -m unittest -v test_core.py
+python -m unittest -v test_core.py test_features.py
 ```
 
-These checks parse every Python module, reject truncation placeholders and destructive/tunnel tokens, and exercise migrations, report-channel persistence, safe proof URLs, ticket constraints, atomic closure, orphan cleanup, poll persistence/voting, schema columns, configured roles, persistent component IDs, `safe_json_list`, status-title formatting, channel-name sanitization, and command/dashboard dropdown source behavior. Do not execute the bot as part of validation.
+These checks parse every Python module, reject truncation placeholders and destructive/tunnel tokens, and exercise migrations, report-channel persistence, safe proof URLs, ticket constraints, atomic closure, orphan cleanup, poll persistence/voting, schema columns, configured roles, persistent component IDs, `safe_json_list`, status-title formatting, channel-name sanitization, command/dashboard dropdown source behavior, ticket channel naming, the reimbursement form, suggestion votes, and the rules panel. `test_features.py` holds the newer SpinBack feature suite and `test_core.py` the SQLite core; CI runs both through `pytest`. Do not execute the bot as part of validation.

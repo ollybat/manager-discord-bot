@@ -1,0 +1,384 @@
+"""Regression tests for the SpinBack features added on top of the SQLite core.
+
+Covers ticket naming, the reimbursement form, member suggestions, the rules panel, and the
+SpinBack branding: these grew out of the core suite and are kept separate so each file stays
+small enough to read and review on its own.
+"""
+from __future__ import annotations
+
+import asyncio
+import tempfile
+import unittest
+from pathlib import Path
+from types import SimpleNamespace
+
+import discord
+
+from grid_a1.database import Database, SCHEMA_VERSION
+
+
+ROOT = Path(__file__).parent
+
+
+class SpinBackFeatureTests(unittest.TestCase):
+    def test_ticket_channel_names_show_priority_and_stay_bounded(self):
+        from grid_a1.utils import PRIORITY_MARKERS, sanitize_channel_name, suggestion_custom_id, ticket_channel_name
+
+        self.assertEqual(sanitize_channel_name("EU", "Bug / Links", "A--User", "ABC123"), "eu-bug-links-a-user-abc123")
+        self.assertEqual(sanitize_channel_name(""), "ticket")
+        self.assertEqual(sanitize_channel_name("EU", "General", limit=6), "eu-gen")
+
+        urgent = ticket_channel_name("reimburse", "Olly Bat", "A1B2C3", "urgent")
+        self.assertTrue(urgent.startswith("🔴-"))
+        self.assertIn("reimburse-olly-bat-a1b2c3", urgent)
+        self.assertLessEqual(len(urgent), 95)
+        self.assertTrue(ticket_channel_name("general", "player", "ID1").startswith(f"{PRIORITY_MARKERS['normal']}-"))
+        self.assertTrue(ticket_channel_name("general", "player", "ID1", "not-a-priority").startswith("🔵-"))
+        self.assertEqual(sorted(PRIORITY_MARKERS), ["high", "low", "normal", "urgent"])
+
+        self.assertEqual(suggestion_custom_id("up", "AB12"), "grid-a1:suggestion:AB12:up")
+        self.assertEqual(suggestion_custom_id("down", "x!" * 40), "grid-a1:suggestion:" + "x" * 32 + ":down")
+        self.assertLessEqual(len(suggestion_custom_id("down", "Z" * 90)), 100)
+        for broken in ("sideways", ""):
+            with self.assertRaises(ValueError):
+                suggestion_custom_id(broken, "AB12")
+        with self.assertRaises(ValueError):
+            suggestion_custom_id("up", "")
+
+    def test_reimburse_form_collects_and_formats_the_four_answers(self):
+        from grid_a1.tickets import REIMBURSE_PROMPTS, ReimburseModal, reimbursement_details
+
+        self.assertEqual([label for label, _, _ in REIMBURSE_PROMPTS], ["Gamertag", "Clan Name", "Grid Location", "What Happened"])
+
+        calls = []
+
+        class FakeService:
+            async def create(self, interaction, issue, label, region, details):
+                calls.append((issue, label, region, details))
+
+        modal = ReimburseModal(FakeService())
+        self.assertEqual([item.label for item in modal.children], ["Gamertag", "Clan Name", "Grid Location", "What Happened"])
+        self.assertEqual([item.required for item in modal.children], [True, False, True, True])
+        self.assertEqual(modal.children[-1].style, discord.TextStyle.paragraph)
+        self.assertLessEqual(modal.children[-1].max_length, 1024)
+
+        details = reimbursement_details({"Gamertag": "  Olly  ", "Grid Location": "Grid A1", "What Happened": "Lost my base"})
+        self.assertIn("Gamertag: Olly", details)
+        self.assertIn("Clan Name: Not provided", details)
+        self.assertTrue(details.endswith("What Happened: Lost my base"))
+
+        class FakeInteraction:
+            def __init__(self):
+                self.user = SimpleNamespace(id=77, name="olly")
+
+        async def submit():
+            for item, value in zip(modal.children, ["Olly", "", "Grid A1", "Lost my base"]):
+                item._value = value
+            await modal.on_submit(FakeInteraction())
+
+        asyncio.run(submit())
+        self.assertEqual(len(calls), 1)
+        issue, label, region, submitted = calls[0]
+        self.assertEqual((issue, label, region), ("reimburse", "Reimbursement", "EU"))
+        self.assertIn("Gamertag: Olly", submitted)
+        self.assertIn("Clan Name: Not provided", submitted)
+
+    def test_reimburse_command_is_public_and_opens_the_form(self):
+        import grid_a1.bot as bot_module
+        from grid_a1.guides import ACCESS_LABELS, COMMAND_ACCESS, catalog, render_guide
+
+        command = bot_module.bot.tree.get_command("reimburse")
+        self.assertIsNotNone(command)
+        self.assertTrue(command.description.startswith("🧾"))
+        self.assertEqual(COMMAND_ACCESS["reimburse"], "everyone")
+        self.assertIsNotNone(bot_module.ReimburseModal)
+
+        entries = catalog(bot_module.bot.tree)
+        rendered = "\n".join(value for _, value in render_guide(entries, list(ACCESS_LABELS), max_total=6000))
+        self.assertIn("/reimburse", rendered)
+
+    def test_suggestions_store_votes_and_toggle_cleanly(self):
+        from grid_a1.suggestions import SuggestionService, new_suggestion_id, suggestion_embed, suggestion_line
+
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(Path(directory) / "manager.sqlite3")
+            database.migrate()
+            service = SuggestionService(database)
+
+            self.assertEqual(len(new_suggestion_id()), 6)
+            with self.assertRaises(ValueError):
+                database.create_suggestion(suggestion_id="SHORT", guild_id=1, author_id=2, body="hi", created_at="now")
+            with self.assertRaises(ValueError):
+                database.create_suggestion(suggestion_id="LONG", guild_id=1, author_id=2, body="x" * 1001, created_at="now")
+
+            row = service.create(1, 2, "  Add   a   replay   night  ")
+            self.assertEqual(row["body"], "Add a replay night")
+            self.assertIsNone(database.suggestion(99, row["suggestion_id"]))
+            self.assertEqual([item["suggestion_id"] for item in service.listing(1)], [row["suggestion_id"]])
+
+            self.assertEqual(database.record_suggestion_vote(row["suggestion_id"], 2, 1, "t1"), 1)
+            self.assertEqual(database.record_suggestion_vote(row["suggestion_id"], 3, 1, "t1"), 1)
+            self.assertEqual(database.suggestion_votes(row["suggestion_id"]), {"up": 2, "down": 0})
+            self.assertEqual(database.record_suggestion_vote(row["suggestion_id"], 2, 1, "t2"), 0)
+            self.assertEqual(database.suggestion_votes(row["suggestion_id"]), {"up": 1, "down": 0})
+            self.assertEqual(database.record_suggestion_vote(row["suggestion_id"], 2, -1, "t3"), -1)
+            self.assertEqual(database.suggestion_votes(row["suggestion_id"]), {"up": 1, "down": 1})
+            self.assertEqual(database.suggestion_vote_of(row["suggestion_id"], 2), -1)
+            self.assertEqual(database.suggestion_vote_of(row["suggestion_id"], 4), 0)
+            with self.assertRaises(ValueError):
+                database.record_suggestion_vote(row["suggestion_id"], 2, 5, "t4")
+
+            totals = database.suggestion_votes_many([row["suggestion_id"], "MISSING"])
+            self.assertEqual(totals[row["suggestion_id"]], {"up": 1, "down": 1})
+            self.assertEqual(totals["MISSING"], {"up": 0, "down": 0})
+            self.assertEqual(database.suggestion_votes_many([]), {})
+
+            self.assertEqual(database.published_suggestions_all(), [])
+            self.assertTrue(database.attach_suggestion_message(row["suggestion_id"], 55, 66))
+            self.assertFalse(database.attach_suggestion_message("NOPE", 55, 66))
+            published = database.published_suggestions_all()
+            self.assertEqual([item["suggestion_id"] for item in published], [row["suggestion_id"]])
+            self.assertEqual(published[0]["message_id"], 66)
+
+            panel = suggestion_embed(row, {"up": 3, "down": 1}, viewer_vote=1)
+            values = "\n".join(field.value for field in panel.fields)
+            self.assertIn("**3**", values)
+            self.assertIn("<@2>", values)
+            self.assertIn("75% of 4", values)
+            self.assertIn("👍 yes", values)
+            self.assertIn("vote back", (panel.footer.text or "").lower())
+            self.assertIn("No votes yet", suggestion_embed(row, {}) .fields[5].value)
+            self.assertIn(row["suggestion_id"], suggestion_line(row, {"up": 1, "down": 0}))
+
+    def test_suggestion_commands_and_vote_view_are_wired(self):
+        import grid_a1.bot as bot_module
+        from grid_a1.guides import ACCESS_LABELS, COMMAND_ACCESS, catalog, render_guide
+        from grid_a1.suggestions import SuggestionModal, SuggestionVoteView
+
+        group = bot_module.bot.tree.get_command("suggestion")
+        self.assertIsNotNone(group)
+        self.assertEqual({command.name for command in group.commands}, {"send", "list", "config"})
+        self.assertIsNotNone(bot_module.bot.suggestions)
+        self.assertEqual(COMMAND_ACCESS["suggestion send"], "everyone")
+        self.assertEqual(COMMAND_ACCESS["suggestion config"], "admin")
+
+        modal = SuggestionModal(bot_module.bot.suggestions)
+        self.assertEqual(len(modal.children), 1)
+        self.assertEqual(modal.children[0].max_length, 1000)
+        self.assertEqual(modal.children[0].style, discord.TextStyle.paragraph)
+
+        view = SuggestionVoteView(bot_module.bot.suggestions, "AB12CD")
+        self.assertEqual({item.custom_id for item in view.children}, {"grid-a1:suggestion:AB12CD:up", "grid-a1:suggestion:AB12CD:down"})
+
+        entries = catalog(bot_module.bot.tree)
+        rendered = "\n".join(value for _, value in render_guide(entries, list(ACCESS_LABELS), max_total=6000))
+        for command in ("/suggestion send", "/suggestion list", "/suggestion config"):
+            self.assertIn(command, rendered)
+
+    def test_suggestion_vote_view_counts_toggles_and_reports(self):
+        from grid_a1.suggestions import SuggestionService, SuggestionVoteView
+
+        class Recorder:
+            def __init__(self):
+                self.calls = []
+
+            async def __call__(self, *args, **kwargs):
+                self.calls.append((args, kwargs))
+
+        class FakeInteraction:
+            def __init__(self, user_id, guild_id=3):
+                self.guild = SimpleNamespace(id=guild_id)
+                self.user = SimpleNamespace(id=user_id, name=f"member-{user_id}")
+                self.replied = Recorder()
+                self.edited = Recorder()
+                self.response = SimpleNamespace(send_message=self.replied, edit_message=self.edited)
+
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(Path(directory) / "manager.sqlite3")
+            database.migrate()
+            service = SuggestionService(database)
+            row = service.create(3, 900, "Add a weekly replay night")
+            view = SuggestionVoteView(service, row["suggestion_id"])
+
+            first = FakeInteraction(900)
+            asyncio.run(view._record(first, 1))
+            self.assertEqual(database.suggestion_votes(row["suggestion_id"]), {"up": 1, "down": 0})
+            embed_items = first.edited.calls[0][1]
+            self.assertIn("**1**", "\n".join(field.value for field in embed_items["embed"].fields))
+
+            second = FakeInteraction(900)
+            asyncio.run(view._record(second, 1))
+            self.assertEqual(database.suggestion_votes(row["suggestion_id"]), {"up": 0, "down": 0})
+            self.assertIn("vote was removed", second.edited.calls[0][1]["embed"].description)
+
+            third = FakeInteraction(901)
+            asyncio.run(view._record(third, -1))
+            self.assertEqual(database.suggestion_votes(row["suggestion_id"]), {"up": 0, "down": 1})
+
+            outsider = FakeInteraction(902, guild_id=77)
+            asyncio.run(view._record(outsider, 1))
+            self.assertIn("no longer available", outsider.replied.calls[0][0][0])
+
+    def test_suggestion_publish_requires_a_configured_channel(self):
+        from grid_a1.suggestions import SuggestionService
+
+        class Recorder:
+            def __init__(self):
+                self.calls = []
+
+            async def __call__(self, *args, **kwargs):
+                self.calls.append((args, kwargs))
+
+        class FakeDatabase:
+            def __init__(self, config):
+                self._config = config
+
+            def config(self, guild_id):
+                return self._config
+
+        class FakeInteraction:
+            def __init__(self, guild_id=3):
+                self.guild = SimpleNamespace(id=guild_id)
+                self.user = SimpleNamespace(id=5, name="member")
+                self.sent = Recorder()
+                self.response = SimpleNamespace(send_message=self.sent, defer=Recorder())
+
+        service = SuggestionService(FakeDatabase(None))
+        first = FakeInteraction()
+        asyncio.run(service.publish(first, "Add a shop"))
+        self.assertIn("No suggestion channel is set", first.sent.calls[0][0][0])
+
+        service = SuggestionService(FakeDatabase({"suggestion_channel": 4242}))
+        second = FakeInteraction()
+        second.guild = SimpleNamespace(id=3, get_channel=lambda channel_id: None)
+        asyncio.run(service.publish(second, "Add a shop"))
+        self.assertIn("suggestion channel is missing", second.sent.calls[0][0][0].lower())
+
+
+    def test_rules_panel_matches_the_published_layout(self):
+        from grid_a1.brand import BRAND_NAME, BRAND_SHORT
+        from grid_a1.rules import RULES_COLOUR, rules_panel_embed
+
+        self.assertEqual(BRAND_NAME, "SpinBack Manager")
+        self.assertEqual(BRAND_SHORT, "SpinBack")
+        panel = rules_panel_embed()
+        self.assertEqual(panel.title, "SpinBack Rules ✅")
+        self.assertIn("Thank you all for reading and respecting these rules.", panel.description)
+        self.assertIn("best competitive server", panel.description)
+        self.assertEqual(
+            [(field.name, field.value) for field in panel.fields],
+            [("Discord 🎧", "All discord related rules."), ("Game 🎮", "General in-game rules.")],
+        )
+        self.assertEqual(panel.footer.text, "Powered by SpinBack")
+        self.assertEqual(panel.colour, RULES_COLOUR)
+
+    def test_rules_storage_defaults_and_service_reads(self):
+        from grid_a1.brand import RULES_DEFAULTS
+        from grid_a1.rules import RulesService, rules_section_embed
+
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(Path(directory) / "manager.sqlite3")
+            database.migrate()
+            service = RulesService(database)
+
+            self.assertIsNone(database.rule_text(42, "discord"))
+            self.assertEqual(database.rules_texts(42), {})
+            self.assertEqual(service.text(42, "discord"), RULES_DEFAULTS["discord"])
+            self.assertEqual(service.text_with_meta(42, "game"), (RULES_DEFAULTS["game"], None))
+            self.assertEqual(service.text(42, "not-a-section"), RULES_DEFAULTS["discord"])
+
+            database.set_rule_text(42, "GAME", "1. No teaming.", 900, "2026-11-16T10:00:00+00:00")
+            row = database.rule_row(42, "game")
+            self.assertEqual(row["body"], "1. No teaming.")
+            self.assertEqual(row["section"], "game")
+            self.assertEqual(row["updated_by"], 900)
+            self.assertEqual(database.rules_texts(42), {"game": "1. No teaming."})
+            self.assertEqual(service.text_with_meta(42, "game")[0], "1. No teaming.")
+            self.assertIsNotNone(service.text_with_meta(42, "game")[1])
+            with self.assertRaises(ValueError):
+                database.set_rule_text(42, "game", "   ")
+
+            section = rules_section_embed("game", "1. No teaming.", "2026-11-16T10:00:00+00:00")
+            self.assertIn("Game", section.title)
+            self.assertEqual(section.description, "1. No teaming.")
+            self.assertIn("<t:", section.footer.text)
+
+            database.set_rules_panel(42, 500, 600)
+            config = database.config(42)
+            self.assertEqual((config["rules_channel"], config["rules_message"]), (500, 600))
+
+    def test_rules_view_buttons_and_edit_modal(self):
+        from grid_a1.rules import RULES_COLOUR, RulesEditModal, RulesService, RulesView, rules_section_meta
+        from grid_a1.utils import rules_custom_id
+
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(Path(directory) / "manager.sqlite3")
+            database.migrate()
+            service = RulesService(database)
+
+            self.assertEqual([rules_custom_id(section) for section, _, _, _ in [("discord", "a", "b", "c"), ("game", "a", "b", "c")]],
+                             ["grid-a1:rules:discord", "grid-a1:rules:game"])
+            self.assertEqual(rules_custom_id("DISCORD!"), "grid-a1:rules:discord")
+            with self.assertRaises(ValueError):
+                rules_custom_id("")
+
+            view = RulesView(service)
+            self.assertEqual({item.custom_id for item in view.children}, {"grid-a1:rules:discord", "grid-a1:rules:game"})
+            self.assertEqual([item.label for item in view.children], ["Discord", "Game"])
+
+            class Recorder:
+                def __init__(self):
+                    self.calls = []
+
+                async def __call__(self, *args, **kwargs):
+                    self.calls.append((args, kwargs))
+
+            class FakeInteraction:
+                def __init__(self):
+                    self.guild = SimpleNamespace(id=3, name="Grid A1")
+                    self.response = SimpleNamespace(send_message=Recorder(), is_done=lambda: False)
+
+            interaction = FakeInteraction()
+            asyncio.run(view.show(interaction, "game"))
+            sent = interaction.response.send_message.calls[0][1]
+            self.assertIn("No cheating", sent["embed"].description)
+            self.assertIn("Game", sent["embed"].title)
+            self.assertTrue(sent["ephemeral"])
+
+            self.assertEqual(rules_section_meta("nope")[0], "discord")
+            modal = RulesEditModal(service, "discord")
+            self.assertEqual(len(modal.children), 1)
+            self.assertEqual(modal.children[0].style, discord.TextStyle.paragraph)
+            self.assertEqual(modal.children[0].max_length, 4000)
+            self.assertEqual(modal.with_current_text("old rules").children[0].default, "old rules")
+
+    def test_rules_commands_are_registered_and_guided(self):
+        import grid_a1.bot as bot_module
+        from grid_a1.guides import ACCESS_LABELS, COMMAND_ACCESS, catalog, render_guide
+
+        group = bot_module.bot.tree.get_command("rules")
+        self.assertIsNotNone(group)
+        self.assertEqual({command.name for command in group.commands}, {"post", "edit", "preview"})
+        self.assertIsNotNone(bot_module.bot.rules)
+        for name in ("rules post", "rules edit", "rules preview"):
+            self.assertEqual(COMMAND_ACCESS[name], "admin")
+
+        entries = catalog(bot_module.bot.tree)
+        rendered = "\n".join(value for _, value in render_guide(entries, list(ACCESS_LABELS), max_total=6000))
+        for command in ("/rules post", "/rules edit", "/rules preview"):
+            self.assertIn(command, rendered)
+
+    def test_every_shipped_file_uses_the_spinback_brand(self):
+        stale = ("Grid A1", "grid-a1-manager")
+        for path in sorted((ROOT / "grid_a1").glob("*.py")) + [
+            ROOT / "README.md",
+            ROOT / "PROJECT_MAP.md",
+            ROOT / "SETUP_GUIDE.md",
+        ]:
+            source = path.read_text(encoding="utf-8")
+            for needle in stale:
+                self.assertNotIn(needle, source, f"{path.name} still mentions {needle}")
+
+
+if __name__ == "__main__":
+    unittest.main()
