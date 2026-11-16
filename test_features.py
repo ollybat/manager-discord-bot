@@ -610,6 +610,40 @@ class SpinBackFeatureTests(unittest.TestCase):
             database.upsert_config(3, rules_emojis="not json")
             self.assertEqual(database.rules_emojis(3), {})
 
+    def test_ticket_panel_follows_the_support_design(self):
+        from grid_a1.embeds import PANEL_COLOUR, TICKET_PANEL_CATEGORIES, support_panel
+        from grid_a1.utils import utcnow
+
+        class FakeEmoji:
+            name = "spinback"
+
+            def __str__(self):
+                return "<:spinback:9>"
+
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(Path(directory) / "manager.sqlite3")
+            database.migrate()
+
+            guild = SimpleNamespace(id=3, name="Spinback 5X [EU]", emojis=[FakeEmoji()])
+            panel = support_panel(guild, database)
+            self.assertEqual(panel.title, "📩 Spinback - Support")
+            self.assertEqual(panel.colour, PANEL_COLOUR)
+            self.assertEqual(
+                panel.footer.text,
+                f"<:spinback:9> Support - Spinback 5X [EU] • {utcnow().year}",
+            )
+            for emoji, heading, details in TICKET_PANEL_CATEGORIES:
+                self.assertIn(f"**{emoji} {heading}**\n{details}", panel.description)
+            self.assertIn("plz select one of the following choices", panel.description)
+            self.assertIn("`/help`", panel.description)
+            self.assertNotIn("Support Status", panel.description)
+
+            plain = support_panel(SimpleNamespace(id=4, name="Other Server", emojis=[]), database)
+            self.assertEqual(
+                plain.footer.text,
+                f"🏓 Support - Other Server • {utcnow().year}",
+            )
+
     def test_every_shipped_file_uses_the_spinback_brand(self):
         stale = ("Grid A1", "grid-a1-manager")
         for path in sorted((ROOT / "grid_a1").glob("*.py")) + [

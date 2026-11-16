@@ -1827,14 +1827,35 @@ class CoreTests(unittest.TestCase):
         self.assertIn("class WelcomeStepOneView", source)
         self.assertIn("class ReportChannelWizardView", source)
 
-    def test_support_panel_uses_requested_copy_and_keeps_issue_picker(self):
+    def test_support_panel_uses_the_requested_copy_and_keeps_the_issue_picker(self):
         embeds = (ROOT / "grid_a1" / "embeds.py").read_text(encoding="utf-8")
         views = (ROOT / "grid_a1" / "views.py").read_text(encoding="utf-8")
         panel = embeds.split("def support_panel", 1)[1].split("def inactivity_indicator", 1)[0]
-        for label in ("Ticket General", "Ticket Base", "Ticket Clan", "Ticket Shop", "Ticket Raid", "Ticket Bug", "Support Status", "Estimated Help Time:", "12 mins"):
-            self.assertIn(label, panel)
-        self.assertIn("inline=True", panel)
-        self.assertIn("sum(counts.values())", panel)
+        for marker in (
+            "Ticket General",
+            "Ticket Base",
+            "Ticket Clan",
+            "Ticket Shop",
+            "Ticket Raid",
+            "Ticket Bug",
+            "plz select one of the following choices",
+            "make response time quicker",
+            "Support - ",
+        ):
+            self.assertIn(marker, embeds)
+        for detail in (
+            "not specified in the following categories",
+            "can be discussed in this ticket",
+            "possible specific problems",
+            "Information about our online store",
+            "bounty raid or raid related problems",
+            "found in-game or with ours bots",
+        ):
+            self.assertIn(detail, embeds)
+        self.assertIn("TICKET_PANEL_CATEGORIES", panel)
+        self.assertIn("PANEL_COLOUR", panel)
+        self.assertNotIn("Support Status", panel)
+        self.assertNotIn("inline=True", panel)
         self.assertIn("class TicketTypeSelect", views)
         self.assertIn("Select your issue type ...", views)
         self.assertNotIn('label="How it works"', views)
