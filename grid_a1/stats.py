@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Iterable, Sequence
+from typing import Any
 
 from .database import Database
 from .utils import utcnow
@@ -65,7 +66,7 @@ def format_duration(minutes: float | None) -> str:
     """Compact duration such as `2h 15m`, or an em dash when nothing was measured."""
     if minutes is None:
         return "—"
-    total = max(0, int(round(minutes)))
+    total = max(0, round(minutes))
     if total < 60:
         return f"{total}m"
     hours, remainder = divmod(total, 60)
@@ -104,8 +105,11 @@ def claim_assignee(event: Any) -> int | None:
     assignee = metadata.get("new_assignee") if isinstance(metadata, dict) else None
     if isinstance(assignee, int):
         return assignee
-    actor = event["actor_id"] if "actor_id" in event.keys() else None
-    return int(actor) if isinstance(actor, int) else None
+    try:
+        actor = event["actor_id"]
+    except (IndexError, KeyError, TypeError):
+        return None
+    return actor if isinstance(actor, int) else None
 
 
 def build_stats(tickets: Sequence[Any], claims: Sequence[Any], *, now: datetime) -> TicketStats:
