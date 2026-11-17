@@ -73,8 +73,12 @@ def rules_panel_view(service: "RulesService", guild: Any = None) -> discord.ui.L
     """The published rules panel: one container holding the text and the section buttons."""
     emojis = resolved_emojis(service, guild)
     view = discord.ui.LayoutView(timeout=None)
+    media = logo.guild_mark_url(getattr(guild, "id", 0), getattr(service, "database", None))
     children: list[Any] = [
-        discord.ui.TextDisplay(f"# {RULES_TITLE}"),
+        discord.ui.Section(
+            discord.ui.TextDisplay(f"# {RULES_TITLE}"),
+            accessory=discord.ui.Thumbnail(media),
+        ),
         discord.ui.TextDisplay(RULES_INTRO),
         discord.ui.Separator(),
     ]
@@ -88,8 +92,8 @@ def rules_panel_view(service: "RulesService", guild: Any = None) -> discord.ui.L
         )
     emblem = emojis.get("emblem", "")
     footer_line = discord.ui.TextDisplay(f"***{emblem} {RULES_FOOTER}***" if emblem else f"***{RULES_FOOTER}***")
-    media = logo.guild_logo_url(getattr(guild, "id", 0), getattr(service, "database", None))
-    children.append(discord.ui.Section(footer_line, accessory=discord.ui.Thumbnail(media)))
+    children.append(discord.ui.Separator())
+    children.append(footer_line)
     view.add_item(discord.ui.Container(*children, accent_colour=RULES_COLOUR))
     return view
 
@@ -220,7 +224,7 @@ class RulesService:
         await interaction.response.defer(ephemeral=True)
         await _delete_previous_panel(self.database, guild)
         try:
-            message = await channel.send(view=self.panel(guild), file=logo.logo_file(guild.id, self.database))
+            message = await channel.send(view=self.panel(guild), file=logo.mark_file(guild.id, self.database))
         except discord.Forbidden:
             return await interaction.followup.send(
                 f"❌ I cannot post in {channel.mention}. Check View Channel and Send Messages, then try again.",
@@ -247,7 +251,7 @@ class RulesService:
             return False
         try:
             message = await channel.fetch_message(int(config["rules_message"]))
-            await message.edit(view=self.panel(guild), attachments=[logo.logo_file(guild.id, self.database)])
+            await message.edit(view=self.panel(guild), attachments=[logo.mark_file(guild.id, self.database)])
         except (discord.Forbidden, discord.HTTPException, discord.NotFound):
             log.info("Could not refresh the rules panel in guild %s", guild.id, exc_info=True)
             return False
