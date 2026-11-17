@@ -135,11 +135,104 @@ class CoreTests(unittest.TestCase):
                                    issue="links", region="EU", opened_at="2024-01-01T00:00:00+00:00",
                                    last_activity_at="2024-01-01T00:00:00+00:00")
             database.migrate()
-            self.assertEqual(SCHEMA_VERSION, 25)
+            self.assertEqual(SCHEMA_VERSION, 26)
             self.assertEqual(database.ticket("ABC123")["issue"], "links")
             self.assertEqual(database.config(42)["owner_role"], 101)
             self.assertEqual(database.config(42)["report_channel"], 9900)
             self.assertEqual(database.startup_check()["schema_version"], SCHEMA_VERSION)
+
+    def test_bundled_logo_is_a_real_picture_inside_the_upload_limit(self):
+        import base64
+
+        from grid_a1 import brand_logo, logo
+
+        data = brand_logo.bundled_logo_bytes()
+        self.assertIs(data, brand_logo.bundled_logo_bytes())
+        self.assertEqual(logo.sniff_image(data), "jpeg")
+        self.assertEqual(len(data), len(base64.b64decode(brand_logo.LOGO_BASE64)))
+        self.assertLessEqual(len(data), logo.MAX_LOGO_BYTES)
+        self.assertEqual((brand_logo.LOGO_WIDTH, brand_logo.LOGO_HEIGHT), (400, 400))
+        self.assertEqual(logo.bundled_logo()[1], brand_logo.LOGO_FILENAME)
+        self.assertEqual(logo.bundled_logo()[2], brand_logo.LOGO_CONTENT_TYPE)
+
+    def test_logo_upload_validation_accepts_the_supported_formats(self):
+        from grid_a1 import logo
+
+        cases = (
+            (b"\x89PNG\r\n\x1a\n" + b"rest", ("spinback-logo.png", "image/png")),
+            (b"\xff\xd8\xff" + b"rest", ("spinback-logo.jpg", "image/jpeg")),
+            (b"GIF89a" + b"rest", ("spinback-logo.gif", "image/gif")),
+            (b"RIFF\x00\x00\x00\x00WEBP" + b"rest", ("spinback-logo.webp", "image/webp")),
+        )
+        for payload, expected in cases:
+            self.assertEqual(logo.validate_upload(payload)[1:], expected)
+        for payload, expected_message in (
+            (b"", "empty"),
+            (b"x" * (logo.MAX_LOGO_BYTES + 1), "Keep logos under"),
+            (b"total junk", "not a PNG, JPEG, GIF, or WebP"),
+        ):
+            with self.assertRaises(logo.LogoRejected) as caught:
+                logo.validate_upload(payload)
+            self.assertIn(expected_message, str(caught.exception))
+
+    def test_guild_logos_round_trip_and_fall_back_to_the_bundled_mark(self):
+        from grid_a1 import logo
+
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(Path(directory) / "manager.sqlite3")
+            database.migrate()
+            self.assertIsNone(database.guild_logo(42))
+            self.assertFalse(database.clear_guild_logo(42))
+            with self.assertRaises(ValueError):
+                database.set_guild_logo(42, b"", "spinback-logo.png", "image/png")
+            self.assertEqual(logo.guild_logo(42, database), logo.bundled_logo())
+            database.set_guild_logo(42, b"\x89PNG\r\n\x1a\n" + b"mine-picture", "spinback-logo.png", "image/png", 7)
+            row = database.guild_logo(42)
+            self.assertEqual(row["filename"], "spinback-logo.png")
+            self.assertEqual(row["content_type"], "image/png")
+            self.assertEqual(row["updated_by"], 7)
+            self.assertEqual(bytes(row["logo"]), b"\x89PNG\r\n\x1a\n" + b"mine-picture")
+            self.assertEqual(logo.guild_logo(42, database)[1], "spinback-logo.png")
+            self.assertEqual(logo.source_label(42, database), "Your uploaded logo")
+            self.assertEqual(logo.source_label(43, database), "The bundled 400x400 SpinBack mark")
+            self.assertTrue(database.clear_guild_logo(42))
+            self.assertEqual(logo.guild_logo(42, database), logo.bundled_logo())
+
+    def test_unusable_stored_logos_fall_back_to_the_bundled_mark(self):
+        from grid_a1 import logo
+
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(Path(directory) / "manager.sqlite3")
+            database.migrate()
+            self.assertIsNone(logo.stored_logo(5, None))
+            self.assertIsNone(logo.stored_logo(0, database))
+            database.set_guild_logo(5, b"not a picture", "spinback-logo.png", "image/png")
+            self.assertEqual(logo.guild_logo(5, database), logo.bundled_logo())
+
+    def test_logo_helpers_point_embeds_and_files_at_the_same_attachment(self):
+        from grid_a1 import logo
+        from grid_a1.embeds import embed
+
+        _data, filename, _content_type = logo.guild_logo(0, None)
+        self.assertEqual(logo.logo_url(filename), "attachment://" + filename)
+        card = embed("Title", "Body")
+        card_file = logo.attach_logo(card, 0, None)
+        self.assertEqual(card.image.url, "attachment://" + filename)
+        self.assertEqual(card_file.filename, filename)
+        thumb = embed("Title", "Body")
+        logo.attach_logo(thumb, 0, None, thumbnail=True)
+        self.assertEqual(thumb.thumbnail.url, "attachment://" + filename)
+
+    def test_setup_logo_command_is_plain_and_manage_server_only(self):
+        import grid_a1.bot as bot_module
+
+        group = bot_module.bot.tree.get_command("setup")
+        command = group.get_command("logo")
+        self.assertIsNotNone(command)
+        self.assertEqual(command.description, "Set the picture shown on this server's panels and messages")
+        self.assertFalse(_contains_emoji(command.description))
+        self.assertTrue(command.default_permissions.manage_guild)
+        self.assertEqual(sorted(command._params), ["clear", "image"])
 
     def test_ticket_create_rolls_back_when_audit_insert_fails(self):
         with tempfile.TemporaryDirectory() as directory:

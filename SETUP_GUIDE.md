@@ -22,7 +22,11 @@ The name members see above every message (for example `Spinback | Manager`) is t
 
 ## The support panel
 
-`/setup tickets` posts the public ticket panel: the heading 📩 Spinback - Support, the guidance lines, one bold line per issue type with its description, and a footer reading `Support - <your server name> • <year>`. The **Select your issue type ...** menu below it starts the ticket flow: pick the region (🇪🇺 EU or 🇺🇸 NA), then answer the short form. Ticket channels carry the region in their name, for example `🔵-eu-general-olly-a1b2c3d4`. The footer mark comes from your server: name an emoji `spinback`, `s`, `support`, or `ticket` and it is used; otherwise the panel shows 🏓.
+`/setup tickets` posts the public ticket panel: the heading 📩 Spinback - Support, the guidance lines, one bold line per issue type with its description, and a footer reading `Support - <your server name> • <year>`. The **Select your issue type ...** menu below it starts the ticket flow: pick the region (🇪🇺 EU or 🇺🇸 NA), then answer the short form. Ticket channels carry the region in their name, for example `🔵-eu-general-olly-a1b2c3d4`. The panel's main picture is your server logo (see below), and the footer mark comes from your server: name an emoji `spinback`, `s`, `support`, or `ticket` and it is used; otherwise the panel shows 🏓.
+
+## Your own logo
+
+Every panel and message uses the SpinBack picture that ships with the bot. To use your own, run `/setup logo image:` and attach a PNG, JPEG, GIF, or WebP up to 512 KB. The picture is checked from its own bytes, saved for your server in SQLite, and the posted support and rules panels are refreshed immediately; `/setup status` then reports `Server logo: Your uploaded logo`. `/setup logo clear: True` removes it and returns to the bundled mark. Servers that never upload a picture need no configuration.
 
 ## Who can see which command
 
@@ -57,7 +61,7 @@ Two clean options:
 1. **Remove the public domain** in Railway (service → Settings → Networking → delete the generated domain). A gateway-only bot has nothing to serve, so this is the simplest fix and needs no code change.
 2. **Keep the domain and serve a status page.** The bot already includes a small read-only endpoint (`grid_a1/health.py`). It binds the port Railway injects (`PORT`, falling back to 8080) and answers the domain root, `/health`, `/healthz`, and `/status` with a compact JSON document:
    ```json
-   {"checked_at": "2026-11-16T15:12:42+00:00", "connected_servers": 1, "gateway_latency_ms": 42, "schema_version": 24, "service": "spinback-manager", "status": "ok", "uptime_seconds": 5400}
+   {"checked_at": "2026-11-16T15:12:42+00:00", "connected_servers": 1, "gateway_latency_ms": 42, "schema_version": 26, "service": "spinback-manager", "status": "ok", "uptime_seconds": 5400}
    ```
    It exposes no tokens, IDs, guild names, ticket contents, or member data. Unknown paths answer 404, anything other than GET/HEAD answers 405, and a failing status report answers 503 so the bot's own uptime monitor can detect it. `HEALTH_DISABLED=1` turns the endpoint off; `HEALTH_PORT` and `HEALTH_HOST` override the port and bind address. Use this when you want Railway health checks or an external uptime monitor to see a 200.
 

@@ -20,6 +20,7 @@ from .brand import (
     RULES_SECTIONS,
     RULES_TITLE,
 )
+from . import logo
 from .embeds import embed
 from .stats import timestamp_marker
 from .utils import rules_custom_id, server_emoji, utcnow
@@ -86,7 +87,9 @@ def rules_panel_view(service: "RulesService", guild: Any = None) -> discord.ui.L
             )
         )
     emblem = emojis.get("emblem", "")
-    children.append(discord.ui.TextDisplay(f"***{emblem} {RULES_FOOTER}***" if emblem else f"***{RULES_FOOTER}***"))
+    footer_line = discord.ui.TextDisplay(f"***{emblem} {RULES_FOOTER}***" if emblem else f"***{RULES_FOOTER}***")
+    media = logo.guild_logo_url(getattr(guild, "id", 0), getattr(service, "database", None))
+    children.append(discord.ui.Section(footer_line, accessory=discord.ui.Thumbnail(media)))
     view.add_item(discord.ui.Container(*children, accent_colour=RULES_COLOUR))
     return view
 
@@ -217,7 +220,7 @@ class RulesService:
         await interaction.response.defer(ephemeral=True)
         await _delete_previous_panel(self.database, guild)
         try:
-            message = await channel.send(view=self.panel(guild))
+            message = await channel.send(view=self.panel(guild), file=logo.logo_file(guild.id, self.database))
         except discord.Forbidden:
             return await interaction.followup.send(
                 f"❌ I cannot post in {channel.mention}. Check View Channel and Send Messages, then try again.",
@@ -244,7 +247,7 @@ class RulesService:
             return False
         try:
             message = await channel.fetch_message(int(config["rules_message"]))
-            await message.edit(view=self.panel(guild))
+            await message.edit(view=self.panel(guild), attachments=[logo.logo_file(guild.id, self.database)])
         except (discord.Forbidden, discord.HTTPException, discord.NotFound):
             log.info("Could not refresh the rules panel in guild %s", guild.id, exc_info=True)
             return False
