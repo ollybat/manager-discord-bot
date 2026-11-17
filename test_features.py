@@ -292,12 +292,12 @@ class SpinBackFeatureTests(unittest.TestCase):
         walk = list(view.walk_children())
         texts = [item.content for item in walk if isinstance(item, discord.ui.TextDisplay)]
         self.assertEqual(texts[0], "# Spinback Rules ✅")
-        self.assertIn("Thank you all for reading and respecting these rules.", texts[1])
-        self.assertIn("best competitive server", texts[1])
+        self.assertIn("Thank you for reading and respecting these rules.", texts[1])
+        self.assertIn("Playing here means you accept them", texts[1])
         self.assertIn("**Discord", texts[2])
-        self.assertIn("All discord related rules.", texts[2])
+        self.assertIn("How we treat each other in chat, voice, and DMs.", texts[2])
         self.assertIn("**Game 🎮**", texts[3])
-        self.assertIn("General in-game rules.", texts[3])
+        self.assertIn("How we play on the server: raids, teams, and fair play.", texts[3])
         self.assertIn("Powered by Spinback", texts[-1])
 
         separators = [item for item in walk if isinstance(item, discord.ui.Separator)]
@@ -335,6 +335,12 @@ class SpinBackFeatureTests(unittest.TestCase):
             self.assertEqual(database.rules_texts(42), {})
             self.assertEqual(service.text(42, "discord"), RULES_DEFAULTS["discord"])
             self.assertEqual(service.text_with_meta(42, "game"), (RULES_DEFAULTS["game"], None))
+            from grid_a1.rules import MAX_RULE_CHARS
+
+            for body in RULES_DEFAULTS.values():
+                self.assertLess(len(body), MAX_RULE_CHARS)
+                numbered = [line for line in body.splitlines() if line.startswith("**")]
+                self.assertGreaterEqual(len(numbered), 6)
             self.assertEqual(service.text(42, "not-a-section"), RULES_DEFAULTS["discord"])
 
             database.set_rule_text(42, "GAME", "1. No teaming.", 900, "2026-11-16T10:00:00+00:00")
@@ -653,7 +659,10 @@ class SpinBackFeatureTests(unittest.TestCase):
             )
             for emoji, heading, details in TICKET_PANEL_CATEGORIES:
                 self.assertIn(f"**{emoji} {heading}**\n{details}", panel.description)
-            self.assertIn("plz select one of the following choices", panel.description)
+            self.assertIn("goes straight to staff", panel.description)
+            for emoji, heading, _details in TICKET_PANEL_CATEGORIES[1:]:
+                self.assertIn(f"\n\n**{emoji} {heading}**", panel.description)
+            self.assertNotIn("\n\n\n", panel.description)
             self.assertIn("`/help`", panel.description)
             self.assertNotIn("Support Status", panel.description)
 
