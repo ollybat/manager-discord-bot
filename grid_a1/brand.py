@@ -6,6 +6,10 @@ BRAND_SHORT = "SpinBack"
 BRAND_FOOTER = "Powered by SpinBack"
 BRAND_TAGLINE = "the best competitive server"
 
+BRAND_PRIMARY = (94, 186, 255)
+BRAND_ACCENT = (177, 77, 255)
+"""The two brand colours; every panel picks its accent from here so the palette cannot drift."""
+
 RULES_INTRO = (
     "Thank you all for reading and respecting these rules.\n\n"
     "They were established to provide the best gaming experience and were created with the aim of "
