@@ -131,6 +131,7 @@ def register_commands(bot: discord.Client) -> None:
         name="ping",
         description="View private bot health, latency, and runtime details (owner only)",
     )
+    @app_commands.default_permissions(administrator=True)
     async def ping_command(interaction: discord.Interaction) -> None:
         """Return health information without exposing environment values or tokens."""
         if (
@@ -189,6 +190,7 @@ def register_commands(bot: discord.Client) -> None:
         name="embed",
         description="Post a custom embed with an optional image (Manage Messages)",
     )
+    @app_commands.default_permissions(manage_messages=True)
     @app_commands.checks.has_permissions(manage_messages=True, send_messages=True)
     @app_commands.checks.cooldown(5, 60.0, key=lambda i: (i.guild_id, i.user.id))
     @app_commands.describe(
@@ -226,6 +228,7 @@ def register_commands(bot: discord.Client) -> None:
         name="sync",
         description="Synchronize application commands (bot owner only)",
     )
+    @app_commands.default_permissions(administrator=True)
     async def sync_command(interaction: discord.Interaction) -> None:
         """Run the globally rate-limited application-command synchronization."""
         raw_owner_id = os.getenv("OWNER_ID", "").strip()
@@ -264,6 +267,7 @@ def register_commands(bot: discord.Client) -> None:
         name="embed-edit",
         description="Edit a bot-authored embed in this channel",
     )
+    @app_commands.default_permissions(manage_messages=True)
     @app_commands.checks.has_permissions(manage_messages=True)
     @app_commands.checks.cooldown(5, 60.0, key=lambda i: (i.guild_id, i.user.id))
     @app_commands.describe(
@@ -380,6 +384,7 @@ def register_commands(bot: discord.Client) -> None:
         name="slowmode",
         description="Set this channel's slowmode in seconds (staff only)",
     )
+    @app_commands.default_permissions(manage_messages=True)
     @app_commands.guild_only()
     @_staff_only()
     @app_commands.describe(
@@ -430,6 +435,7 @@ def register_commands(bot: discord.Client) -> None:
         name="modstats",
         description="Summarise this server's recorded moderation activity (staff only)",
     )
+    @app_commands.default_permissions(manage_messages=True)
     @app_commands.guild_only()
     @_staff_only()
     @app_commands.describe(days="How many days back to count (1-90)")
