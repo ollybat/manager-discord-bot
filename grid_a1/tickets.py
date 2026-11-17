@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 import discord
 
+from . import logo
 from .database import Database
 from .embeds import embed, feedback_embed, inactivity_indicator, ticket_archive_embed, ticket_embed
 from .utils import (
@@ -325,6 +326,8 @@ class TicketService:
             details,
             requester=f"{interaction.user.mention} ({interaction.user.display_name})",
             ticket_id=ticket_id,
+            guild_id=guild.id,
+            database=self.db,
         )
         welcome.title = f"🎫 {label.title()} • Private support ticket"
         welcome.description = (
@@ -343,6 +346,7 @@ class TicketService:
                 content=interaction.user.mention,
                 embed=welcome,
                 view=TicketControls(self),
+                file=logo.logo_file(guild.id, self.db),
             )
             welcome_sent = True
         except discord.DiscordException:
