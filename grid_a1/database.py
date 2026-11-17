@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 from .utils import DEFAULT_PRIORITY, FEEDBACK_SCORES, PRIORITIES, utcnow, safe_json_list
-SCHEMA_VERSION = 25
+SCHEMA_VERSION = 26
 
 PERMISSION_ROLE_FIELDS = (
     "owner_role",
@@ -38,6 +38,7 @@ class Database:
         with self.connect() as db:
             db.execute('CREATE TABLE IF NOT EXISTS schema_migrations(version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)')
             db.execute('''CREATE TABLE IF NOT EXISTS guild_config (guild_id INTEGER PRIMARY KEY, panel_channel INTEGER, panel_message INTEGER, panel_fingerprint TEXT, logs_channel INTEGER, report_channel INTEGER, ticket_category INTEGER, inactivity_hours INTEGER NOT NULL DEFAULT 24, welcome_channel INTEGER, verify_channel INTEGER, link_channel INTEGER, bot_commands_channel INTEGER, shop_channel INTEGER, verify_panel_channel INTEGER, verify_panel_message INTEGER, verify_role INTEGER, staff_role_1 INTEGER, staff_role_2 INTEGER, staff_role_3 INTEGER, staff_role_4 INTEGER, staff_role_5 INTEGER, staff_role_6 INTEGER, staff_role_7 INTEGER, staff_role_8 INTEGER, staff_role_9 INTEGER, staff_role_10 INTEGER, urgent_at TEXT, urgent_by INTEGER, owner_role INTEGER, moderator_role INTEGER, admin_role INTEGER, co_owner_role INTEGER, head_admin_role INTEGER, anti_links_enabled INTEGER NOT NULL DEFAULT 0, anti_links_log_channel INTEGER, anti_links_action TEXT NOT NULL DEFAULT 'delete_warn', anti_links_whitelist_domains TEXT NOT NULL DEFAULT '[]', anti_links_bypass_roles TEXT NOT NULL DEFAULT '[]', anti_links_allowed_roles TEXT NOT NULL DEFAULT '[]')''')
+            db.execute('''CREATE TABLE IF NOT EXISTS guild_brand (guild_id INTEGER PRIMARY KEY, logo BLOB NOT NULL, filename TEXT NOT NULL, content_type TEXT NOT NULL, size INTEGER NOT NULL, updated_at TEXT NOT NULL, updated_by INTEGER)''')
             db.execute('''CREATE TABLE IF NOT EXISTS tickets (ticket_id TEXT PRIMARY KEY, guild_id INTEGER NOT NULL, channel_id INTEGER UNIQUE NOT NULL, owner_id INTEGER NOT NULL, issue TEXT NOT NULL, region TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'open', claimed_by INTEGER, close_requested_by INTEGER, opened_at TEXT NOT NULL, last_activity_at TEXT NOT NULL, inactivity_notice_at TEXT, owner_left INTEGER NOT NULL DEFAULT 0, auto_close_at TEXT, auto_close_reason TEXT, closed_at TEXT, closed_by INTEGER, close_reason TEXT, transcript_filename TEXT, urgent_at TEXT, urgent_by INTEGER)''')
             existing={r[1] for r in db.execute('PRAGMA table_info(guild_config)')}
             if 'panel_fingerprint' not in existing: db.execute("ALTER TABLE guild_config ADD COLUMN panel_fingerprint TEXT")
@@ -152,7 +153,7 @@ class Database:
 
     def startup_check(self) -> dict[str, object]:
         with self.connect() as db:
-            required = {"guild_config", "tickets", "audit_log", "closed_tickets", "ticket_feedback", "poll_settings", "polls", "poll_votes", "giveaways", "giveaway_entries", "schema_migrations"}
+            required = {"guild_config", "guild_brand", "tickets", "audit_log", "closed_tickets", "ticket_feedback", "poll_settings", "polls", "poll_votes", "giveaways", "giveaway_entries", "schema_migrations"}
             tables = {row[0] for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
             missing = sorted(required - tables)
             integrity = db.execute("PRAGMA integrity_check").fetchone()[0]
@@ -941,6 +942,35 @@ class Database:
                 "ON CONFLICT(guild_id, section) DO UPDATE SET body=excluded.body, updated_at=excluded.updated_at, updated_by=excluded.updated_by",
                 (guild_id, str(section).strip().lower(), text[:4000], (when or utcnow().isoformat()), int(actor_id or 0)),
             )
+
+    def set_guild_logo(self, guild_id: int, data: bytes, filename: str, content_type: str, updated_by: int | None = None) -> None:
+        """Store one server's uploaded logo so every panel keeps using it after a restart."""
+        if not data:
+            raise ValueError("Logo data cannot be empty.")
+        with self.connect() as db:
+            db.execute(
+                "INSERT INTO guild_brand(guild_id, logo, filename, content_type, size, updated_at, updated_by) VALUES (?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(guild_id) DO UPDATE SET logo=excluded.logo, filename=excluded.filename, "
+                "content_type=excluded.content_type, size=excluded.size, updated_at=excluded.updated_at, updated_by=excluded.updated_by",
+                (int(guild_id), sqlite3.Binary(data), str(filename), str(content_type), len(data), utcnow().isoformat(), int(updated_by or 0)),
+            )
+
+    def guild_logo(self, guild_id: int) -> sqlite3.Row | None:
+        """One server's stored logo row, or None when it still uses the bundled mark."""
+        if not guild_id:
+            return None
+        with self.connect() as db:
+            return db.execute(
+                "SELECT guild_id, logo, filename, content_type, size, updated_at, updated_by FROM guild_brand WHERE guild_id=?",
+                (int(guild_id),),
+            ).fetchone()
+
+    def clear_guild_logo(self, guild_id: int) -> bool:
+        """Forget one server's uploaded logo; the bundled SpinBack mark takes over again."""
+        if not guild_id:
+            return False
+        with self.connect() as db:
+            return bool(db.execute("DELETE FROM guild_brand WHERE guild_id=?", (int(guild_id),)).rowcount)
 
     def set_rules_panel(self, guild_id: int, channel_id: int, message_id: int) -> None:
         """Remember where the rules panel was posted so edits can refresh it."""
