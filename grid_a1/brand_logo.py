@@ -3,6 +3,9 @@
 The picture is stored as base64 text so the whole project stays plain text: it survives
 copy-paste, diffs, and any tooling that only carries text. bundled_logo_bytes() decodes it
 once and caches the result, so every message reuses a single copy of the bytes.
+
+Two copies ship: the full-size picture for banners and large panels, and a compact 96x96 mark for
+spots where a full-size picture would crowd the text, such as a panel heading.
 """
 from __future__ import annotations
 
@@ -327,7 +330,56 @@ LOGO_BASE64 = (
 )
 
 
+MARK_FILENAME = "spinback-mark.jpg"
+MARK_CONTENT_TYPE = "image/jpeg"
+MARK_WIDTH = 96
+MARK_HEIGHT = 96
+MARK_BASE64 = (
+    "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"
+)
+
 @functools.lru_cache(maxsize=1)
 def bundled_logo_bytes() -> bytes:
     """The decoded logo bytes, shared by every panel and message the bot posts."""
     return base64.b64decode(LOGO_BASE64)
+
+
+@functools.lru_cache(maxsize=1)
+def bundled_mark_bytes() -> bytes:
+    """The compact copy of the same mark, for a heading the picture should not crowd."""
+    return base64.b64decode(MARK_BASE64)
