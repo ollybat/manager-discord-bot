@@ -22,7 +22,18 @@ The name members see above every message (for example `Spinback | Manager`) is t
 
 ## The support panel
 
-`/setup tickets` posts the public ticket panel: the heading 📩 Spinback - Support, the guidance lines, one bold line per issue type with its description, and a footer reading `Support - <your server name> • <year>`. The **Select your issue type ...** menu below it starts the ticket flow (region, then the short form). The footer mark comes from your server: name an emoji `spinback`, `s`, `support`, or `ticket` and it is used; otherwise the panel shows 🏓.
+`/setup tickets` posts the public ticket panel: the heading 📩 Spinback - Support, the guidance lines, one bold line per issue type with its description, and a footer reading `Support - <your server name> • <year>`. The **Select your issue type ...** menu below it starts the ticket flow: pick the region (🇪🇺 EU or 🇺🇸 NA), then answer the short form. Ticket channels carry the region in their name, for example `🔵-eu-general-olly-a1b2c3d4`. The footer mark comes from your server: name an emoji `spinback`, `s`, `support`, or `ticket` and it is used; otherwise the panel shows 🏓.
+
+## Who can see which command
+
+Staff and admin commands are hidden from members who lack the matching Discord permission, so the picker only shows what a member can actually use:
+
+- **Manage Messages** — moderation (`/kick`, `/ban`, `/warn`, `/timeout`, `/unban`, `/untimeout`, `/purge`, `/modlog`, `/modstats`, `/slowmode`), the `/ticket` staff set, `/embed` and `/embed-edit`.
+- **Manage Server** — `/setup …`, `/rules …`, `/wipe …`, `/giveaway …`, `/poll config`, `/poll create`, `/verifypanel`, `/anti-links`, `/dashboard`.
+- **Administrator** — `/ping` and `/sync` (bot owner diagnostics). `/setup roles` is server-owner only.
+- **Everyone** — `/help`, `/info …`, `/avatar`, `/report`, `/reimburse`, `/suggestion send|list`, `/wipe list`, and the ticket opener. `/poll results|end|remove` and `/ticket requestclose` stay visible because they are checked per poll or per ticket.
+
+Discord only decides what the picker shows; the role checks stay the real gate. Give the roles you saved in `/setup roles` the permissions above if you want your staff to see the tooling.
 
 ## Other commands
 
