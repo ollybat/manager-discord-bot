@@ -4,7 +4,7 @@ This repository is a standalone Python Discord bot. `bot.py` is the supported en
 
 ## Runtime flow
 
-Startup loads `.env`, validates settings, configures logging, runs SQLite migrations, restores persistent ticket/poll/giveaway/feedback views, starts panel/inactivity/poll-expiry/giveaway-expiry loops, publishes the global application command tree, and clears stale guild command copies after the Gateway is ready. An optional stdlib HTTP listener answers the host's public domain with a compact JSON status document; it is independent of the Discord connection and is stopped on shutdown. The bot is Discord-only and has no unrelated network transport layer. SQLite schema version is 21; migrations are additive and preserve DATABASE_PATH and existing records. Closing a ticket uploads a plain-text transcript (`<channel>-transcript.txt`) to the transcript channel before the channel is deleted.
+Startup loads `.env`, validates settings, configures logging, runs SQLite migrations, restores persistent ticket/poll/giveaway/feedback views, starts panel/inactivity/poll-expiry/giveaway-expiry loops, publishes the global application command tree, and clears stale guild command copies after the Gateway is ready. An optional stdlib HTTP listener answers the host's public domain with a compact JSON status document; it is independent of the Discord connection and is stopped on shutdown. The bot is Discord-only and has no unrelated network transport layer. SQLite schema version is 25; migrations are additive and preserve DATABASE_PATH and existing records. Closing a ticket uploads a plain-text transcript (`<channel>-transcript.txt`) to the transcript channel before the channel is deleted.
 
 ## Modules
 
@@ -15,7 +15,7 @@ Startup loads `.env`, validates settings, configures logging, runs SQLite migrat
 - `grid_a1/commands.py`: standalone commands and owner diagnostics, plus `/avatar`, `/slowmode`, `/modstats`, `/info user`, and `/info bot`; command descriptions are plain text so the picker stays readable.
 - `grid_a1/views.py`: dashboard shell, persistent ticket and verification views, the shared destructive-action confirmation view, and the persistent 1–5 star feedback view sent privately to ticket owners after closure.
 - `grid_a1/dashboard_setup.py`: role/channel dropdown setup wizards, explicit panel publishing, and report routing.
-- `grid_a1/tickets.py`: ticket creation, permissions, readable channel naming, the reimbursement form modal, defer/followup closure, transcripts, and archive.
+- `grid_a1/tickets.py`: ticket creation for the EU and NA regions (the region is validated and echoed in the channel name), permissions, readable channel naming, the reimbursement form modal, defer/followup closure, transcripts, and archive.
 - `grid_a1/polls.py`: the `/poll` command group, dashboard/metadata modal, persistent poll creation, result embeds, vote controls, and message refresh service.
 - `grid_a1/wipes.py`: wipe scheduling (absolute or relative times), the wipe config panel, and the once-only announcement loop.
 - `grid_a1/suggestions.py`: member suggestion storage helpers, the persistent vote buttons, and the suggestion modal.
