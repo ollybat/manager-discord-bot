@@ -10,6 +10,7 @@ from discord import app_commands
 from discord.ext import commands, tasks
 from .config import Settings, configure_logging, validate_runtime
 from .database import SCHEMA_VERSION, Database
+from . import logo
 from .embeds import embed, support_panel, inactivity_indicator, priority_embed, ticket_stats_embed
 from .tickets import ReimburseModal, TicketService, claim
 from .giveaways import (
@@ -19,7 +20,7 @@ from .giveaways import (
     register_giveaway_commands,
 )
 from .suggestions import SuggestionModal, SuggestionService, SuggestionVoteView, suggestion_line
-from .brand import BRAND_NAME, BRAND_SHORT, RULES_SECTIONS
+from .brand import BRAND_ACCENT, BRAND_NAME, BRAND_SHORT, RULES_SECTIONS
 from .rules import RulesEditModal, RulesService, rules_panel_view
 from .guides import build_choices, prefix_guide_lines
 from .health import HealthServer
@@ -222,12 +223,12 @@ class GridA1Bot(commands.Bot):
             panel = support_panel(guild, self.database)
             fingerprint = hashlib.sha256(json.dumps(panel.to_dict(), sort_keys=True).encode()).hexdigest()
             if config['panel_fingerprint'] != fingerprint:
-                await message.edit(embed=panel, view=TicketPanel(self.tickets))
+                await message.edit(embed=panel, view=TicketPanel(self.tickets), attachments=[logo.logo_file(guild.id, self.database)])
                 self.database.upsert_config(guild.id, panel_fingerprint=fingerprint)
         except discord.NotFound:
             try:
                 panel = support_panel(guild, self.database)
-                message = await channel.send(embed=panel, view=TicketPanel(self.tickets))
+                message = await channel.send(embed=panel, view=TicketPanel(self.tickets), file=logo.logo_file(guild.id, self.database))
                 fingerprint = hashlib.sha256(json.dumps(panel.to_dict(), sort_keys=True).encode()).hexdigest()
                 self.database.upsert_config(guild.id, panel_message=message.id, panel_fingerprint=fingerprint)
             except discord.DiscordException:
@@ -952,6 +953,46 @@ async def setup_roles(i: discord.Interaction, owner_role: discord.Role, co_owner
     e.set_footer(text=f"{BRAND_SHORT} • Permission configuration • Changes saved to SQLite")
     await i.followup.send(embed=e, ephemeral=True)
 
+@setup_group.command(name="logo", description="Set the picture shown on this server's panels and messages")
+@app_commands.default_permissions(manage_guild=True)
+@app_commands.guild_only()
+@admin()
+@app_commands.describe(image="PNG, JPEG, GIF, or WebP picture up to 512 KB", clear="Remove the uploaded picture and go back to the bundled SpinBack mark")
+async def setup_logo(i: discord.Interaction, image: discord.Attachment | None = None, clear: bool = False):
+    """Store this server's own logo, or drop it and fall back to the bundled SpinBack mark."""
+    g = guild(i)
+    await i.response.defer(ephemeral=True)
+    if clear:
+        removed = bot.database.clear_guild_logo(g.id)
+        bot.database.upsert_config(g.id, panel_fingerprint=None)
+        await bot.refresh_guild_panel(g)
+        note = "Your uploaded picture was removed" if removed else "This server never uploaded a picture"
+        return await i.followup.send(f"✅ {note}. Panels and messages use the bundled SpinBack mark again.", ephemeral=True)
+    if image is None:
+        return await i.followup.send("❓ Attach a picture to use as this server's logo, or set `clear: True` to go back to the bundled mark.", ephemeral=True)
+    if image.size > logo.MAX_LOGO_BYTES:
+        return await i.followup.send(f"❌ That picture is {image.size // 1024} KB. Keep logos under {logo.MAX_LOGO_KB} KB.", ephemeral=True)
+    try:
+        data = await image.read()
+    except discord.DiscordException:
+        return await i.followup.send("❌ Discord did not hand over that attachment. Try uploading it again.", ephemeral=True)
+    try:
+        data, filename, content_type = logo.validate_upload(data)
+    except logo.LogoRejected as error:
+        return await i.followup.send(f"❌ {error}", ephemeral=True)
+    bot.database.set_guild_logo(g.id, data, filename, content_type, i.user.id)
+    bot.database.upsert_config(g.id, panel_fingerprint=None)
+    await bot.refresh_guild_panel(g)
+    try:
+        await bot.rules.refresh_panel(g)
+    except Exception:
+        log.exception("Could not refresh the rules panel in guild %s after a logo change", g.id)
+    preview = embed(f"🎨 {BRAND_SHORT} • Server logo saved", f"Every panel and message on **{g.name}** now carries this picture. Servers that never upload one keep the bundled SpinBack mark.", discord.Colour.from_rgb(*BRAND_ACCENT))
+    preview.add_field(name="📷 Picture", value=f"{image.filename} • {len(data) // 1024} KB • {content_type}", inline=False)
+    preview.set_image(url=logo.logo_url(filename))
+    preview.set_footer(text="Posted panels were refreshed; run /setup tickets or /rules post to publish one that is not posted yet")
+    await i.followup.send(embed=preview, file=logo.logo_file(g.id, bot.database), ephemeral=True)
+
 @setup_group.command(name="status", description="Check which parts of this server's setup are finished")
 @app_commands.default_permissions(manage_guild=True)
 @app_commands.guild_only()
@@ -976,6 +1017,7 @@ async def setup_status(interaction: discord.Interaction) -> None:
         mark("Welcome channel", bool(config and config["welcome_channel"])),
         mark("Staff dashboard panel", bool(config and config["panel_channel"])),
         mark("Anti-links protection", bool(config and config["anti_links_enabled"])),
+        mark("Server logo: " + logo.source_label(guild.id, bot.database), True),
     ]
     missing = bot.database.missing_permission_roles(guild.id)
     if missing:
@@ -1208,14 +1250,14 @@ async def setup_tickets(i, panel_channel: discord.TextChannel, logs_channel: dis
     if previous and previous["panel_channel"] == panel_channel.id and previous["panel_message"]:
         try:
             message = await panel_channel.fetch_message(previous["panel_message"])
-            await message.edit(embed=support_panel(g, bot.database), view=TicketPanel(bot.tickets))
+            await message.edit(embed=support_panel(g, bot.database), view=TicketPanel(bot.tickets), attachments=[logo.logo_file(g.id, bot.database)])
         except discord.NotFound:
             message = None
         except discord.DiscordException:
             return await i.followup.send("❌ I could not update the existing panel. Check Manage Messages and Embed Links permissions.", ephemeral=True)
     if message is None:
         try:
-            message = await panel_channel.send(embed=support_panel(g, bot.database), view=TicketPanel(bot.tickets))
+            message = await panel_channel.send(embed=support_panel(g, bot.database), view=TicketPanel(bot.tickets), file=logo.logo_file(g.id, bot.database))
         except discord.Forbidden:
             return await i.followup.send("⚠️ Settings were saved, but I could not post the support panel. Grant the bot View Channel, Send Messages, and Embed Links in the panel channel, then retry `/setup tickets`.", ephemeral=True)
         except discord.HTTPException as error:
@@ -1235,7 +1277,7 @@ async def setup_welcomer(i,welcome_channel:discord.TextChannel,link_channel:disc
 async def welcomer_preview(i):
     config=bot.database.config(guild(i).id); problems=missing(guild(i),config)
     if problems: return await i.response.send_message(embed=embed("⚠️ Welcomer is not set up","\n".join(f"• {p}" for p in problems),discord.Colour.red()),ephemeral=True)
-    await i.response.send_message(embed=welcome_embed(bot,guild(i),i.user,config),ephemeral=True)
+    await i.response.send_message(embed=welcome_embed(bot,guild(i),i.user,config),file=logo.logo_file(guild(i).id,bot.database),ephemeral=True)
 @welcomer_group.command(name="test", description="Send a test welcome message to the configured channel")
 @app_commands.default_permissions(manage_guild=True)
 @admin()
@@ -1245,7 +1287,7 @@ async def welcomer_test(i):
     channel=guild(i).get_channel(config['welcome_channel'])
     if not isinstance(channel,discord.TextChannel): return await i.response.send_message("❌ The configured welcome channel is missing. Update it in `/dashboard`.",ephemeral=True)
     await i.response.defer(ephemeral=True)
-    await channel.send(embed=welcome_embed(bot,guild(i),i.user,config)); await i.followup.send(f"✅ Welcome test sent to {channel.mention}.",ephemeral=True)
+    await channel.send(embed=welcome_embed(bot,guild(i),i.user,config),file=logo.logo_file(guild(i).id,bot.database)); await i.followup.send(f"✅ Welcome test sent to {channel.mention}.",ephemeral=True)
 @ticket_group.command(name="claim", description="Claim the current support ticket")
 @app_commands.default_permissions(manage_messages=True)
 @staff()
@@ -1620,7 +1662,7 @@ async def rules_edit(i: discord.Interaction, section: app_commands.Choice[str]):
 @admin()
 @app_commands.guild_only()
 async def rules_preview(i: discord.Interaction):
-    await i.response.send_message(view=bot.rules.panel(), ephemeral=True)
+    await i.response.send_message(view=bot.rules.panel(i.guild), file=logo.logo_file(getattr(i.guild, "id", 0), bot.database), ephemeral=True)
 
 
 def run():
