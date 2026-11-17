@@ -2,14 +2,15 @@ from __future__ import annotations
 
 import discord
 
-from .brand import BRAND_NAME, BRAND_SHORT, RULES_EMBLEM_NAMES
+from . import logo
+from .brand import BRAND_ACCENT, BRAND_NAME, BRAND_PRIMARY, BRAND_SHORT, RULES_EMBLEM_NAMES
 from .database import Database
 from .stats import MONTH_WINDOW_DAYS, RECENT_WINDOW_DAYS, TicketStats, format_duration
 from .utils import PRIORITY_LABELS
 from .utils import region_display, server_emoji, utcnow
 
-NEON_PURPLE = discord.Colour.from_rgb(177, 77, 255)
-PANEL_COLOUR = discord.Colour.from_rgb(94, 186, 255)
+NEON_PURPLE = discord.Colour.from_rgb(*BRAND_ACCENT)
+PANEL_COLOUR = discord.Colour.from_rgb(*BRAND_PRIMARY)
 TICKET_PANEL_FALLBACK_EMOJI = "🏓"
 COLOURS = {"reimburse": discord.Colour.teal(), "general": NEON_PURPLE, "base": discord.Colour.green(), "clan": discord.Colour.purple(), "shop": discord.Colour.gold(), "raid": discord.Colour.red(), "bug": discord.Colour.orange()}
 
@@ -51,6 +52,7 @@ def support_panel(guild: discord.Guild, database: Database) -> discord.Embed:
     result = embed(TICKET_PANEL_TITLE, "\n".join(lines), PANEL_COLOUR)
     name = guild.name if guild is not None else BRAND_SHORT
     result.set_footer(text=f"{ticket_panel_emblem(guild)} Support - {name} • {year}")
+    result.set_image(url=logo.guild_logo_url(getattr(guild, "id", 0), database))
     return result
 
 
@@ -108,6 +110,8 @@ def ticket_embed(
     inactive_for: str = "0m",
     requester: str | None = None,
     ticket_id: str | None = None,
+    guild_id: int | None = None,
+    database: "Database" | None = None,
 ) -> discord.Embed:
     """Welcome panel for one ticket: who asked, what it is, and the submitted form."""
     result = embed(
@@ -134,6 +138,8 @@ def ticket_embed(
         inline=True,
     )
     result.set_footer(text="Keep replies in this channel • Times shown in UTC")
+    if guild_id:
+        result.set_thumbnail(url=logo.guild_logo_url(guild_id, database))
     return result
 
 
