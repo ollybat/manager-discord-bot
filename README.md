@@ -16,7 +16,7 @@ Server managers can use `/giveaway config` to choose an announcement channel, op
 
 ### Support panel
 
-The public ticket panel follows the server's design: the heading **📩 Spinback - Support**, the two guidance lines (with `/help` shown as a code chip), then one bold line per issue type — 📄 Ticket General, 🏠 Ticket Base, 👥 Ticket Clan, 💎 Ticket Shop, ⚠️ Ticket Raid, 🐛 Ticket Bug — each with its description underneath, and the small footer *<logo> Support - <server name> • <year>*. The **Select your issue type ...** menu sits under the panel; picking a type asks for the region and opens the short form. The footer mark is taken from your own server: name an emoji `spinback`, `s`, `support`, or `ticket` and it is used, otherwise the panel falls back to 🏓.
+The public ticket panel follows the server's design: the heading **📩 Spinback - Support**, the two guidance lines (with `/help` shown as a code chip), then one bold line per issue type — 📄 Ticket General, 🏠 Ticket Base, 👥 Ticket Clan, 💎 Ticket Shop, ⚠️ Ticket Raid, 🐛 Ticket Bug — each with its description underneath, and the small footer *<logo> Support - <server name> • <year>*. The **Select your issue type ...** menu sits under the panel; picking a type opens the region picker — 🇪🇺 **EU** or 🇺🇸 **NA**, each with a one-line hint — and then the short form. The footer mark is taken from your own server: name an emoji `spinback`, `s`, `support`, or `ticket` and it is used, otherwise the panel falls back to 🏓.
 
 ### Ticket transcripts
 
@@ -65,6 +65,8 @@ Run `/setup roles owner_role: ... co_owner_role: ... head_admin_role: ... admin_
 ### Staff access comes from the server, not from Discord permissions
 
 Run `/setup roles` first. The five roles saved there (owner, co-owner, head admin, admin, moderator) are the **only** roles that pass a staff command — Discord's own Administrator and Manage Server permissions no longer grant access on their own. The server owner and the bot owner keep control of their own server, which is what makes the first `/setup roles` possible. `/setup status` shows every role and setting with ✅ or ❌ and tells you the next command to run.
+
+Every gated command also declares Discord's own default permission, so members without the matching permission do not see it in the command picker: staff tooling (`/modlog`, `/modstats`, `/slowmode`, `/kick`, `/ban`, `/warn`, `/timeout`, `/unban`, `/untimeout`, `/purge`, the `/ticket` staff set, `/embed`, `/embed-edit`) asks for **Manage Messages**, server setup (`/setup …`, `/rules …`, `/wipe …`, `/giveaway …`, `/poll config`, `/poll create`, `/verifypanel`, `/anti-links`, `/dashboard`) asks for **Manage Server**, and `/ping` and `/sync` are **Administrator**-only. Discord only hides what it knows about; the configured roles stay the real gate, so give the roles you save in `/setup roles` those Discord permissions if you want your staff to see the tooling.
 
 ### Prefix commands
 
