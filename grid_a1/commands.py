@@ -11,6 +11,7 @@ from typing import Optional
 import discord
 from discord import app_commands
 
+from . import logo
 from .brand import BRAND_SHORT
 from .embeds import embed
 from .stats import moderation_history_lines, row_value
@@ -115,7 +116,8 @@ def register_commands(bot: discord.Client) -> None:
         guide.set_footer(
             text="Members only see the sections their roles allow. Need access? Ask your server owner."
         )
-        await interaction.response.send_message(embed=guide, ephemeral=True)
+        guide_file = logo.attach_logo(guide, interaction.guild.id if interaction.guild else 0, getattr(bot, "database", None), thumbnail=True)
+        await interaction.response.send_message(embed=guide, file=guide_file, ephemeral=True)
 
     @help_command.autocomplete("command")
     async def help_command_autocomplete(
@@ -580,4 +582,5 @@ def register_info_commands(bot: discord.Client, info_group: app_commands.Group) 
             inline=True,
         )
         card.set_footer(text="Counts are per instance and exclude tokens and secret values.")
-        await interaction.response.send_message(embed=card, ephemeral=True)
+        card_file = logo.attach_logo(card, 0, None, thumbnail=True)
+        await interaction.response.send_message(embed=card, file=card_file, ephemeral=True)
