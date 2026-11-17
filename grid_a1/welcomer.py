@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import discord
 
+from . import logo
 from .brand import BRAND_SHORT
 from .database import Database
 from .embeds import embed
@@ -25,10 +26,11 @@ def welcome_embed(bot: discord.Client, guild: discord.Guild, member: discord.Mem
     result.add_field(name="🧭 Server navigation", value=f"✅ **Verify / Server Selector**\nHead to <#{config['verify_channel']}>.\n\n🔗 **Link Your Account**\nLink your account in <#{config['link_channel']}>.\n\n🤖 **Bot Commands**\nUse <#{config['bot_commands_channel']}>.\n\n🛒 **Visit Our Store**\nCheck <#{config['shop_channel']}>.", inline=False)
     result.add_field(name="🎫 Support", value=f"Open a ticket from the **{BRAND_SHORT} Support Center** panel. EU and NA support are available.", inline=False)
     result.set_footer(text=f"💜 {BRAND_SHORT} • Manager • Welcome to the community")
+    logo.attach_logo(result, guild.id, getattr(bot, "database", None), thumbnail=True)
     return result
 
 async def send_welcome(bot: discord.Client, database: Database, member: discord.Member) -> None:
     config = database.config(member.guild.id); problems = missing(member.guild, config)
     if problems: return
     channel = member.guild.get_channel(config['welcome_channel'])
-    if isinstance(channel, discord.TextChannel): await channel.send(embed=welcome_embed(bot, member.guild, member, config))
+    if isinstance(channel, discord.TextChannel): await channel.send(embed=welcome_embed(bot, member.guild, member, config), file=logo.logo_file(member.guild.id, database))
