@@ -3,6 +3,9 @@
 A server that uploads its own picture with /setup logo sees that picture on every panel and
 message; every other server keeps the bundled SpinBack mark. The bytes live in the database,
 so a restart, a redeploy, or a move to another host changes nothing.
+
+The bundled mark comes in two sizes: the full picture for banners, and a compact 96x96 copy for
+headings, so a panel's title reads first and the picture supports it.
 """
 from __future__ import annotations
 
@@ -12,7 +15,16 @@ from typing import Any, Optional
 
 import discord
 
-from .brand_logo import LOGO_CONTENT_TYPE, LOGO_FILENAME, LOGO_HEIGHT, LOGO_WIDTH, bundled_logo_bytes
+from .brand_logo import (
+    LOGO_CONTENT_TYPE,
+    LOGO_FILENAME,
+    LOGO_HEIGHT,
+    LOGO_WIDTH,
+    MARK_CONTENT_TYPE,
+    MARK_FILENAME,
+    bundled_logo_bytes,
+    bundled_mark_bytes,
+)
 
 log = logging.getLogger("grid-a1-logo")
 
@@ -89,6 +101,28 @@ def stored_logo(guild_id: Any, database: Any = None) -> Optional[tuple[bytes, st
 def guild_logo(guild_id: Any = 0, database: Any = None) -> tuple[bytes, str, str]:
     """The picture one server should see: its own upload when it has one, else the bundled mark."""
     return stored_logo(guild_id, database) or bundled_logo()
+
+
+def bundled_mark() -> tuple[bytes, str, str]:
+    """The compact mark every server starts with, for headings."""
+    return bundled_mark_bytes(), MARK_FILENAME, MARK_CONTENT_TYPE
+
+
+def guild_mark(guild_id: Any = 0, database: Any = None) -> tuple[bytes, str, str]:
+    """The picture beside a heading: this server's own upload when it has one, else the compact mark."""
+    return stored_logo(guild_id, database) or bundled_mark()
+
+
+def guild_mark_url(guild_id: Any = 0, database: Any = None) -> str:
+    """The attachment URL for one guild's heading mark."""
+    _data, filename, _content_type = guild_mark(guild_id, database)
+    return logo_url(filename)
+
+
+def mark_file(guild_id: Any = 0, database: Any = None) -> discord.File:
+    """The file to attach whenever a message shows the compact mark."""
+    data, filename, _content_type = guild_mark(guild_id, database)
+    return discord.File(io.BytesIO(data), filename=filename)
 
 
 def logo_url(filename: str) -> str:
