@@ -6,6 +6,7 @@ import hashlib
 import json
 import logging
 
+from . import logo
 from .brand import BRAND_SHORT
 from .embeds import embed, support_panel
 from .tickets import TicketService
@@ -291,11 +292,11 @@ class TicketSetupWizardView(_DashboardWizard):
             if previous and previous["panel_channel"] == channel.id and previous["panel_message"]:
                 try:
                     message = await channel.fetch_message(previous["panel_message"])
-                    await message.edit(embed=panel, view=TicketPanel(interaction.client.tickets))
+                    await message.edit(embed=panel, view=TicketPanel(interaction.client.tickets), attachments=[logo.logo_file(interaction.guild.id, self.database)])
                 except discord.NotFound:
                     message = None
             if message is None:
-                message = await channel.send(embed=panel, view=TicketPanel(interaction.client.tickets))
+                message = await channel.send(embed=panel, view=TicketPanel(interaction.client.tickets), file=logo.logo_file(interaction.guild.id, self.database))
             fingerprint = hashlib.sha256(json.dumps(panel.to_dict(), sort_keys=True).encode()).hexdigest()
             self.database.upsert_config(interaction.guild.id, panel_message=message.id, panel_fingerprint=fingerprint)
             view = self.fresh_dashboard()
