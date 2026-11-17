@@ -11,17 +11,18 @@ BRAND_ACCENT = (177, 77, 255)
 """The two brand colours; every panel picks its accent from here so the palette cannot drift."""
 
 RULES_INTRO = (
-    "Thank you all for reading and respecting these rules.\n\n"
-    "They were established to provide the best gaming experience and were created with the aim of "
-    "offering you the best competitive server."
+    "Thank you for reading and respecting these rules.\n\n"
+    "They keep the server fair and competitive for everyone, so that every player gets the best "
+    "experience we can offer. Playing here means you accept them, and breaking them can cost you "
+    "access to the Discord or the server."
 )
 
 RULES_TITLE = "Spinback Rules ✅"
 RULES_FOOTER = "Powered by Spinback"
 
 RULES_SECTIONS: tuple[tuple[str, str, str, str], ...] = (
-    ("discord", "Discord", "💬", "All discord related rules."),
-    ("game", "Game", "🎮", "General in-game rules."),
+    ("discord", "Discord", "💬", "How we treat each other in chat, voice, and DMs."),
+    ("game", "Game", "🎮", "How we play on the server: raids, teams, and fair play."),
 )
 """Section key, button/label text, fallback emoji, and the one-line summary on the panel."""
 
@@ -36,29 +37,40 @@ RULES_EMBLEM_NAMES: tuple[str, ...] = ("spinback", "spinbacklogo", "spinback_log
 
 RULES_DEFAULTS: dict[str, str] = {
     "discord": (
-        "**1. Respect everyone.** No harassment, hate speech, threats, or personal attacks — "
-        "in channels, in voice, or in DMs to members.\n"
+        "**1. Respect everyone.** No harassment, hate speech, racism, threats, or personal attacks — "
+        "not in channels, not in voice, not in DMs.\n"
         "**2. No spam or advertising.** No invite links, DM advertising, or promoting other servers "
         "without staff permission.\n"
-        "**3. Use the right channel.** Keep chat on topic and take long conversations to the right "
-        "channel; use tickets for anything private.\n"
-        "**4. No NSFW, illegal, or scam content.** This includes cheating services, account sales, "
-        "and real-money trading.\n"
-        "**5. Follow Discord's Terms of Service** and Community Guidelines at all times.\n"
-        "**6. Staff decisions are final.** If you disagree with a decision, open a ticket instead of "
-        "arguing it out in chat."
+        "**3. Keep it in the right channel.** Chat stays on topic and voice stays clear — no mic spam, "
+        "soundboards, or screaming over other people.\n"
+        "**4. No NSFW, illegal, or scam content.** No cheating services, account sales, or real-money "
+        "trading, and nothing that breaks Discord's Terms of Service or Community Guidelines.\n"
+        "**5. Keep private things private.** Never share anyone's personal information — names, "
+        "addresses, IPs, or socials — and do not ask for theirs.\n"
+        "**6. Do not pretend to be staff.** No staff names, avatars, or tags, and no promising things "
+        "on the team's behalf.\n"
+        "**7. Report, do not retaliate.** If someone breaks a rule, open a ticket or mention staff "
+        "instead of answering in chat.\n"
+        "**8. Staff decisions are final.** If you disagree with one, open a ticket and make your case "
+        "there instead of arguing it out in chat."
     ),
     "game": (
-        "**1. No cheating.** No third-party tools, macros, exploits, duping, or modified clients.\n"
-        "**2. No raid abuse.** No tower camping, spawn killing, or holding monuments against players "
-        "who cannot fight back.\n"
-        "**3. No teaming outside the rules.** Max group size is enforced; no teaming with another "
-        "clan during official events.\n"
-        "**4. No base griefing beyond a raid.** Destroy what you must to raid, then leave — no "
-        "walling off monuments, and no blocking other players' access to the map.\n"
-        "**5. No glitching.** Report any bug or exploitable spot to staff through a ticket instead of "
-        "using it.\n"
-        "**6. Play fair with the loot economy.** No trading in-game items or accounts for real money, "
-        "and no scamming trades."
+        "**1. No cheating.** No third-party tools, macros, scripts, or modified clients — cheating is "
+        "a permanent ban, and VAC or console-banned accounts are not welcome here.\n"
+        "**2. No exploits or glitches.** If you find a bug, a duping method, or a spot that breaks the "
+        "game, report it in a ticket instead of using it.\n"
+        "**3. Respect the group limit.** The server's maximum team size is enforced, and teaming "
+        "outside your group during events is not allowed. Insiding — using a clan's trust to steal "
+        "from them — is a ban.\n"
+        "**4. A raid is a raid.** Take what you came for and leave: no griefing beyond the raid, no "
+        "walling off monuments or spawn areas, and no blocking other players' access to the map.\n"
+        "**5. No spawn killing.** Do not camp spawns, and do not hold a monument against players who "
+        "cannot fight back.\n"
+        "**6. No real-money trading.** Items, accounts, and loot cannot be sold for money, and a scam "
+        "in any trade is punished.\n"
+        "**7. No ban evasion.** A ban covers you and your accounts — coming back on another account or "
+        "a new profile makes it permanent.\n"
+        "**8. Do not attack the server.** No DDoS, IP grabbing, doxxing, or anything else aimed at the "
+        "server or the people playing on it."
     ),
 }

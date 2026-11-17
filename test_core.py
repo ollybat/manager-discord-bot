@@ -2007,6 +2007,28 @@ class CoreTests(unittest.TestCase):
         for wizard in view.CONFIG_WIZARDS.values():
             self.assertIn(f"class {wizard}(", setup_source)
 
+    def test_panel_copy_reads_as_finished_writing(self):
+        from grid_a1.brand import RULES_DEFAULTS, RULES_INTRO
+        from grid_a1.embeds import TICKET_PANEL_CATEGORIES, TICKET_PANEL_HELP, TICKET_PANEL_INTRO
+
+        lines = [RULES_INTRO, TICKET_PANEL_INTRO, TICKET_PANEL_HELP]
+        lines.extend(details for _emoji, _heading, details in TICKET_PANEL_CATEGORIES)
+        lines.extend(RULES_DEFAULTS.values())
+        for line in lines:
+            self.assertNotIn("plz", line.lower())
+            self.assertNotIn("ours bots", line)
+            self.assertNotIn("|", line)
+            self.assertNotIn("  ", line)
+            self.assertNotIn("...", line)
+            self.assertTrue(line.rstrip().endswith("."), line[:60])
+
+        game = RULES_DEFAULTS["game"].lower()
+        discord = RULES_DEFAULTS["discord"].lower()
+        for topic in ("cheat", "exploit", "team", "raid", "spawn", "real-money", "ban evasion"):
+            self.assertIn(topic, game)
+        for topic in ("harassment", "spam", "nsfw", "personal information", "staff", "ticket"):
+            self.assertIn(topic, discord)
+
     def test_dashboard_configuration_uses_native_dropdowns(self):
         source = (ROOT / "grid_a1" / "dashboard_setup.py").read_text(encoding="utf-8")
         self.assertIn("discord.ui.RoleSelect", source)
@@ -2026,18 +2048,18 @@ class CoreTests(unittest.TestCase):
             "Ticket Shop",
             "Ticket Raid",
             "Ticket Bug",
-            "plz select one of the following choices",
-            "make response time quicker",
+            "goes straight to staff",
+            "than waiting for a ticket",
             "Support - ",
         ):
             self.assertIn(marker, embeds)
         for detail in (
-            "not specified in the following categories",
-            "can be discussed in this ticket",
-            "possible specific problems",
-            "Information about our online store",
-            "bounty raid or raid related problems",
-            "found in-game or with ours bots",
+            "does not fit one of the categories below",
+            "about your base or your area",
+            "clan applications",
+            "Our online store",
+            "raid-related problems",
+            "with one of our bots",
         ):
             self.assertIn(detail, embeds)
         self.assertIn("TICKET_PANEL_CATEGORIES", panel)
