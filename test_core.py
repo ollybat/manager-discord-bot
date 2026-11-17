@@ -155,6 +155,50 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(logo.bundled_logo()[1], brand_logo.LOGO_FILENAME)
         self.assertEqual(logo.bundled_logo()[2], brand_logo.LOGO_CONTENT_TYPE)
 
+    @staticmethod
+    def _jpeg_size(data: bytes) -> tuple[int, int]:
+        """The width and height a JPEG declares in its own header."""
+        index, guard = 2, 0
+        while index + 9 < len(data) and guard < 400:
+            guard += 1
+            if data[index] != 0xFF:
+                index += 1
+                continue
+            marker = data[index + 1]
+            if marker in (0xC0, 0xC1, 0xC2, 0xC3):
+                height = int.from_bytes(data[index + 5:index + 7], "big")
+                width = int.from_bytes(data[index + 7:index + 9], "big")
+                return width, height
+            if marker in (0xD8, 0xD9):
+                index += 2
+                continue
+            index += 2 + int.from_bytes(data[index + 2:index + 4], "big")
+        raise AssertionError("the JPEG declares no size")
+
+    def test_compact_mark_is_a_smaller_copy_of_the_same_picture(self):
+        from grid_a1 import brand_logo, logo
+
+        mark = brand_logo.bundled_mark_bytes()
+        self.assertIs(mark, brand_logo.bundled_mark_bytes())
+        self.assertEqual(logo.sniff_image(mark), "jpeg")
+        self.assertEqual(self._jpeg_size(mark), (brand_logo.MARK_WIDTH, brand_logo.MARK_HEIGHT))
+        self.assertEqual((brand_logo.MARK_WIDTH, brand_logo.MARK_HEIGHT), (96, 96))
+        self.assertEqual(self._jpeg_size(brand_logo.bundled_logo_bytes()), (400, 400))
+        self.assertLess(len(mark), len(brand_logo.bundled_logo_bytes()))
+        self.assertEqual(logo.bundled_mark()[1:], (brand_logo.MARK_FILENAME, brand_logo.MARK_CONTENT_TYPE))
+
+    def test_heading_mark_helpers_agree_with_the_file_they_attach(self):
+        from grid_a1 import logo
+
+        self.assertEqual(logo.guild_mark_url(0, None), "attachment://spinback-mark.jpg")
+        self.assertEqual(logo.mark_file(0, None).filename, logo.guild_mark(0, None)[1])
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(Path(directory) / "manager.sqlite3")
+            database.migrate()
+            database.set_guild_logo(9, b"\x89PNG\r\n\x1a\n" + b"mine-picture", "spinback-logo.png", "image/png")
+            self.assertEqual(logo.guild_mark_url(9, database), "attachment://spinback-logo.png")
+            self.assertEqual(logo.mark_file(9, database).filename, "spinback-logo.png")
+
     def test_logo_upload_validation_accepts_the_supported_formats(self):
         from grid_a1 import logo
 
