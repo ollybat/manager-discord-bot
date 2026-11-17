@@ -1947,6 +1947,88 @@ class CoreTests(unittest.TestCase):
         self.assertIn("owner_close_requested", controls)
         self.assertIn("ticket_kept_open", source)
 
+    def test_discord_visibility_matches_the_documented_access(self):
+        import grid_a1.bot as bot_module
+        from grid_a1 import guides
+
+        expected = {
+            guides.EVERYONE: 0,
+            guides.POLL_CREATOR: 0,
+            guides.TICKET_PARTICIPANT: 0,
+            guides.MANAGE_MESSAGES: 8192,
+            guides.STAFF: 8192,
+            guides.ADMIN: 32,
+            guides.DASHBOARD: 32,
+            guides.SERVER_OWNER: 8,
+            guides.BOT_OWNER: 8,
+        }
+        visibility: dict[str, int] = {}
+
+        def visit(prefix: str, node: object) -> None:
+            children = tuple(getattr(node, "commands", ()) or ())
+            path = f"{prefix} {getattr(node, 'name', '')}".strip()
+            if children:
+                for child in children:
+                    visit(path, child)
+                return
+            permissions = getattr(node, "default_permissions", None)
+            visibility[path] = permissions.value if permissions is not None else 0
+
+        for command in bot_module.bot.tree.get_commands():
+            visit("", command)
+        self.assertGreater(len(visibility), 40)
+        for entry in guides.catalog(bot_module.bot.tree):
+            self.assertIn(entry.access, expected, f"{entry.path} uses an unknown access tier")
+            self.assertEqual(
+                visibility[entry.path],
+                expected[entry.access],
+                f"{entry.path} should be hidden from members without {entry.access_label}",
+            )
+
+    def test_staff_commands_declare_discord_visibility(self):
+        tiers = (
+            ("manage_messages", ("staff()", "_staff_only()", "has_permissions(manage_messages=True")),
+            ("manage_guild", ("admin()", "dashboard_access()", "dashboard")),
+            ("administrator", ("server_owner_only()",)),
+        )
+        files = (
+            ROOT / "grid_a1" / "bot.py",
+            ROOT / "grid_a1" / "commands.py",
+            ROOT / "grid_a1" / "polls.py",
+            ROOT / "grid_a1" / "giveaways.py",
+        )
+        gated = 0
+        for path in files:
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            for node in ast.walk(tree):
+                if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) or not node.decorator_list:
+                    continue
+                command_decorator = next(
+                    (item for item in node.decorator_list if _is_command_decorator(item) and _is_slash_command(item)),
+                    None,
+                )
+                if command_decorator is None:
+                    continue
+                source = " ".join(ast.unparse(item) for item in node.decorator_list)
+                expected = next(
+                    (name for name, markers in tiers if any(marker in source for marker in markers)),
+                    None,
+                )
+                if expected is None:
+                    continue
+                declared = [
+                    name
+                    for name, _ in tiers
+                    if "default_permissions(%s=True)" % name in source
+                ]
+                self.assertIn(
+                    expected,
+                    declared,
+                    f"{path}:{node.name} should declare default_permissions({expected}=True) for Discord visibility",
+                )
+                gated += 1
+        self.assertGreater(gated, 30)
+
     def test_command_descriptions_avoid_emoji_and_slash_options_keep_hints(self):
         files = (
             ROOT / "grid_a1" / "bot.py",
