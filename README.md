@@ -16,7 +16,11 @@ Server managers can use `/giveaway config` to choose an announcement channel, op
 
 ### Support panel
 
-The public ticket panel follows the server's design: the heading **📩 Spinback - Support**, the two guidance lines (with `/help` shown as a code chip), then one bold line per issue type — 📄 Ticket General, 🏠 Ticket Base, 👥 Ticket Clan, 💎 Ticket Shop, ⚠️ Ticket Raid, 🐛 Ticket Bug — each with its description underneath, and the small footer *<logo> Support - <server name> • <year>*. The **Select your issue type ...** menu sits under the panel; picking a type opens the region picker — 🇪🇺 **EU** or 🇺🇸 **NA**, each with a one-line hint — and then the short form. The footer mark is taken from your own server: name an emoji `spinback`, `s`, `support`, or `ticket` and it is used, otherwise the panel falls back to 🏓.
+The public ticket panel follows the server's design: the heading **📩 Spinback - Support**, the two guidance lines (with `/help` shown as a code chip), then one bold line per issue type — 📄 Ticket General, 🏠 Ticket Base, 👥 Ticket Clan, 💎 Ticket Shop, ⚠️ Ticket Raid, 🐛 Ticket Bug — each with its description underneath, and the small footer *<logo> Support - <server name> • <year>*. The **Select your issue type ...** menu sits under the panel; picking a type opens the region picker — 🇪🇺 **EU** or 🇺🇸 **NA**, each with a one-line hint — and then the short form. The panel's main picture is your server logo, described under **Your own logo** below. The footer mark is taken from your own server: name an emoji `spinback`, `s`, `support`, or `ticket` and it is used, otherwise the panel falls back to 🏓.
+
+### Your own logo
+
+Every panel and message the bot posts carries the SpinBack picture: the support panel as its main image, the rules panel beside the *Powered by Spinback* footer, and the welcome, help, ticket, and bot-status cards as their thumbnail. The bot ships with a bundled 400×400 mark, and `/setup logo image:` replaces it for **your server only** with your own PNG, JPEG, GIF, or WebP up to 512 KB. The picture is checked from its own bytes rather than its filename, stored in SQLite so it survives restarts and redeploys, and the posted support and rules panels are refreshed straight away. `/setup logo clear: True` removes it and returns to the bundled mark, `/setup status` reports which one your server uses, and servers that never upload a picture keep the bundled mark without configuring anything.
 
 ### Ticket transcripts
 
