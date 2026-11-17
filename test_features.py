@@ -303,7 +303,8 @@ class SpinBackFeatureTests(unittest.TestCase):
         separators = [item for item in walk if isinstance(item, discord.ui.Separator)]
         self.assertEqual(len(separators), 1)
         sections = [item for item in walk if isinstance(item, discord.ui.Section)]
-        self.assertEqual(len(sections), 2)
+        self.assertEqual(len(sections), 3)
+        self.assertEqual(sections[-1].accessory.media.url, "attachment://spinback-logo.jpg")
         buttons = [item for item in walk if isinstance(item, discord.ui.Button)]
         self.assertEqual([button.label for button in buttons], ["Discord", "Game"])
         self.assertEqual(
@@ -312,7 +313,10 @@ class SpinBackFeatureTests(unittest.TestCase):
         )
         for button in buttons:
             self.assertIsNotNone(button.callback)
-        self.assertIs(view.children[0].children[-1].__class__, discord.ui.TextDisplay)
+        footer = view.children[0].children[-1]
+        self.assertIsInstance(footer, discord.ui.Section)
+        self.assertIsInstance(footer.children[0], discord.ui.TextDisplay)
+        self.assertEqual(footer.accessory.media.url, "attachment://spinback-logo.jpg")
         self.assertIsInstance(view.children[0].children[0], discord.ui.TextDisplay)
 
     def test_rules_storage_defaults_and_service_reads(self):
@@ -655,6 +659,83 @@ class SpinBackFeatureTests(unittest.TestCase):
                 plain.footer.text,
                 f"🏓 Support - Other Server • {utcnow().year}",
             )
+
+    def test_panels_and_messages_carry_the_server_logo(self):
+        from grid_a1 import logo
+        from grid_a1.embeds import support_panel, ticket_embed
+        from grid_a1.welcomer import welcome_embed
+
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(Path(directory) / "manager.sqlite3")
+            database.migrate()
+            guild = SimpleNamespace(id=8, name="Spinback 5X [EU]", emojis=[], member_count=3)
+            self.assertEqual(support_panel(guild, database).image.url, "attachment://spinback-logo.jpg")
+            ticket = ticket_embed("general", "NA", "Gamertag: Oll", guild_id=8, database=database)
+            self.assertEqual(ticket.thumbnail.url, "attachment://spinback-logo.jpg")
+            member = SimpleNamespace(mention="<@1>", display_name="Oll")
+            config = {"welcome_channel": 1, "link_channel": 2, "bot_commands_channel": 3, "shop_channel": 4, "verify_channel": 5}
+            welcome = welcome_embed(SimpleNamespace(user=None, database=database), guild, member, config)
+            self.assertEqual(welcome.thumbnail.url, "attachment://spinback-logo.jpg")
+            database.set_guild_logo(8, b"\x89PNG\r\n\x1a\n" + b"mine-picture", "spinback-logo.png", "image/png")
+            uploaded = support_panel(guild, database)
+            self.assertEqual(uploaded.image.url, "attachment://spinback-logo.png")
+            self.assertEqual(logo.logo_file(8, database).filename, "spinback-logo.png")
+            uploaded_ticket = ticket_embed("general", "EU", "Detail: x", guild_id=8, database=database)
+            self.assertEqual(uploaded_ticket.thumbnail.url, "attachment://spinback-logo.png")
+
+    def test_rules_panel_uses_the_server_logo(self):
+        from grid_a1.rules import RulesService, rules_panel_view
+
+        class FakeDatabase:
+            def __init__(self, row=None):
+                self.row = row
+
+            def rule_text(self, guild_id, section):
+                return None
+
+            def rule_row(self, guild_id, section):
+                return None
+
+            def rules_emojis(self, guild_id):
+                return {}
+
+            def guild_logo(self, guild_id):
+                return self.row
+
+        guild = SimpleNamespace(id=11, emojis=[])
+        default_view = rules_panel_view(RulesService(FakeDatabase()), guild)
+        thumbs = [item for item in default_view.walk_children() if isinstance(item, discord.ui.Thumbnail)]
+        self.assertEqual([item.media.url for item in thumbs], ["attachment://spinback-logo.jpg"])
+        row = {"logo": b"\x89PNG\r\n\x1a\n" + b"mine-picture", "filename": "spinback-logo.png", "content_type": "image/png"}
+        uploaded_view = rules_panel_view(RulesService(FakeDatabase(row)), guild)
+        thumbs = [item for item in uploaded_view.walk_children() if isinstance(item, discord.ui.Thumbnail)]
+        self.assertEqual([item.media.url for item in thumbs], ["attachment://spinback-logo.png"])
+
+    def test_setup_logo_is_guided_and_documented(self):
+        import grid_a1.bot as bot_module
+        from grid_a1 import guides
+
+        tree = bot_module.bot.tree
+        self.assertEqual(sorted(command.name for command in tree.get_command("setup").commands), ["logo", "roles", "status", "tickets", "welcomer"])
+        entries = {entry.path: entry for entry in guides.catalog(tree)}
+        self.assertIn("setup logo", entries)
+        self.assertEqual(entries["setup logo"].access, guides.ADMIN)
+        rendered = "\n".join(value for _, value in guides.render_guide(guides.catalog(tree), list(guides.ACCESS_LABELS), max_total=20000))
+        self.assertIn("/setup logo", rendered)
+
+    def test_docs_describe_the_server_logo(self):
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        guide = (ROOT / "SETUP_GUIDE.md").read_text(encoding="utf-8")
+        project_map = (ROOT / "PROJECT_MAP.md").read_text(encoding="utf-8")
+        for text in (readme, guide):
+            self.assertIn("/setup logo image:", text)
+            self.assertIn("512 KB", text)
+            self.assertIn("bundled", text)
+        self.assertIn("### Your own logo", readme)
+        self.assertIn("## Your own logo", guide)
+        self.assertIn("schema version is 26", project_map)
+        self.assertIn("grid_a1/logo.py", project_map)
+        self.assertIn("grid_a1/brand_logo.py", project_map)
 
     def test_new_utility_commands_are_registered_with_plain_descriptions(self):
         import grid_a1.bot as bot_module
