@@ -451,6 +451,7 @@ def server_owner_only():
     return app_commands.check(predicate)
 
 @bot.tree.command(name="anti-links", description="Configure protection against outside links and invites")
+@app_commands.default_permissions(manage_guild=True)
 @app_commands.guild_only()
 @admin()
 @app_commands.describe(
@@ -536,6 +537,7 @@ async def report_member(i: discord.Interaction, member: discord.Member, reason: 
     await i.followup.send("✅ Your report was sent privately to the server's report channel. Thank you.", ephemeral=True)
 
 @bot.tree.command(name="dashboard", description="Open your private server setup and status dashboard")
+@app_commands.default_permissions(manage_guild=True)
 async def dashboard(i: discord.Interaction):
     await i.response.defer(ephemeral=True)
     if not _dashboard_access(i):
@@ -545,6 +547,7 @@ async def dashboard(i: discord.Interaction):
     await i.followup.send(embed=view.dashboard_embed(i.guild), view=view, ephemeral=True)
 
 @bot.tree.command(name="modlog", description="Show a member's recorded moderation history")
+@app_commands.default_permissions(manage_messages=True)
 @staff()
 @app_commands.guild_only()
 @app_commands.describe(member="Member whose recorded kick, ban, warn, and timeout history you want")
@@ -564,6 +567,7 @@ async def modlog(i: discord.Interaction, member: discord.Member):
     result.set_footer(text="Kick, ban, warn, and timeout records only; warnings are recorded, not applied automatically.")
     await i.response.send_message(embed=result, ephemeral=True)
 @bot.tree.command(name="kick", description="Remove a member from this server with a recorded reason")
+@app_commands.default_permissions(manage_messages=True)
 @staff()
 @app_commands.describe(member="Member to kick", reason="Why the member is being kicked")
 async def moderation_kick(i: discord.Interaction, member: discord.Member, reason: str = "No reason provided"):
@@ -577,6 +581,7 @@ async def moderation_kick(i: discord.Interaction, member: discord.Member, reason
     await i.followup.send(embed=embed("💜 Member kicked", f"✅ {member.mention} was removed from the server.\n\n**Reason:** {discord.utils.escape_markdown(reason)[:500]}"), ephemeral=True)
 
 @bot.tree.command(name="ban", description="Ban a member from this server with a recorded reason")
+@app_commands.default_permissions(manage_messages=True)
 @staff()
 @app_commands.describe(member="Member to ban", reason="Why the member is being banned")
 async def moderation_ban(i: discord.Interaction, member: discord.Member, reason: str = "No reason provided"):
@@ -590,6 +595,7 @@ async def moderation_ban(i: discord.Interaction, member: discord.Member, reason:
     await i.followup.send(embed=embed("💜 Member banned", f"🔨 {member.mention} was banned from the server.\n\n**Reason:** {discord.utils.escape_markdown(reason)[:500]}"), ephemeral=True)
 
 @bot.tree.command(name="warn", description="Record a moderation warning for a member")
+@app_commands.default_permissions(manage_messages=True)
 @staff()
 @app_commands.describe(member="Member receiving the warning", reason="What rule or behavior the warning concerns")
 async def moderation_warn(i: discord.Interaction, member: discord.Member, reason: str):
@@ -598,6 +604,7 @@ async def moderation_warn(i: discord.Interaction, member: discord.Member, reason
     await i.response.send_message(embed=embed("💜 Warning recorded", f"⚠️ A warning was recorded for {member.mention}.\n\n**Reason:** {discord.utils.escape_markdown(reason)[:500]}"), ephemeral=True)
 
 @bot.tree.command(name="timeout", description="⏳ Temporarily timeout a member for 1 minute to 28 days")
+@app_commands.default_permissions(manage_messages=True)
 @staff()
 @app_commands.describe(member="Member to timeout", minutes="Duration in minutes (1–40320)", reason="Why the timeout is being applied")
 async def moderation_timeout(i: discord.Interaction, member: discord.Member, minutes: app_commands.Range[int, 1, 40320], reason: str = "No reason provided"):
@@ -611,6 +618,7 @@ async def moderation_timeout(i: discord.Interaction, member: discord.Member, min
     await i.followup.send(embed=embed("💜 Member timed out", f"⏳ {member.mention} was timed out for **{minutes} minute(s)**.\n\n**Reason:** {discord.utils.escape_markdown(reason)[:500]}"), ephemeral=True)
 
 @bot.tree.command(name="unban", description="Lift a ban so the member can rejoin")
+@app_commands.default_permissions(manage_messages=True)
 @staff()
 @app_commands.guild_only()
 @app_commands.describe(user_id="Start typing to pick a banned member, or paste their numeric user ID", reason="Why the ban is being lifted")
@@ -646,6 +654,7 @@ async def moderation_unban_autocomplete(i: discord.Interaction, current: str):
     return choices
 
 @bot.tree.command(name="untimeout", description="End a member's timeout early")
+@app_commands.default_permissions(manage_messages=True)
 @staff()
 @app_commands.guild_only()
 @app_commands.describe(member="Member whose timeout should end now", reason="Why the timeout is being lifted")
@@ -661,6 +670,7 @@ async def moderation_untimeout(i: discord.Interaction, member: discord.Member, r
     await i.followup.send(embed=embed("💜 Timeout lifted", f"🔓 {member.mention} can talk again.\n\n**Reason:** {discord.utils.escape_markdown(reason)[:500]}"), ephemeral=True)
 
 @bot.tree.command(name="purge", description="Bulk-delete recent messages, or empty the channel")
+@app_commands.default_permissions(manage_messages=True)
 @app_commands.guild_only()
 @app_commands.checks.has_permissions(manage_messages=True)
 @app_commands.checks.cooldown(3, 60.0, key=lambda i: (i.guild_id, i.user.id))
@@ -923,6 +933,7 @@ async def prefix_slowmode(ctx, seconds: int, *, reason: str = "No reason provide
 
 
 @setup_group.command(name="roles", description="Set the five distinct staff permission roles")
+@app_commands.default_permissions(administrator=True)
 @server_owner_only()
 @app_commands.describe(owner_role="Owner staff role", co_owner_role="Co-owner staff role", head_admin_role="Head administrator staff role", admin_role="Administrator staff role", moderator_role="Moderator staff role")
 async def setup_roles(i: discord.Interaction, owner_role: discord.Role, co_owner_role: discord.Role, head_admin_role: discord.Role, admin_role: discord.Role, moderator_role: discord.Role):
@@ -942,6 +953,7 @@ async def setup_roles(i: discord.Interaction, owner_role: discord.Role, co_owner
     await i.followup.send(embed=e, ephemeral=True)
 
 @setup_group.command(name="status", description="Check which parts of this server's setup are finished")
+@app_commands.default_permissions(manage_guild=True)
 @app_commands.guild_only()
 @admin()
 async def setup_status(interaction: discord.Interaction) -> None:
@@ -982,6 +994,7 @@ async def setup_status(interaction: discord.Interaction) -> None:
     await interaction.response.send_message(embed=result, ephemeral=True)
 
 @bot.tree.command(name="verifypanel", description="Publish a verification panel and assignable role")
+@app_commands.default_permissions(manage_guild=True)
 @app_commands.guild_only()
 @admin()
 @app_commands.describe(channel="Text channel where the public panel will appear", role="Role granted after successful verification")
@@ -999,6 +1012,7 @@ async def verifypanel(i: discord.Interaction, channel: discord.TextChannel, role
 
 
 @ticket_group.command(name="remove", description="Remove a member from the current ticket")
+@app_commands.default_permissions(manage_messages=True)
 @staff()
 @app_commands.describe(user="Member who should lose access to this ticket")
 async def ticket_remove(i: discord.Interaction, user: discord.Member):
@@ -1027,6 +1041,7 @@ def _wipe_embed(title: str, rows: list, empty: str):
     return result
 
 @wipe_group.command(name="config", description="Open the wipe panel: channel, ping role, automatic posting, and the schedule")
+@app_commands.default_permissions(manage_guild=True)
 @app_commands.guild_only()
 @admin()
 async def wipe_config(i: discord.Interaction):
@@ -1035,6 +1050,7 @@ async def wipe_config(i: discord.Interaction):
     await i.response.send_message(embed=view.panel(), view=view, ephemeral=True)
 
 @wipe_group.command(name="add", description="Schedule a wipe")
+@app_commands.default_permissions(manage_guild=True)
 @app_commands.guild_only()
 @admin()
 @app_commands.describe(
@@ -1061,6 +1077,7 @@ async def wipe_list(i: discord.Interaction, limit: app_commands.Range[int, 1, 50
     await i.response.send_message(embed=_wipe_embed(f"🌍 Wipe schedule — {i.guild.name}", rows, "Nothing is scheduled yet. Staff can add one with /wipe add."), ephemeral=True)
 
 @wipe_group.command(name="remove", description="Delete a scheduled wipe")
+@app_commands.default_permissions(manage_guild=True)
 @app_commands.guild_only()
 @admin()
 @app_commands.describe(wipe_id="Start typing to pick a scheduled wipe, or paste its ID")
@@ -1092,6 +1109,7 @@ async def wipe_remove_autocomplete(i: discord.Interaction, current: str):
     ]
 
 @wipe_group.command(name="announce", description="Post a wipe now")
+@app_commands.default_permissions(manage_guild=True)
 @app_commands.guild_only()
 @admin()
 @app_commands.describe(wipe_id="Start typing to pick a wipe, or paste its ID")
@@ -1161,6 +1179,7 @@ async def info_server(i: discord.Interaction):
 roles_group = app_commands.Group(name="roles", description="Display and publish the server role directory")
 bot.tree.add_command(roles_group)
 @roles_group.command(name="setchannel", description="Post the server role directory in a text channel")
+@app_commands.default_permissions(manage_guild=True)
 @app_commands.guild_only()
 @admin()
 @app_commands.describe(channel="Text channel where the role directory should be posted")
@@ -1177,6 +1196,7 @@ async def roles_setchannel(i: discord.Interaction, channel: discord.TextChannel)
     await i.followup.send(f"✅ Role directory posted in {channel.mention}.", ephemeral=True)
 
 @setup_group.command(name="tickets", description="Configure ticket channels and publish the support panel")
+@app_commands.default_permissions(manage_guild=True)
 @admin()
 @app_commands.describe(panel_channel="Public channel for the support panel", logs_channel="Private channel for ticket logs", category="Category used for newly opened tickets", inactivity_hours="Hours before the ticket inactivity reminder (1–720)")
 async def setup_tickets(i, panel_channel: discord.TextChannel, logs_channel: discord.TextChannel, category: discord.CategoryChannel, inactivity_hours: app_commands.Range[int,1,720]):
@@ -1205,16 +1225,19 @@ async def setup_tickets(i, panel_channel: discord.TextChannel, logs_channel: dis
     await i.followup.send(f"✅ {BRAND_SHORT} support panel updated in {panel_channel.mention}; logs go to {logs_channel.mention}.", ephemeral=True)
 
 @setup_group.command(name="welcomer", description="Configure welcome, shop, links, and community channels")
+@app_commands.default_permissions(manage_guild=True)
 @admin()
 @app_commands.describe(welcome_channel="Channel for new-member greetings", link_channel="Channel containing server links", bot_commands_channel="Channel for bot commands", shop_channel="Channel for store information", verify_channel="Channel for verification guidance")
 async def setup_welcomer(i,welcome_channel:discord.TextChannel,link_channel:discord.TextChannel,bot_commands_channel:discord.TextChannel,shop_channel:discord.TextChannel,verify_channel:discord.TextChannel): bot.database.upsert_config(guild(i).id,welcome_channel=welcome_channel.id,link_channel=link_channel.id,bot_commands_channel=bot_commands_channel.id,shop_channel=shop_channel.id,verify_channel=verify_channel.id); await i.response.send_message(f"✅ Welcomer configured for {welcome_channel.mention}.",ephemeral=True)
 @welcomer_group.command(name="preview", description="Preview the welcome message privately")
+@app_commands.default_permissions(manage_guild=True)
 @admin()
 async def welcomer_preview(i):
     config=bot.database.config(guild(i).id); problems=missing(guild(i),config)
     if problems: return await i.response.send_message(embed=embed("⚠️ Welcomer is not set up","\n".join(f"• {p}" for p in problems),discord.Colour.red()),ephemeral=True)
     await i.response.send_message(embed=welcome_embed(bot,guild(i),i.user,config),ephemeral=True)
 @welcomer_group.command(name="test", description="Send a test welcome message to the configured channel")
+@app_commands.default_permissions(manage_guild=True)
 @admin()
 async def welcomer_test(i):
     config=bot.database.config(guild(i).id); problems=missing(guild(i),config)
@@ -1224,9 +1247,11 @@ async def welcomer_test(i):
     await i.response.defer(ephemeral=True)
     await channel.send(embed=welcome_embed(bot,guild(i),i.user,config)); await i.followup.send(f"✅ Welcome test sent to {channel.mention}.",ephemeral=True)
 @ticket_group.command(name="claim", description="Claim the current support ticket")
+@app_commands.default_permissions(manage_messages=True)
 @staff()
 async def ticket_claim(i): await claim(i,bot.tickets)
 @ticket_group.command(name="transfer", description="Assign the current ticket to another staff member")
+@app_commands.default_permissions(manage_messages=True)
 @staff()
 @app_commands.describe(target_member="Staff member who should receive the ticket")
 async def ticket_transfer(i,target_member:discord.Member): await claim(i,bot.tickets,target_member)
@@ -1242,10 +1267,12 @@ async def ticket_requestclose(i,reason:str):
     bot.database.audit(guild(i).id,row['ticket_id'],i.user.id,'close_requested',json.dumps({'reason':discord.utils.escape_markdown(reason)[:500]}))
     await i.response.send_message(embed=embed("🔒 Ticket closure requested", f"A staff member requested closure.\n\n**Reason:** {discord.utils.escape_markdown(reason)[:500]}"))
 @ticket_group.command(name="close", description="Save the transcript and close the current ticket")
+@app_commands.default_permissions(manage_messages=True)
 @staff()
 @app_commands.describe(reason="Resolution or closure reason saved with the transcript")
 async def ticket_close(i,reason:str="No reason provided"): await bot.tickets.close(i,reason)
 @ticket_group.command(name="priority", description="Set how urgent this ticket is")
+@app_commands.default_permissions(manage_messages=True)
 @staff()
 @app_commands.describe(priority="Priority this ticket should be worked at")
 @app_commands.choices(priority=[app_commands.Choice(name=PRIORITY_LABELS[value], value=value) for value in PRIORITIES])
@@ -1259,6 +1286,7 @@ async def ticket_priority(i: discord.Interaction, priority: app_commands.Choice[
     if await bot.tickets.sync_channel_name(i.channel, row, priority.value):
         await i.followup.send("🏷️ Renamed the channel to match its new priority.", ephemeral=True)
 @ticket_group.command(name="list", description="List this server's open tickets, most urgent first")
+@app_commands.default_permissions(manage_messages=True)
 @staff()
 @app_commands.checks.cooldown(5, 60.0, key=lambda i: (i.guild_id, i.user.id))
 async def ticket_list(i: discord.Interaction):
@@ -1279,6 +1307,7 @@ async def ticket_list(i: discord.Interaction):
         result.set_footer(text=f"…and {hidden} more not shown. Clear the oldest tickets first.")
     await i.response.send_message(embed=result, ephemeral=True)
 @ticket_group.command(name="note", description="Save an internal staff note on this ticket")
+@app_commands.default_permissions(manage_messages=True)
 @staff()
 @app_commands.describe(text="Note only staff can read; the ticket owner never sees it")
 async def ticket_note(i: discord.Interaction, text: str):
@@ -1296,6 +1325,7 @@ async def ticket_note(i: discord.Interaction, text: str):
         ephemeral=True,
     )
 @ticket_group.command(name="notes", description="Read the internal staff notes on this ticket")
+@app_commands.default_permissions(manage_messages=True)
 @staff()
 async def ticket_notes(i: discord.Interaction):
     if not isinstance(i.channel, discord.TextChannel) or not is_ticket(i.channel):
@@ -1308,6 +1338,7 @@ async def ticket_notes(i: discord.Interaction):
     result.add_field(name="Notes", value="\n".join(lines) or "No notes yet. Add one with /ticket note.", inline=False)
     await i.response.send_message(embed=result, ephemeral=True)
 @ticket_group.command(name="stats", description="Show ticket workload, response times, and top claimers")
+@app_commands.default_permissions(manage_messages=True)
 @staff()
 @app_commands.checks.cooldown(5, 60.0, key=lambda i: (i.guild_id, i.user.id))
 async def ticket_stats(i: discord.Interaction):
@@ -1316,6 +1347,7 @@ async def ticket_stats(i: discord.Interaction):
     await i.response.defer(ephemeral=True)
     await i.followup.send(embed=ticket_stats_embed(g, collect_ticket_stats(bot.database, g.id)), ephemeral=True)
 @ticket_group.command(name="transcript", description="Get a plain-text transcript without closing the ticket")
+@app_commands.default_permissions(manage_messages=True)
 @staff()
 @app_commands.checks.cooldown(3, 60.0, key=lambda i: (i.guild_id, i.user.id))
 async def ticket_transcript(i: discord.Interaction):
@@ -1534,6 +1566,7 @@ async def suggestion_list(i: discord.Interaction):
 
 
 @suggestion_group.command(name="config", description="Choose the channel that receives new suggestions (admin)")
+@app_commands.default_permissions(manage_guild=True)
 @admin()
 @app_commands.guild_only()
 @app_commands.describe(channel="Text channel where new suggestions should be posted for voting")
@@ -1561,6 +1594,7 @@ bot.tree.add_command(rules_group)
 
 
 @rules_group.command(name="post", description="Post the rules panel with its Discord and Game buttons")
+@app_commands.default_permissions(manage_guild=True)
 @admin()
 @app_commands.guild_only()
 @app_commands.describe(channel="Text channel that should hold the rules panel")
@@ -1569,6 +1603,7 @@ async def rules_post(i: discord.Interaction, channel: discord.TextChannel):
 
 
 @rules_group.command(name="edit", description="Replace the text of one rules section and refresh the panel")
+@app_commands.default_permissions(manage_guild=True)
 @admin()
 @app_commands.guild_only()
 @app_commands.describe(section="Which set of rules to rewrite")
@@ -1581,6 +1616,7 @@ async def rules_edit(i: discord.Interaction, section: app_commands.Choice[str]):
 
 
 @rules_group.command(name="preview", description="Show the rules panel privately before you post it")
+@app_commands.default_permissions(manage_guild=True)
 @admin()
 @app_commands.guild_only()
 async def rules_preview(i: discord.Interaction):
