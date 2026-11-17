@@ -82,6 +82,7 @@ SECTIONS: tuple[tuple[str, tuple[str, ...]], ...] = (
         (
             "setup roles",
             "setup status",
+            "setup logo",
             "setup tickets",
             "setup welcomer",
             "verifypanel",
@@ -180,6 +181,7 @@ COMMAND_ACCESS: dict[str, str] = {
     "purge": MANAGE_MESSAGES,
     "setup roles": SERVER_OWNER,
     "setup status": ADMIN,
+    "setup logo": ADMIN,
     "setup tickets": ADMIN,
     "setup welcomer": ADMIN,
     "verifypanel": ADMIN,
