@@ -20,8 +20,8 @@ Startup loads `.env`, validates settings, configures logging, runs SQLite migrat
 - `grid_a1/wipes.py`: wipe scheduling (absolute or relative times), the wipe config panel, and the once-only announcement loop.
 - `grid_a1/suggestions.py`: member suggestion storage helpers, the persistent vote buttons, and the suggestion modal.
 - `grid_a1/brand.py`: the single source of product branding (SpinBack Manager), the two brand colours, and the starter rule texts.
-- `grid_a1/brand_logo.py`: the bundled SpinBack picture as base64 text (so the repository stays plain text) with its dimensions and content type.
-- `grid_a1/logo.py`: server logo resolution (the bundled mark or the server's own upload), upload validation from the picture's own bytes, and the helpers that point embeds and the rules panel at the attachment they send.
+- `grid_a1/brand_logo.py`: the bundled SpinBack picture as base64 text (so the repository stays plain text) with its dimensions and content type, in two sizes: the full 400x400 picture and a compact 96x96 mark for headings.
+- `grid_a1/logo.py`: server logo resolution (the bundled picture or the server's own upload), upload validation from the picture's own bytes, and the helpers that point embeds and the compact panel-heading mark at the attachment they send.
 - `grid_a1/rules.py`: the rules panel embed, its persistent per-section buttons, the edit form, and panel refresh.
 - `grid_a1/giveaways.py`: the `/giveaway` command group, private giveaway setup, persistent entry buttons, timer-based winner draws, and active giveaway dashboard.
 - `grid_a1/stats.py`: read-only ticket workload statistics, plus the shared queue/moderation/note line formatters and Discord relative-timestamp helper (queue split, closed-ticket windows, first-claim and closure averages, per-region load, per-priority load, claim leaderboard with each claimer's first-claim average, owner rating average).

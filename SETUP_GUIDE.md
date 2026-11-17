@@ -26,7 +26,7 @@ The name members see above every message (for example `Spinback | Manager`) is t
 
 ## Your own logo
 
-Every panel and message uses the SpinBack picture that ships with the bot. To use your own, run `/setup logo image:` and attach a PNG, JPEG, GIF, or WebP up to 512 KB. The picture is checked from its own bytes, saved for your server in SQLite, and the posted support and rules panels are refreshed immediately; `/setup status` then reports `Server logo: Your uploaded logo`. `/setup logo clear: True` removes it and returns to the bundled mark. Servers that never upload a picture need no configuration.
+Every panel and message uses the SpinBack picture that ships with the bot. To use your own, run `/setup logo image:` and attach a PNG, JPEG, GIF, or WebP up to 512 KB. The picture is checked from its own bytes, saved for your server in SQLite, and the posted support and rules panels are refreshed immediately; `/setup status` then reports `Server logo: Your uploaded logo`. `/setup logo clear: True` removes it and returns to the bundled mark. Panels show the picture as a small mark beside their heading — a compact 96×96 copy of it — so the panel text reads first, while the support panel uses the full-size picture. Servers that never upload a picture need no configuration.
 
 ## Who can see which command
 

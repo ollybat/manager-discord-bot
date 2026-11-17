@@ -20,7 +20,7 @@ The public ticket panel follows the server's design: the heading **📩 Spinback
 
 ### Your own logo
 
-Every panel and message the bot posts carries the SpinBack picture: the support panel as its main image, the rules panel beside the *Powered by Spinback* footer, and the welcome, help, ticket, and bot-status cards as their thumbnail. The bot ships with a bundled 400×400 mark, and `/setup logo image:` replaces it for **your server only** with your own PNG, JPEG, GIF, or WebP up to 512 KB. The picture is checked from its own bytes rather than its filename, stored in SQLite so it survives restarts and redeploys, and the posted support and rules panels are refreshed straight away. `/setup logo clear: True` removes it and returns to the bundled mark, `/setup status` reports which one your server uses, and servers that never upload a picture keep the bundled mark without configuring anything.
+Every panel and message the bot posts carries the SpinBack picture: the support panel as its main image, the rules panel as a compact mark beside its heading, and the welcome, help, ticket, and bot-status cards as their thumbnail. The bot ships with a bundled 400×400 picture and a compact 96×96 copy of it for headings, and `/setup logo image:` replaces it for **your server only** with your own PNG, JPEG, GIF, or WebP up to 512 KB. The picture is checked from its own bytes rather than its filename, stored in SQLite so it survives restarts and redeploys, and the posted support and rules panels are refreshed straight away. `/setup logo clear: True` removes it and returns to the bundled mark, `/setup status` reports which one your server uses, and servers that never upload a picture keep the bundled mark without configuring anything.
 
 ### Ticket transcripts
 

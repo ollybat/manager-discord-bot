@@ -301,10 +301,13 @@ class SpinBackFeatureTests(unittest.TestCase):
         self.assertIn("Powered by Spinback", texts[-1])
 
         separators = [item for item in walk if isinstance(item, discord.ui.Separator)]
-        self.assertEqual(len(separators), 1)
+        self.assertEqual(len(separators), 2)
         sections = [item for item in walk if isinstance(item, discord.ui.Section)]
         self.assertEqual(len(sections), 3)
-        self.assertEqual(sections[-1].accessory.media.url, "attachment://spinback-logo.jpg")
+        self.assertIsInstance(sections[0].accessory, discord.ui.Thumbnail)
+        self.assertEqual(sections[0].accessory.media.url, "attachment://spinback-mark.jpg")
+        thumbs = [item for item in walk if isinstance(item, discord.ui.Thumbnail)]
+        self.assertEqual([item.media.url for item in thumbs], ["attachment://spinback-mark.jpg"])
         buttons = [item for item in walk if isinstance(item, discord.ui.Button)]
         self.assertEqual([button.label for button in buttons], ["Discord", "Game"])
         self.assertEqual(
@@ -314,10 +317,10 @@ class SpinBackFeatureTests(unittest.TestCase):
         for button in buttons:
             self.assertIsNotNone(button.callback)
         footer = view.children[0].children[-1]
-        self.assertIsInstance(footer, discord.ui.Section)
-        self.assertIsInstance(footer.children[0], discord.ui.TextDisplay)
-        self.assertEqual(footer.accessory.media.url, "attachment://spinback-logo.jpg")
-        self.assertIsInstance(view.children[0].children[0], discord.ui.TextDisplay)
+        self.assertIsInstance(footer, discord.ui.TextDisplay)
+        self.assertIn("Powered by Spinback", footer.content)
+        self.assertIsNone(getattr(footer, "accessory", None))
+        self.assertIs(view.children[0].children[0].accessory.__class__, discord.ui.Thumbnail)
 
     def test_rules_storage_defaults_and_service_reads(self):
         from grid_a1.brand import RULES_DEFAULTS
@@ -705,7 +708,11 @@ class SpinBackFeatureTests(unittest.TestCase):
         guild = SimpleNamespace(id=11, emojis=[])
         default_view = rules_panel_view(RulesService(FakeDatabase()), guild)
         thumbs = [item for item in default_view.walk_children() if isinstance(item, discord.ui.Thumbnail)]
-        self.assertEqual([item.media.url for item in thumbs], ["attachment://spinback-logo.jpg"])
+        self.assertEqual([item.media.url for item in thumbs], ["attachment://spinback-mark.jpg"])
+        heading = default_view.children[0].children[0]
+        self.assertIsInstance(heading, discord.ui.Section)
+        self.assertIsInstance(heading.accessory, discord.ui.Thumbnail)
+        self.assertIsInstance(default_view.children[0].children[-1], discord.ui.TextDisplay)
         row = {"logo": b"\x89PNG\r\n\x1a\n" + b"mine-picture", "filename": "spinback-logo.png", "content_type": "image/png"}
         uploaded_view = rules_panel_view(RulesService(FakeDatabase(row)), guild)
         thumbs = [item for item in uploaded_view.walk_children() if isinstance(item, discord.ui.Thumbnail)]
