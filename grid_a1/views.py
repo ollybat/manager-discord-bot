@@ -5,9 +5,9 @@ import logging
 import time
 
 from .brand import BRAND_SHORT
-from .embeds import embed
+from .embeds import PANEL_COLOUR, embed
 from .tickets import TicketService, claim
-from .utils import active_ticket_owner, feedback_custom_id, inactivity_custom_id, is_ticket, parse_ticket_topic, staff_member
+from .utils import TICKET_REGIONS, active_ticket_owner, feedback_custom_id, inactivity_custom_id, is_ticket, parse_ticket_topic, region_hint, staff_member
 
 log = logging.getLogger(__name__)
 
@@ -243,7 +243,15 @@ class DashboardView(discord.ui.View):
 class RegionSelect(discord.ui.Select):
     def __init__(self, service: TicketService, issue: str, label: str):
         self.service, self.issue, self.label = service, issue, label
-        super().__init__(placeholder="🇪🇺 Choose your region…", options=[discord.SelectOption(label="EU", value="EU", emoji="🇪🇺", description="European support region")], custom_id="grid-a1:ticket:region")
+        options = [
+            discord.SelectOption(label=f"{value} support", value=value, emoji=flag, description=hint)
+            for value, flag, hint in TICKET_REGIONS
+        ]
+        super().__init__(
+            placeholder="Choose your region …",
+            options=options,
+            custom_id="grid-a1:ticket:region",
+        )
     async def callback(self, interaction: discord.Interaction): await interaction.response.send_modal(DetailsModal(self.service, self.issue, self.label, self.values[0]))
 
 class RegionView(discord.ui.View):
@@ -256,7 +264,20 @@ class TicketTypeSelect(discord.ui.Select):
         super().__init__(placeholder="Select your issue type ...", options=options, custom_id="grid-a1:ticket:type")
     async def callback(self, interaction: discord.Interaction):
         option = next(x for x in self.options if x.value == self.values[0])
-        await interaction.response.send_message("🌍 Choose EU, then complete the short ticket form.", view=RegionView(self.service, option.value, option.label), ephemeral=True)
+        prompt = embed(
+            f"🌍 {option.label} • Choose your region",
+            "Pick the region your server is in, then answer the short form. "
+            "Staff are pinged as soon as the ticket opens.",
+            PANEL_COLOUR,
+        )
+        for value, flag, hint in TICKET_REGIONS:
+            prompt.add_field(name=f"{flag} {value}", value=region_hint(value), inline=True)
+        prompt.set_footer(text="SpinBack support • the ticket opens right after the form")
+        await interaction.response.send_message(
+            embed=prompt,
+            view=RegionView(self.service, option.value, option.label),
+            ephemeral=True,
+        )
 
 class TicketPanel(discord.ui.View):
     """Public panel showing only the category selector; detailed instructions stay in the flow."""

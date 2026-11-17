@@ -11,6 +11,8 @@ from .database import Database
 from .embeds import embed, feedback_embed, inactivity_indicator, ticket_archive_embed, ticket_embed
 from .utils import (
     DEFAULT_PRIORITY,
+    TICKET_REGION_VALUES,
+    TICKET_REGIONS,
     is_ticket,
     parse_ticket_topic,
     sanitize_channel_name,
@@ -47,6 +49,14 @@ class ReimburseModal(discord.ui.Modal, title="Reimbursement request"):
         super().__init__(timeout=900.0)
         self.service = service
         self.inputs: dict[str, discord.ui.TextInput] = {}
+        self.region_field = discord.ui.TextInput(
+            label="Region",
+            placeholder="EU or NA",
+            default="EU",
+            max_length=8,
+            required=True,
+        )
+        self.add_item(self.region_field)
         for label, hint, paragraph in REIMBURSE_PROMPTS:
             field = discord.ui.TextInput(
                 label=label,
@@ -64,7 +74,7 @@ class ReimburseModal(discord.ui.Modal, title="Reimbursement request"):
             interaction,
             REIMBURSE_ISSUE,
             REIMBURSE_LABEL,
-            "EU",
+            str(self.region_field.value or "EU"),
             reimbursement_details(answers),
         )
 
@@ -109,12 +119,14 @@ class TicketService:
         if not interaction.response.is_done():
             await interaction.response.defer(ephemeral=True)
 
-        if not guild or region != "EU":
+        if not guild or str(region).strip().upper() not in TICKET_REGION_VALUES:
+            offered = " or ".join(value for value, _, _ in TICKET_REGIONS)
             await interaction.followup.send(
-                "❌ Only EU support is currently available. Choose EU and try again.",
+                f"❌ Choose {offered} support and try again.",
                 ephemeral=True,
             )
             return
+        region = str(region).strip().upper()
 
         config = self.db.config(guild.id)
         existing = self.db.open_ticket_for_owner(guild.id, interaction.user.id)
@@ -242,6 +254,7 @@ class TicketService:
             issue,
             interaction.user.name,
             ticket_id,
+            region=region,
         )
         try:
             channel = await guild.create_text_channel(
@@ -482,11 +495,16 @@ class TicketService:
 
         owner = channel.guild.get_member(int(row["owner_id"])) if row["owner_id"] else None
         owner_slug = getattr(owner, "name", None) or f"user-{int(row['owner_id'] or 0)}"
+        try:
+            row_region = str(row["region"])
+        except (IndexError, KeyError, TypeError):
+            row_region = None
         wanted = ticket_channel_name(
             str(row["issue"]),
             owner_slug,
             str(row["ticket_id"]),
             priority or str(row["priority"] or DEFAULT_PRIORITY),
+            region=row_region,
         )
         if channel.name == wanted:
             return False

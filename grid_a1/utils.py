@@ -73,6 +73,30 @@ def utcnow() -> datetime:
 
 
 PRIORITY_MARKERS = {"low": "🟢", "normal": "🔵", "high": "🟠", "urgent": "🔴"}
+TICKET_REGIONS: tuple[tuple[str, str, str], ...] = (
+    ("EU", "🇪🇺", "European servers and players"),
+    ("NA", "🇺🇸", "North American servers and players"),
+)
+"""Supported ticket regions: value, flag, and the hint the picker shows."""
+TICKET_REGION_VALUES = frozenset(value for value, _, _ in TICKET_REGIONS)
+
+
+def region_flag(region: str) -> str:
+    """Flag for a ticket region, or a globe when the value is unknown."""
+    code = str(region or "").strip().upper()
+    return next((flag for value, flag, _ in TICKET_REGIONS if value == code), "🌍")
+
+
+def region_display(region: str) -> str:
+    """Flag plus region code, for panels, embeds, and transcripts."""
+    code = str(region or "").strip().upper()
+    return f"{region_flag(code)} {code}".strip()
+
+
+def region_hint(region: str) -> str:
+    """Short description of a ticket region for pickers and prompts."""
+    code = str(region or "").strip().upper()
+    return next((hint for value, _, hint in TICKET_REGIONS if value == code), "Support region")
 """Leading marker so the ticket list groups itself by urgency at a glance."""
 
 
@@ -89,11 +113,13 @@ def ticket_channel_name(
     username: str,
     ticket_id: str,
     priority: str = DEFAULT_PRIORITY,
+    region: str | None = None,
 ) -> str:
-    """Readable ticket channel name: urgency marker, category, owner, reference."""
+    """Readable ticket channel name: urgency marker, region, category, owner, reference."""
     marker = PRIORITY_MARKERS.get(priority, PRIORITY_MARKERS[DEFAULT_PRIORITY])
-    body = sanitize_channel_name(issue, username, ticket_id, limit=80)
-    return f"{marker}-{body}"[:95]
+    parts = (region, issue, username, ticket_id) if region else (issue, username, ticket_id)
+    body = sanitize_channel_name(*parts, limit=84)
+    return f"{marker}-{body}"[:99]
 
 
 def ticket_status_title(title: str | None, indicator: str) -> str:

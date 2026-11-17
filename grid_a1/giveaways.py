@@ -8,9 +8,14 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 import discord
+from discord import app_commands
 
 from .database import Database
+from .embeds import embed
+from .guides import build_choices
+from .stats import timestamp_marker
 from .utils import utcnow
+from .views import ConfirmView
 
 log = logging.getLogger(__name__)
 MAX_GIVEAWAY_WINNERS = 50
@@ -279,7 +284,7 @@ class GiveawayDashboardView(discord.ui.View):
             return False
         return True
 
-    @discord.ui.button(label="Configure Giveaway", style=discord.ButtonStyle.success, emoji="✨", row=0)
+    @discord.ui.button(label="Configure Giveaway", style=discord.ButtonStyle.success, emoji="", row=0)
     async def configure(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         await interaction.response.edit_message(
             embed=discord.Embed(
@@ -290,7 +295,7 @@ class GiveawayDashboardView(discord.ui.View):
             view=GiveawayChannelStep(self.service, self.guild_id, self.user_id),
         )
 
-    @discord.ui.button(label="View Active", style=discord.ButtonStyle.primary, emoji="👀", row=0)
+    @discord.ui.button(label="View Active", style=discord.ButtonStyle.primary, emoji="", row=0)
     async def view_active(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         rows = self.service.database.active_giveaways(self.guild_id)
         if not rows:
@@ -568,3 +573,152 @@ class GiveawayWinnerCountModal(discord.ui.Modal):
             ),
             ephemeral=True,
         )
+
+
+def register_giveaway_commands(bot, giveaway_group, *, admin) -> None:
+    """Attach the /giveaway command group to the shared command tree."""
+    @giveaway_group.command(
+        name="list",
+        description="List this server's active giveaways with entry counts",
+    )
+    @app_commands.guild_only()
+    @admin()
+    @app_commands.describe(limit="How many giveaways to show (1–25)")
+    async def giveaway_list(
+        interaction: discord.Interaction,
+        limit: app_commands.Range[int, 1, 25] = 10,
+    ) -> None:
+        """Show open giveaways ending soonest first, with entries and winner counts."""
+        guild = interaction.guild
+        if guild is None:
+            return await interaction.response.send_message(
+                "❌ Giveaways are only available inside a server.",
+                ephemeral=True,
+            )
+        rows = sorted(
+            bot.database.active_giveaways(guild.id, limit=int(limit)),
+            key=lambda row: row["ends_at"] or "",
+        )
+        shown: list[str] = []
+        used = 0
+        for row in rows:
+            entries = bot.database.giveaway_entry_count(row["giveaway_id"])
+            ping = f"pings <@&{row['ping_role_id']}>" if row["ping_role_id"] else "no ping"
+            line = (
+                f"🎁 **{discord.utils.escape_markdown(row['reward_type'])[:80]}** • `{row['giveaway_id']}`\n"
+                f"┗ {entries} {'entry' if entries == 1 else 'entries'} • "
+                f"{int(row['winner_count'])} winner(s) • {timestamp_marker(row['ends_at'])} • "
+                f"{ping} • <#{row['channel_id']}>"
+            )
+            if used + len(line) + 1 > 1000:
+                break
+            shown.append(line)
+            used += len(line) + 1
+        listing = embed(
+            f"📋 Active giveaways — {guild.name}",
+            f"**{len(rows)}** open giveaway(s), ending soonest first.",
+        )
+        listing.add_field(
+            name="Giveaways",
+            value="\n".join(shown) or "Nothing is open right now. Start one with /giveaway config.",
+            inline=False,
+        )
+        if len(shown) < len(rows):
+            listing.set_footer(text=f"…and {len(rows) - len(shown)} more not shown. End the soonest ones first.")
+        await interaction.response.send_message(embed=listing, ephemeral=True)
+
+
+    @giveaway_group.command(
+        name="config",
+        description="Open the private giveaway setup and active list",
+    )
+    @app_commands.guild_only()
+    @admin()
+    async def giveaway_config(interaction: discord.Interaction) -> None:
+        guild = interaction.guild
+        if guild is None:
+            return await interaction.response.send_message("❌ Giveaways are only available inside a server.", ephemeral=True)
+        active = bot.database.active_giveaways(guild.id)
+        dashboard = discord.Embed(
+            title=f"🎁 Giveaway Dashboard — {guild.name}",
+            description="Create a giveaway, optionally ping a role, set the free-text reward and winner count, and draw winners automatically after its timer expires.",
+            colour=discord.Colour.gold(),
+        )
+        dashboard.add_field(name="Active giveaways", value=str(len(active)), inline=True)
+        dashboard.add_field(name="Default duration", value="24 hours", inline=True)
+        view = GiveawayDashboardView(bot.giveaways, guild.id, interaction.user.id)
+        await interaction.response.send_message(embed=dashboard, view=view, ephemeral=True)
+
+
+    @giveaway_group.command(
+        name="end",
+        description="End an active giveaway and draw its winners now",
+    )
+    @app_commands.guild_only()
+    @admin()
+    @app_commands.describe(giveaway_id="Start typing to pick an active giveaway, or paste its ID")
+    async def giveaway_end(interaction: discord.Interaction, giveaway_id: str) -> None:
+        guild = interaction.guild
+        if guild is None:
+            return await interaction.response.send_message("❌ Giveaways can only be managed inside a server.", ephemeral=True)
+        normalized_id = giveaway_id.strip().upper()
+        if not bot.database.giveaway_for_guild(guild.id, normalized_id):
+            return await interaction.response.send_message("⚠️ I could not find that giveaway in this server.", ephemeral=True)
+        entries = bot.database.giveaway_entry_count(normalized_id)
+
+        async def draw_winners(target: discord.Interaction) -> None:
+            await target.response.defer(ephemeral=True)
+            try:
+                state, winners, panel_updated = await bot.giveaways.finish(
+                    guild,
+                    normalized_id,
+                    ended_by=interaction.user.id,
+                    force=True,
+                )
+            except Exception:
+                log.exception("Manual giveaway end failed for %s", normalized_id)
+                return await target.followup.send("❌ I could not end that giveaway. Check its public panel and try again.", ephemeral=True)
+            if state == "already_ended":
+                return await target.followup.send("ℹ️ That giveaway has already ended.", ephemeral=True)
+            if state != "ended":
+                return await target.followup.send("⚠️ That giveaway is no longer active.", ephemeral=True)
+            winner_text = ", ".join(f"<@{user_id}>" for user_id in winners) if winners else "No one entered."
+            message = f"✅ Giveaway `{normalized_id}` ended. Winners: {winner_text}"
+            if not panel_updated:
+                message += " The winner draw was saved, but I could not refresh the public panel."
+            await target.followup.send(message, ephemeral=True, allowed_mentions=discord.AllowedMentions.none())
+
+        view = ConfirmView(draw_winners, author_id=interaction.user.id, confirm_label="Draw winners now")
+        await interaction.response.send_message(
+            embed=embed(
+                "🎉 End this giveaway now?",
+                f"Giveaway `{normalized_id}` currently has **{entries}** entr{'y' if entries == 1 else 'ies'}.\n"
+                "Ending it draws the winners straight away and cannot be undone.",
+            ),
+            view=view,
+            ephemeral=True,
+        )
+        try:
+            view.message = await interaction.original_response()
+        except discord.HTTPException:
+            log.debug("Could not capture the giveaway confirmation prompt for its timeout message")
+
+
+    @giveaway_end.autocomplete("giveaway_id")
+    async def giveaway_end_autocomplete(
+        interaction: discord.Interaction,
+        current: str,
+    ) -> list[app_commands.Choice[str]]:
+        """Offer this server's active giveaways instead of a raw identifier."""
+        if interaction.guild_id is None:
+            return []
+        rows = bot.database.active_giveaways(interaction.guild_id)
+        return [
+            app_commands.Choice(name=label, value=value)
+            for label, value in build_choices(
+                rows,
+                ("reward_type", "giveaway_id"),
+                "giveaway_id",
+                current,
+            )
+        ]

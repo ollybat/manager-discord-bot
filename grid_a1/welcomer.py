@@ -23,7 +23,7 @@ def welcome_embed(bot: discord.Client, guild: discord.Guild, member: discord.Mem
     else:
         result.set_author(name=f"{BRAND_SHORT} • Manager")
     result.add_field(name="🧭 Server navigation", value=f"✅ **Verify / Server Selector**\nHead to <#{config['verify_channel']}>.\n\n🔗 **Link Your Account**\nLink your account in <#{config['link_channel']}>.\n\n🤖 **Bot Commands**\nUse <#{config['bot_commands_channel']}>.\n\n🛒 **Visit Our Store**\nCheck <#{config['shop_channel']}>.", inline=False)
-    result.add_field(name="🎫 Support", value=f"Open a ticket from the **{BRAND_SHORT} Support Center** panel. EU support is available.", inline=False)
+    result.add_field(name="🎫 Support", value=f"Open a ticket from the **{BRAND_SHORT} Support Center** panel. EU and NA support are available.", inline=False)
     result.set_footer(text=f"💜 {BRAND_SHORT} • Manager • Welcome to the community")
     return result
 

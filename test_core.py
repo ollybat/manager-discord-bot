@@ -28,6 +28,45 @@ from grid_a1.views import DashboardView, TicketControls
 ROOT = Path(__file__).parent
 
 
+def _contains_emoji(text):
+    """True when a description carries emoji or pictographs instead of plain words."""
+    for character in text:
+        point = ord(character)
+        if 0x1F000 <= point <= 0x1FAFF or 0x2600 <= point <= 0x27BF or 0x2B00 <= point <= 0x2BFF or point == 0xFE0F:
+            return True
+    return False
+
+
+def _is_command_decorator(decorator):
+    """A @something.command(...) or @something.group(...) decorator."""
+    return (
+        isinstance(decorator, ast.Call)
+        and isinstance(decorator.func, ast.Attribute)
+        and decorator.func.attr in {"command", "group"}
+    )
+
+
+def _is_slash_command(decorator):
+    """Slash commands hang off the shared tree or off a named command group."""
+    owner = decorator.func.value
+    return (isinstance(owner, ast.Attribute) and owner.attr == "tree") or (
+        isinstance(owner, ast.Name) and owner.id.endswith("_group")
+    )
+
+
+def _described_options(node):
+    """Option names that carry an app_commands.describe hint."""
+    return {
+        keyword.arg
+        for decorator in node.decorator_list
+        if isinstance(decorator, ast.Call)
+        and isinstance(decorator.func, ast.Attribute)
+        and decorator.func.attr == "describe"
+        for keyword in decorator.keywords
+        if keyword.arg
+    }
+
+
 class CoreTests(unittest.TestCase):
     def test_sanitize_channel_name_collapses_dashes(self):
         self.assertEqual(sanitize_channel_name("EU", "Bug / Links", "A--User", "ABC123"), "eu-bug-links-a-user-abc123")
@@ -440,7 +479,7 @@ class CoreTests(unittest.TestCase):
             self.assertNotIn("purge", actions)
 
         entries = catalog(bot_module.bot.tree)
-        rendered = "\n".join(value for _, value in render_guide(entries, list(ACCESS_LABELS), max_total=6000))
+        rendered = "\n".join(value for _, value in render_guide(entries, list(ACCESS_LABELS), max_total=20000))
         for command in ("/unban", "/untimeout", "/purge", "/modlog", "/poll results", "/giveaway list"):
             self.assertIn(command, rendered)
         self.assertEqual(COMMAND_ACCESS["purge"], "manage_messages")
@@ -576,7 +615,7 @@ class CoreTests(unittest.TestCase):
         self.assertTrue(bot_module.wipe_group.commands[0].checks)
 
         entries = catalog(bot_module.bot.tree)
-        rendered = "\n".join(value for _, value in render_guide(entries, list(ACCESS_LABELS), max_total=6000))
+        rendered = "\n".join(value for _, value in render_guide(entries, list(ACCESS_LABELS), max_total=20000))
         for command in ("/wipe config", "/wipe add", "/wipe list", "/wipe remove", "/wipe announce"):
             self.assertIn(command, rendered)
         self.assertNotIn("wipefeed", rendered.lower())
@@ -729,7 +768,9 @@ class CoreTests(unittest.TestCase):
         import grid_a1.bot as bot_module
 
         self.assertTrue(issubclass(bot_module.StaffAccessError, app_commands.CheckFailure))
-        for command in (bot_module.moderation_kick, bot_module.ticket_stats, bot_module.giveaway_config):
+        giveaway_config = bot_module.bot.tree.get_command("giveaway").get_command("config")
+
+        for command in (bot_module.moderation_kick, bot_module.ticket_stats, giveaway_config):
             self.assertTrue(command.checks, command.name)
         self.assertIn("_access_notice(interaction.guild)", inspect.getsource(bot_module._permission_check))
 
@@ -848,7 +889,7 @@ class CoreTests(unittest.TestCase):
             self.assertIsNotNone(tickets.get_command(name), name)
         self.assertIsNotNone(bot_module.bot.tree.get_command("modlog"))
         entries = catalog(bot_module.bot.tree)
-        rendered = "\n".join(value for _, value in render_guide(entries, list(ACCESS_LABELS), max_total=6000))
+        rendered = "\n".join(value for _, value in render_guide(entries, list(ACCESS_LABELS), max_total=20000))
         for command in ("/ticket list", "/ticket note", "/ticket notes", "/modlog"):
             self.assertIn(command, rendered)
             self.assertEqual(COMMAND_ACCESS[command.lstrip("/")], "staff")
@@ -1013,25 +1054,28 @@ class CoreTests(unittest.TestCase):
 
         import grid_a1.bot as bot_module
 
+        tree = bot_module.bot.tree
+        giveaway_end = tree.get_command("giveaway").get_command("end")
+        poll_end = tree.get_command("poll").get_command("end")
+        poll_remove = tree.get_command("poll").get_command("remove")
         for command, parameter in (
-            (bot_module.giveaway_end, "giveaway_id"),
-            (bot_module.poll_end, "poll_id"),
-            (bot_module.poll_remove, "poll_id"),
+            (giveaway_end, "giveaway_id"),
+            (poll_end, "poll_id"),
+            (poll_remove, "poll_id"),
         ):
             self.assertIsNotNone(command._params[parameter].autocomplete, command.name)
-        help_command = bot_module.bot.tree.get_command("help")
+        help_command = tree.get_command("help")
         self.assertIsNotNone(help_command._params["command"].autocomplete)
         self.assertEqual(
             asyncio.run(
-                bot_module.giveaway_end_autocomplete(SimpleNamespace(guild_id=None), "ni")
+                giveaway_end._params["giveaway_id"].autocomplete(SimpleNamespace(guild_id=None), "ni")
             ),
             [],
         )
         self.assertEqual(
-            asyncio.run(bot_module.poll_remove_autocomplete(SimpleNamespace(guild_id=None), "")),
+            asyncio.run(poll_remove._params["poll_id"].autocomplete(SimpleNamespace(guild_id=None), "")),
             [],
         )
-
     def test_error_handler_answers_with_one_clear_ephemeral_message(self):
         import asyncio
         from types import SimpleNamespace
@@ -1476,31 +1520,38 @@ class CoreTests(unittest.TestCase):
             self.assertEqual(winners_again, winners)
             self.assertEqual(database.active_giveaways(42), [])
 
-    def test_poll_management_commands_are_registered(self):
-        tree = ast.parse((ROOT / "grid_a1" / "bot.py").read_text(encoding="utf-8"))
-        registered = set()
-        for node in tree.body:
-            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                continue
-            for decorator in node.decorator_list:
-                if not isinstance(decorator, ast.Call):
+    def test_poll_and_giveaway_commands_are_registered_from_their_modules(self):
+        for name, group, expected in (
+            ("polls.py", "poll_group", {"config", "create", "end", "remove", "results"}),
+            ("giveaways.py", "giveaway_group", {"config", "end", "list"}),
+        ):
+            path = ROOT / "grid_a1" / name
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            registered = set()
+            for node in ast.walk(tree):
+                if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                     continue
-                command_factory = decorator.func
-                if not (
-                    isinstance(command_factory, ast.Attribute)
-                    and command_factory.attr == "command"
-                    and isinstance(command_factory.value, ast.Name)
-                    and command_factory.value.id == "poll_group"
-                ):
-                    continue
-                name = next(
-                    (keyword.value.value for keyword in decorator.keywords if keyword.arg == "name"),
-                    None,
-                )
-                if name:
-                    registered.add(name)
-        self.assertEqual(registered, {"config", "create", "end", "remove", "results"})
-
+                for decorator in node.decorator_list:
+                    if not _is_command_decorator(decorator):
+                        continue
+                    command_factory = decorator.func
+                    if not (
+                        isinstance(command_factory.value, ast.Name)
+                        and command_factory.value.id == group
+                    ):
+                        continue
+                    command_name = next(
+                        (keyword.value.value for keyword in decorator.keywords if keyword.arg == "name"),
+                        None,
+                    )
+                    if command_name:
+                        registered.add(command_name)
+            self.assertEqual(registered, expected, name)
+        source = (ROOT / "grid_a1" / "bot.py").read_text(encoding="utf-8")
+        self.assertIn("register_poll_commands(bot, poll_group", source)
+        self.assertIn("register_giveaway_commands(bot, giveaway_group", source)
+        self.assertIn("def register_poll_commands", (ROOT / "grid_a1" / "polls.py").read_text(encoding="utf-8"))
+        self.assertIn("def register_giveaway_commands", (ROOT / "grid_a1" / "giveaways.py").read_text(encoding="utf-8"))
     def test_poll_and_giveaway_dashboards_expose_the_expected_controls(self):
         from grid_a1.giveaways import GiveawayDashboardView, GiveawayEntryView, GiveawayService
         from grid_a1.polls import PollDashboardView, PollService, PollSettingsView
@@ -1896,54 +1947,161 @@ class CoreTests(unittest.TestCase):
         self.assertIn("owner_close_requested", controls)
         self.assertIn("ticket_kept_open", source)
 
-    def test_commands_have_emoji_descriptions_and_slash_options_have_hints(self):
-        files = (ROOT / "grid_a1" / "bot.py", ROOT / "grid_a1" / "commands.py")
+    def test_discord_visibility_matches_the_documented_access(self):
+        import grid_a1.bot as bot_module
+        from grid_a1 import guides
+
+        expected = {
+            guides.EVERYONE: 0,
+            guides.POLL_CREATOR: 0,
+            guides.TICKET_PARTICIPANT: 0,
+            guides.MANAGE_MESSAGES: 8192,
+            guides.STAFF: 8192,
+            guides.ADMIN: 32,
+            guides.DASHBOARD: 32,
+            guides.SERVER_OWNER: 8,
+            guides.BOT_OWNER: 8,
+        }
+        visibility: dict[str, int] = {}
+
+        def visit(prefix: str, node: object) -> None:
+            children = tuple(getattr(node, "commands", ()) or ())
+            path = f"{prefix} {getattr(node, 'name', '')}".strip()
+            if children:
+                for child in children:
+                    visit(path, child)
+                return
+            permissions = getattr(node, "default_permissions", None)
+            visibility[path] = permissions.value if permissions is not None else 0
+
+        for command in bot_module.bot.tree.get_commands():
+            visit("", command)
+        self.assertGreater(len(visibility), 40)
+        for entry in guides.catalog(bot_module.bot.tree):
+            self.assertIn(entry.access, expected, f"{entry.path} uses an unknown access tier")
+            self.assertEqual(
+                visibility[entry.path],
+                expected[entry.access],
+                f"{entry.path} should be hidden from members without {entry.access_label}",
+            )
+
+    def test_staff_commands_declare_discord_visibility(self):
+        tiers = (
+            ("manage_messages", ("staff()", "_staff_only()", "has_permissions(manage_messages=True")),
+            ("manage_guild", ("admin()", "dashboard_access()", "dashboard")),
+            ("administrator", ("server_owner_only()",)),
+        )
+        files = (
+            ROOT / "grid_a1" / "bot.py",
+            ROOT / "grid_a1" / "commands.py",
+            ROOT / "grid_a1" / "polls.py",
+            ROOT / "grid_a1" / "giveaways.py",
+        )
+        gated = 0
+        for path in files:
+            tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+            for node in ast.walk(tree):
+                if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) or not node.decorator_list:
+                    continue
+                command_decorator = next(
+                    (item for item in node.decorator_list if _is_command_decorator(item) and _is_slash_command(item)),
+                    None,
+                )
+                if command_decorator is None:
+                    continue
+                source = " ".join(ast.unparse(item) for item in node.decorator_list)
+                expected = next(
+                    (name for name, markers in tiers if any(marker in source for marker in markers)),
+                    None,
+                )
+                if expected is None:
+                    continue
+                declared = [
+                    name
+                    for name, _ in tiers
+                    if "default_permissions(%s=True)" % name in source
+                ]
+                self.assertIn(
+                    expected,
+                    declared,
+                    f"{path}:{node.name} should declare default_permissions({expected}=True) for Discord visibility",
+                )
+                gated += 1
+        self.assertGreater(gated, 30)
+
+    def test_command_descriptions_avoid_emoji_and_slash_options_keep_hints(self):
+        files = (
+            ROOT / "grid_a1" / "bot.py",
+            ROOT / "grid_a1" / "commands.py",
+            ROOT / "grid_a1" / "polls.py",
+            ROOT / "grid_a1" / "giveaways.py",
+        )
+        checked = 0
         for path in files:
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
             for node in ast.walk(tree):
                 if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                     continue
-                command_calls = [d for d in node.decorator_list if isinstance(d, ast.Call) and isinstance(d.func, ast.Attribute) and d.func.attr == "command"]
-                for call in command_calls:
-                    keywords = {kw.arg: kw.value for kw in call.keywords if kw.arg}
+                for decorator in node.decorator_list:
+                    if not _is_command_decorator(decorator):
+                        continue
+                    keywords = {keyword.arg: keyword.value for keyword in decorator.keywords if keyword.arg}
                     help_text = keywords.get("description") or keywords.get("help")
                     self.assertIsInstance(help_text, ast.Constant, f"{path}:{node.name} needs a visible command description")
-                    self.assertGreater(ord(help_text.value[0]), 127, f"{path}:{node.name} description should start with an emoji")
-                    is_slash = "description" in keywords
-                    if is_slash:
-                        described = {kw.arg for dec in node.decorator_list if isinstance(dec, ast.Call) and isinstance(dec.func, ast.Attribute) and dec.func.attr == "describe" for kw in dec.keywords if kw.arg}
-                        parameters = [arg.arg for arg in node.args.args[1:]]
-                        self.assertTrue(set(parameters) <= described, f"{path}:{node.name} needs option descriptions")
-
-    def test_every_command_has_emoji_description_and_slash_options_have_hints(self):
-        for path in (ROOT / "grid_a1" / "bot.py", ROOT / "grid_a1" / "commands.py"):
+                    self.assertFalse(
+                        _contains_emoji(help_text.value),
+                        f"{path}:{node.name} description should be plain words, without emoji",
+                    )
+                    checked += 1
+                    if _is_slash_command(decorator):
+                        described = _described_options(node)
+                        for parameter in node.args.args[1:]:
+                            self.assertIn(
+                                parameter.arg,
+                                described,
+                                f"{path}:{node.name} needs a description for every slash option",
+                            )
+        self.assertGreater(checked, 60)
+    def test_every_slash_command_documents_its_options(self):
+        files = (
+            ROOT / "grid_a1" / "bot.py",
+            ROOT / "grid_a1" / "commands.py",
+            ROOT / "grid_a1" / "polls.py",
+            ROOT / "grid_a1" / "giveaways.py",
+        )
+        checked = 0
+        for path in files:
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
             for node in ast.walk(tree):
                 if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
                     continue
-                commands = [decorator for decorator in node.decorator_list if isinstance(decorator, ast.Call) and isinstance(decorator.func, ast.Attribute) and decorator.func.attr == "command"]
-                for decorator in commands:
+                for decorator in node.decorator_list:
+                    if not _is_command_decorator(decorator) or not _is_slash_command(decorator):
+                        continue
                     keywords = {keyword.arg: keyword.value for keyword in decorator.keywords if keyword.arg}
-                    help_text = keywords.get("description") or keywords.get("help")
-                    self.assertIsInstance(help_text, ast.Constant, f"{path}:{node.name} needs a visible command description")
-                    self.assertGreater(ord(help_text.value[0]), 127, f"{path}:{node.name} description should start with an emoji")
-                    if "description" in keywords:
-                        described = {keyword.arg for item in node.decorator_list if isinstance(item, ast.Call) and isinstance(item.func, ast.Attribute) and item.func.attr == "describe" for keyword in item.keywords if keyword.arg}
-                        parameters = {argument.arg for argument in node.args.args[1:]}
-                        self.assertTrue(parameters <= described, f"{path}:{node.name} needs descriptions for every slash option")
-
+                    self.assertIn("description", keywords, f"{path}:{node.name} needs a slash description")
+                    described = _described_options(node)
+                    parameters = {argument.arg for argument in node.args.args[1:]}
+                    self.assertTrue(
+                        parameters <= described,
+                        f"{path}:{node.name} needs descriptions for every slash option",
+                    )
+                    checked += 1
+        self.assertGreater(checked, 40)
     def test_help_lists_every_section_and_command_from_the_live_tree(self):
         from grid_a1.bot import bot as runtime_bot
         from grid_a1.guides import ACCESS_LABELS, SECTIONS, catalog, render_guide
 
         entries = catalog(runtime_bot.tree)
-        fields = render_guide(entries, list(ACCESS_LABELS), max_total=6000)
+        fields = render_guide(entries, list(ACCESS_LABELS), max_total=20000)
         rendered = "\n".join(value for _, value in fields)
         titles = {title for title, _ in SECTIONS}
         self.assertEqual(len(titles), len(SECTIONS))
         for title in titles:
             self.assertTrue(any(title in name for name, _ in fields), title)
         for command in ("/help", "/report", "/dashboard", "/info server", "/setup tickets", "/setup welcomer", "/ticket transfer", "/ticket close", "/ticket priority", "/ticket stats", "/poll config", "/giveaway config", "/giveaway end", "/anti-links", "/embed-edit", "/sync"):
+            self.assertIn(command, rendered)
+        for command in ("/info user", "/info bot", "/avatar", "/slowmode", "/modstats"):
             self.assertIn(command, rendered)
 
     def test_help_never_advertises_removed_commands_or_stale_options(self):

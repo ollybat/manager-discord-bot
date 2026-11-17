@@ -322,6 +322,17 @@ class Database:
                 (guild_id, *MODERATION_ACTIONS, f"%member={int(member_id)}%", max(1, min(int(limit), 25))),
             ).fetchall()
 
+    def moderation_activity(self, guild_id: int, since: str, limit: int = 500) -> list[sqlite3.Row]:
+        """Return every recorded moderation action for one server since an ISO-8601 timestamp."""
+        placeholders = ", ".join("?" for _ in MODERATION_ACTIONS)
+        with self.connect() as db:
+            return db.execute(
+                "SELECT actor_id, action, metadata, created_at FROM audit_log "
+                f"WHERE guild_id=? AND action IN ({placeholders}) AND created_at >= ? "
+                "ORDER BY id DESC LIMIT ?",
+                (guild_id, *MODERATION_ACTIONS, since, max(1, min(int(limit), 1000))),
+            ).fetchall()
+
     def audit(
         self,
         guild_id: int,

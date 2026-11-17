@@ -10,9 +10,12 @@ import uuid
 from datetime import datetime, timedelta, timezone
 
 import discord
+from discord import app_commands
 
 from .database import Database
-from .embeds import NEON_PURPLE
+from .embeds import NEON_PURPLE, embed
+from .guides import build_choices
+from .views import ConfirmView
 from .utils import safe_json_list, utcnow
 
 log = logging.getLogger(__name__)
@@ -710,7 +713,7 @@ class PollDashboardView(discord.ui.View):
             return False
         return True
 
-    @discord.ui.button(label="Create Poll", style=discord.ButtonStyle.success, emoji="✨", row=0)
+    @discord.ui.button(label="Create Poll", style=discord.ButtonStyle.success, emoji="", row=0)
     async def create_poll(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         await interaction.response.send_modal(
             PollMetadataModal(
@@ -722,7 +725,7 @@ class PollDashboardView(discord.ui.View):
             )
         )
 
-    @discord.ui.button(label="View Active", style=discord.ButtonStyle.primary, emoji="👀", row=0)
+    @discord.ui.button(label="View Active", style=discord.ButtonStyle.primary, emoji="", row=0)
     async def view_active(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         rows = self.database.active_polls(self.guild_id)
         if not rows:
@@ -753,7 +756,7 @@ class PollDashboardView(discord.ui.View):
             )
         return await interaction.response.edit_message(embed=result, view=self)
 
-    @discord.ui.button(label="Poll Settings", style=discord.ButtonStyle.secondary, emoji="⚙️", row=0)
+    @discord.ui.button(label="Poll Settings", style=discord.ButtonStyle.secondary, emoji="", row=0)
     async def poll_settings(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
         await interaction.response.edit_message(
             embed=poll_settings_embed(self.database, interaction.guild),
@@ -765,3 +768,441 @@ class PollDashboardView(discord.ui.View):
                 self.fallback_channel_id,
             ),
         )
+
+
+def register_poll_commands(bot, poll_group, *, admin, privileged) -> None:
+    """Attach the /poll command group to the shared command tree."""
+    def _may_manage_poll(interaction: discord.Interaction, poll) -> bool:
+        """Allow a poll creator or server-level manager to control that poll."""
+        return bool(
+            interaction.guild
+            and (
+                interaction.user.id == poll["creator_id"]
+                or privileged(interaction)
+            )
+        )
+
+
+    @poll_group.command(
+        name="config",
+        description="Open the private poll configuration dashboard",
+    )
+    @app_commands.guild_only()
+    @admin()
+    async def poll_config(interaction: discord.Interaction) -> None:
+        guild = interaction.guild
+        if guild is None:
+            return await interaction.response.send_message("❌ Polls are only available inside a server.", ephemeral=True)
+        dashboard = poll_dashboard_embed(bot.database, guild)
+        fallback_channel_id = interaction.channel.id if isinstance(interaction.channel, discord.TextChannel) else 0
+        view = PollDashboardView(
+            bot.database,
+            bot.polls,
+            guild.id,
+            interaction.user.id,
+            fallback_channel_id,
+        )
+        await interaction.response.send_message(embed=dashboard, view=view, ephemeral=True)
+
+
+    @poll_group.command(
+        name="create",
+        description="Create a poll members can vote on and change their vote",
+    )
+    @app_commands.guild_only()
+    @admin()
+    @app_commands.describe(
+        question="The question shown on the poll panel (up to 256 characters)",
+        options="Two to ten choices separated by | (example: Island | Ragnarok)",
+        duration_hours="Optional poll duration; defaults to /poll config",
+        description="Optional context shown under the poll title",
+    )
+    async def poll_create(
+        interaction: discord.Interaction,
+        question: str,
+        options: str,
+        duration_hours: app_commands.Range[int, 1, MAX_POLL_DURATION_HOURS] | None = None,
+        description: str | None = None,
+    ) -> None:
+        """Validate and publish a persistent, single-choice poll."""
+        guild = interaction.guild
+        if guild is None:
+            await interaction.response.send_message(
+                "❌ Polls can only be created inside a server.",
+                ephemeral=True,
+            )
+            return
+
+        cleaned_question = question.strip()
+        if not cleaned_question:
+            await interaction.response.send_message(
+                "❌ Poll question cannot be empty.",
+                ephemeral=True,
+            )
+            return
+        if len(cleaned_question) > MAX_POLL_QUESTION_LENGTH:
+            await interaction.response.send_message(
+                f"❌ Poll questions must be {MAX_POLL_QUESTION_LENGTH} characters or fewer.",
+                ephemeral=True,
+            )
+            return
+
+        try:
+            choices = parse_poll_options(options)
+        except ValueError as error:
+            await interaction.response.send_message(
+                f"❌ {error}",
+                ephemeral=True,
+            )
+            return
+
+        settings_row = bot.database.poll_settings(guild.id)
+        configured_channel_id = settings_row["channel_id"] if settings_row else None
+        if configured_channel_id:
+            target_channel = guild.get_channel(configured_channel_id)
+            if target_channel is None:
+                try:
+                    target_channel = await guild.fetch_channel(configured_channel_id)
+                except discord.NotFound:
+                    target_channel = None
+                except discord.HTTPException:
+                    log.exception("Could not fetch configured poll channel %s", configured_channel_id)
+                    await interaction.response.send_message(
+                        "⚠️ I could not check the configured poll channel. Try again shortly or choose another channel with `/poll config`.",
+                        ephemeral=True,
+                    )
+                    return
+            if not isinstance(target_channel, discord.TextChannel):
+                await interaction.response.send_message(
+                    "⚠️ The configured poll channel is missing or is not a text channel. Run `/poll config` to choose a new one.",
+                    ephemeral=True,
+                )
+                return
+        elif isinstance(interaction.channel, discord.TextChannel):
+            target_channel = interaction.channel
+        else:
+            await interaction.response.send_message(
+                "⚠️ Choose a default poll channel with `/poll config` before creating a poll here.",
+                ephemeral=True,
+            )
+            return
+
+        if guild.me:
+            permissions = target_channel.permissions_for(guild.me)
+            missing = [
+                label
+                for name, label in (
+                    ("view_channel", "View Channel"),
+                    ("send_messages", "Send Messages"),
+                    ("embed_links", "Embed Links"),
+                )
+                if not getattr(permissions, name)
+            ]
+            if missing:
+                await interaction.response.send_message(
+                    f"⚠️ The bot is missing poll-channel permissions: {', '.join(missing)}.",
+                    ephemeral=True,
+                )
+                return
+
+        cleaned_description = (description or "").strip()
+        if len(cleaned_description) > 1000:
+            await interaction.response.send_message(
+                "❌ Poll descriptions must be 1,000 characters or fewer.",
+                ephemeral=True,
+            )
+            return
+
+        configured_duration = (
+            int(settings_row["default_duration_hours"])
+            if settings_row
+            else DEFAULT_POLL_DURATION_HOURS
+        )
+        poll_duration = int(duration_hours) if duration_hours is not None else configured_duration
+        await interaction.response.defer(ephemeral=True)
+        try:
+            poll_id, message = await bot.polls.create(
+                guild,
+                target_channel,
+                interaction.user.id,
+                cleaned_question,
+                choices,
+                poll_duration,
+                description=cleaned_description,
+            )
+        except discord.Forbidden:
+            log.exception("Poll creation was denied in channel %s", target_channel.id)
+            await interaction.followup.send(
+                "❌ I could not post the poll. Check the bot's channel permissions and try again.",
+                ephemeral=True,
+            )
+            return
+        except discord.HTTPException as error:
+            log.exception("Discord rejected poll creation in guild %s: %s", guild.id, error)
+            await interaction.followup.send(
+                "⚠️ Discord could not publish the poll right now. Please try again shortly.",
+                ephemeral=True,
+            )
+            return
+        except Exception:
+            log.exception("Poll creation failed for guild %s", guild.id)
+            await interaction.followup.send(
+                "❌ I could not finish creating the poll. Check the poll channel before retrying; if the post is missing, contact an admin.",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.followup.send(
+            embed=embed(
+                "✅ Poll created",
+                f"📊 **Poll ID:** `{poll_id}`\n"
+                f"📣 **Posted in:** {target_channel.mention}\n"
+                f"🔗 [Jump to poll]({message.jump_url})\n"
+                f"⏳ **Duration:** {poll_duration} hours\n\n"
+                "Members can change their vote until the poll closes.",
+                discord.Colour.green(),
+            ),
+            ephemeral=True,
+        )
+
+
+    @poll_group.command(
+        name="results",
+        description="Show a poll's current results without ending it",
+    )
+    @app_commands.guild_only()
+    @app_commands.describe(poll_id="Start typing to pick a poll, or paste its ID")
+    async def poll_results(
+        interaction: discord.Interaction,
+        poll_id: str,
+    ) -> None:
+        """Show live standings to the creator or a server manager, without ending the poll."""
+        guild = interaction.guild
+        if guild is None:
+            await interaction.response.send_message(
+                "❌ Polls can only be managed inside a server.",
+                ephemeral=True,
+            )
+            return
+
+        poll = bot.database.poll_for_guild(guild.id, poll_id.strip().upper())
+        if not poll:
+            await interaction.response.send_message(
+                "⚠️ I could not find that poll in this server. Check the poll ID and try again.",
+                ephemeral=True,
+            )
+            return
+        if not _may_manage_poll(interaction, poll):
+            await interaction.response.send_message(
+                "🔒 Only the poll creator or a server manager can see results before the poll ends.",
+                ephemeral=True,
+            )
+            return
+
+        standings = poll_embed(
+            poll,
+            bot.database.poll_options(poll["poll_id"]),
+            bot.database.poll_results(poll["poll_id"]),
+        )
+        if poll["status"] == "open":
+            lead = "📊 Live standings — the poll is still open, so these numbers can still change."
+        else:
+            lead = "🔒 Final results — this poll has ended."
+        standings.description = f"{lead}\n\n{standings.description}"
+        await interaction.response.send_message(embed=standings, ephemeral=True)
+
+
+    @poll_group.command(
+        name="end",
+        description="End a poll and publish its final results",
+    )
+    @app_commands.guild_only()
+    @app_commands.describe(poll_id="Start typing to pick an open poll, or paste its ID")
+    async def poll_end(interaction: discord.Interaction, poll_id: str) -> None:
+        """End a poll if the caller created it or manages the server."""
+        guild = interaction.guild
+        if guild is None:
+            await interaction.response.send_message(
+                "❌ Polls can only be managed inside a server.",
+                ephemeral=True,
+            )
+            return
+
+        poll = bot.database.poll_for_guild(guild.id, poll_id.strip().upper())
+        if not poll:
+            await interaction.response.send_message(
+                "⚠️ I could not find that poll in this server. Check the poll ID and try again.",
+                ephemeral=True,
+            )
+            return
+        if not _may_manage_poll(interaction, poll):
+            await interaction.response.send_message(
+                "🔒 Only the poll creator or a server manager can end this poll.",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True)
+        try:
+            ended_poll, changed, message_updated = await bot.polls.finish(
+                guild,
+                poll["poll_id"],
+                interaction.user.id,
+            )
+        except Exception:
+            log.exception("Poll end failed for %s", poll["poll_id"])
+            await interaction.followup.send(
+                "❌ I could not end this poll right now. Check its status before trying again.",
+                ephemeral=True,
+            )
+            return
+
+        if not ended_poll:
+            await interaction.followup.send(
+                "⚠️ The poll was removed before it could be ended.",
+                ephemeral=True,
+            )
+            return
+
+        result_embed = poll_embed(
+            ended_poll,
+            bot.database.poll_options(ended_poll["poll_id"]),
+            bot.database.poll_results(ended_poll["poll_id"]),
+        )
+        summary = "✅ Poll ended." if changed else "ℹ️ Poll was already ended."
+        if not message_updated:
+            summary += " The status was saved, but its public panel could not be refreshed."
+        result_embed.description = f"{summary}\n\n{result_embed.description}"
+        await interaction.followup.send(embed=result_embed, ephemeral=True)
+
+
+    @poll_end.autocomplete("poll_id")
+    async def poll_end_autocomplete(
+        interaction: discord.Interaction,
+        current: str,
+    ) -> list[app_commands.Choice[str]]:
+        """Offer this server's open polls with their questions."""
+        if interaction.guild_id is None:
+            return []
+        rows = bot.database.active_polls(interaction.guild_id)
+        return [
+            app_commands.Choice(name=label, value=value)
+            for label, value in build_choices(
+                rows,
+                ("question", "poll_id"),
+                "poll_id",
+                current,
+            )
+        ]
+
+
+    @poll_group.command(
+        name="remove",
+        description="Remove a poll message and its stored votes",
+    )
+    @app_commands.guild_only()
+    @app_commands.describe(poll_id="Start typing to pick any of this server's polls, or paste its ID")
+    async def poll_remove(interaction: discord.Interaction, poll_id: str) -> None:
+        """Delete the poll message and its stored votes for its creator or a manager."""
+        guild = interaction.guild
+        if guild is None:
+            await interaction.response.send_message(
+                "❌ Polls can only be managed inside a server.",
+                ephemeral=True,
+            )
+            return
+
+        normalized_poll_id = poll_id.strip().upper()
+        poll = bot.database.poll_for_guild(guild.id, normalized_poll_id)
+        if not poll:
+            await interaction.response.send_message(
+                "⚠️ I could not find that poll in this server. Check the poll ID and try again.",
+                ephemeral=True,
+            )
+            return
+        if not _may_manage_poll(interaction, poll):
+            await interaction.response.send_message(
+                "🔒 Only the poll creator or a server manager can remove this poll.",
+                ephemeral=True,
+            )
+            return
+
+        async def remove_poll(target: discord.Interaction) -> None:
+            await target.response.defer(ephemeral=True)
+            try:
+                await bot.polls.remove_public_message(guild, poll)
+            except discord.Forbidden:
+                await target.followup.send(
+                    "❌ I could not delete the poll message. The poll and votes were kept; check Manage Messages.",
+                    ephemeral=True,
+                )
+                return
+            except discord.HTTPException as error:
+                log.warning("Could not remove poll message %s: %s", normalized_poll_id, error)
+                await target.followup.send(
+                    "⚠️ Discord could not remove the poll message right now. The poll data was kept.",
+                    ephemeral=True,
+                )
+                return
+
+            try:
+                removed = bot.database.remove_poll(
+                    normalized_poll_id,
+                    removed_by=interaction.user.id,
+                )
+            except Exception:
+                log.exception("Public poll %s was removed but database cleanup failed", normalized_poll_id)
+                await target.followup.send(
+                    "⚠️ The public message was removed, but I could not remove its stored record. Contact an admin before recreating it.",
+                    ephemeral=True,
+                )
+                return
+            if not removed:
+                await target.followup.send(
+                    "⚠️ The poll message was removed, but its record was already gone.",
+                    ephemeral=True,
+                )
+                return
+
+            await target.followup.send(
+                f"🗑️ Poll `{normalized_poll_id}` and its stored votes were removed.",
+                ephemeral=True,
+            )
+
+        view = ConfirmView(
+            remove_poll,
+            author_id=interaction.user.id,
+            confirm_label="Delete this poll",
+        )
+        await interaction.response.send_message(
+            embed=embed(
+                "🗑️ Delete this poll?",
+                f"Poll `{normalized_poll_id}` and the votes stored for it will be removed for everyone. This cannot be undone.",
+            ),
+            view=view,
+            ephemeral=True,
+        )
+        try:
+            view.message = await interaction.original_response()
+        except discord.HTTPException:
+            log.debug("Could not capture the poll confirmation prompt for its timeout message")
+
+
+    @poll_remove.autocomplete("poll_id")
+    async def poll_remove_autocomplete(
+        interaction: discord.Interaction,
+        current: str,
+    ) -> list[app_commands.Choice[str]]:
+        """Offer every poll in this server, with its status, for removal."""
+        if interaction.guild_id is None:
+            return []
+        rows = bot.database.guild_polls(interaction.guild_id)
+        return [
+            app_commands.Choice(name=label, value=value)
+            for label, value in build_choices(
+                rows,
+                ("question", "poll_id", "status"),
+                "poll_id",
+                current,
+            )
+        ]

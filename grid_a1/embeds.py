@@ -6,7 +6,7 @@ from .brand import BRAND_NAME, BRAND_SHORT, RULES_EMBLEM_NAMES
 from .database import Database
 from .stats import MONTH_WINDOW_DAYS, RECENT_WINDOW_DAYS, TicketStats, format_duration
 from .utils import PRIORITY_LABELS
-from .utils import server_emoji, utcnow
+from .utils import region_display, server_emoji, utcnow
 
 NEON_PURPLE = discord.Colour.from_rgb(177, 77, 255)
 PANEL_COLOUR = discord.Colour.from_rgb(94, 186, 255)
@@ -118,7 +118,7 @@ def ticket_embed(
     if requester:
         result.add_field(name="👤 Requested by", value=requester[:1024], inline=True)
     result.add_field(name="🗂️ Category", value=issue.title()[:1024], inline=True)
-    result.add_field(name="🌍 Region", value=f"🇪🇺 {region}"[:1024], inline=True)
+    result.add_field(name="🌍 Region", value=region_display(region)[:1024], inline=True)
     if ticket_id:
         result.add_field(name="🆔 Reference", value=f"{ticket_id}"[:1024], inline=True)
     fields = ticket_detail_fields(details)

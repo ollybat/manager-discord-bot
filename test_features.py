@@ -7,6 +7,7 @@ small enough to read and review on its own.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import tempfile
 import unittest
 from pathlib import Path
@@ -34,6 +35,14 @@ class SpinBackFeatureTests(unittest.TestCase):
         self.assertLessEqual(len(urgent), 95)
         self.assertTrue(ticket_channel_name("general", "player", "ID1").startswith(f"{PRIORITY_MARKERS['normal']}-"))
         self.assertTrue(ticket_channel_name("general", "player", "ID1", "not-a-priority").startswith("🔵-"))
+        self.assertEqual(
+            ticket_channel_name("general", "player", "ID1", region="NA"),
+            f"{PRIORITY_MARKERS['normal']}-na-general-player-id1",
+        )
+        self.assertEqual(
+            ticket_channel_name("general", "player", "ID1", "urgent", region="EU"),
+            f"{PRIORITY_MARKERS['urgent']}-eu-general-player-id1",
+        )
         self.assertEqual(sorted(PRIORITY_MARKERS), ["high", "low", "normal", "urgent"])
 
         self.assertEqual(suggestion_custom_id("up", "AB12"), "grid-a1:suggestion:AB12:up")
@@ -57,8 +66,11 @@ class SpinBackFeatureTests(unittest.TestCase):
                 calls.append((issue, label, region, details))
 
         modal = ReimburseModal(FakeService())
-        self.assertEqual([item.label for item in modal.children], ["Gamertag", "Clan Name", "Grid Location", "What Happened"])
-        self.assertEqual([item.required for item in modal.children], [True, False, True, True])
+        self.assertEqual(
+            [item.label for item in modal.children],
+            ["Region", "Gamertag", "Clan Name", "Grid Location", "What Happened"],
+        )
+        self.assertEqual([item.required for item in modal.children], [True, True, False, True, True])
         self.assertEqual(modal.children[-1].style, discord.TextStyle.paragraph)
         self.assertLessEqual(modal.children[-1].max_length, 1024)
 
@@ -72,14 +84,14 @@ class SpinBackFeatureTests(unittest.TestCase):
                 self.user = SimpleNamespace(id=77, name="olly")
 
         async def submit():
-            for item, value in zip(modal.children, ["Olly", "", "Grid A1", "Lost my base"]):
+            for item, value in zip(modal.children, ["NA", "Olly", "", "Grid A1", "Lost my base"]):
                 item._value = value
             await modal.on_submit(FakeInteraction())
 
         asyncio.run(submit())
         self.assertEqual(len(calls), 1)
         issue, label, region, submitted = calls[0]
-        self.assertEqual((issue, label, region), ("reimburse", "Reimbursement", "EU"))
+        self.assertEqual((issue, label, region), ("reimburse", "Reimbursement", "NA"))
         self.assertIn("Gamertag: Olly", submitted)
         self.assertIn("Clan Name: Not provided", submitted)
 
@@ -89,7 +101,7 @@ class SpinBackFeatureTests(unittest.TestCase):
 
         command = bot_module.bot.tree.get_command("reimburse")
         self.assertIsNotNone(command)
-        self.assertTrue(command.description.startswith("🧾"))
+        self.assertEqual(command.description, "Ask staff for reimbursement of lost items or progress")
         self.assertEqual(COMMAND_ACCESS["reimburse"], "everyone")
         self.assertIsNotNone(bot_module.ReimburseModal)
 
@@ -642,6 +654,170 @@ class SpinBackFeatureTests(unittest.TestCase):
             self.assertEqual(
                 plain.footer.text,
                 f"🏓 Support - Other Server • {utcnow().year}",
+            )
+
+    def test_new_utility_commands_are_registered_with_plain_descriptions(self):
+        import grid_a1.bot as bot_module
+        from grid_a1 import guides
+
+        tree = bot_module.bot.tree
+        info = tree.get_command("info")
+        self.assertEqual(sorted(command.name for command in info.commands), ["bot", "server", "user"])
+        for name in ("avatar", "slowmode", "modstats"):
+            self.assertIsNotNone(tree.get_command(name), name)
+
+        entries = {entry.path: entry for entry in guides.catalog(tree)}
+        for command_path in ("info user", "info bot", "avatar", "slowmode", "modstats"):
+            self.assertIn(command_path, entries)
+            self.assertTrue(entries[command_path].description, command_path)
+            self.assertFalse(
+                any(ord(character) > 0x2100 for character in entries[command_path].description),
+                command_path,
+            )
+        rendered = "\n".join(
+            value
+            for _, value in guides.render_guide(
+                guides.catalog(tree),
+                list(guides.ACCESS_LABELS),
+                max_total=8000,
+            )
+        )
+        for command_path in ("/info user", "/info bot", "/avatar", "/slowmode", "/modstats"):
+            self.assertIn(command_path, rendered)
+
+    def test_staff_only_commands_refuse_members_without_a_configured_role(self):
+        import grid_a1.bot as bot_module
+        from discord import app_commands
+
+        for name in ("slowmode", "modstats"):
+            command = bot_module.bot.tree.get_command(name)
+            self.assertTrue(command.checks, name)
+            self.assertIn("staff_member", inspect.getsource(command.checks[0]))
+
+        class FakeMember:
+            def __init__(self):
+                self.id = 4242
+                self.roles = ()
+                self.guild = SimpleNamespace(id=77, owner_id=1)
+
+        class FakeInteraction:
+            def __init__(self):
+                self.guild = SimpleNamespace(id=77, owner_id=1)
+                self.user = FakeMember()
+
+        command = bot_module.bot.tree.get_command("slowmode")
+        with self.assertRaises(app_commands.CheckFailure):
+            asyncio.run(command.checks[0](FakeInteraction()))
+
+    def test_moderation_activity_summary_counts_actions_and_moderators(self):
+        import grid_a1.bot as bot_module
+        from datetime import timedelta
+
+        from grid_a1.utils import utcnow
+
+        class FakeResponse:
+            def __init__(self):
+                self.embed = None
+                self.ephemeral = None
+
+            async def send_message(self, embed=None, ephemeral=False, **kwargs):
+                self.embed = embed
+                self.ephemeral = ephemeral
+
+        class FakeInteraction:
+            def __init__(self):
+                self.guild = SimpleNamespace(id=77)
+                self.user = SimpleNamespace(id=9001, __str__=lambda self: "moderator")
+                self.response = FakeResponse()
+
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(Path(directory) / "manager.sqlite3")
+            database.migrate()
+            database.audit(77, None, 9001, "kick", '{"member=5"}')
+            database.audit(77, None, 9001, "warn", '{"member=6"}')
+            database.audit(77, None, 9002, "warn", '{"member=7"}')
+            database.audit(77, None, 9001, "slowmode", "seconds=5")
+
+            since = (utcnow() - timedelta(days=7)).isoformat()
+            rows = database.moderation_activity(77, since)
+            self.assertEqual([row["action"] for row in rows], ["warn", "warn", "kick"])
+            self.assertEqual(database.moderation_activity(77, utcnow().isoformat()), [])
+
+            command = bot_module.bot.tree.get_command("modstats")
+            interaction = FakeInteraction()
+            original = bot_module.bot.database
+            bot_module.bot.database = database
+            try:
+                asyncio.run(command.callback(interaction, 7))
+            finally:
+                bot_module.bot.database = original
+
+            card = interaction.response.embed
+            self.assertEqual(card.description, "Recorded actions in the last 7 day(s): 3")
+            fields = {field.name: field.value for field in card.fields}
+            self.assertEqual(fields["By action"], "warn: 2\nkick: 1")
+            self.assertIn("<@9001>: 2", fields["Most active moderators"])
+            self.assertIn("Newest record", fields)
+
+    def test_ticket_regions_cover_eu_and_na(self):
+        from grid_a1.utils import TICKET_REGIONS, TICKET_REGION_VALUES, region_display, region_flag, region_hint
+        from grid_a1.views import RegionSelect
+
+        self.assertEqual([value for value, _, _ in TICKET_REGIONS], ["EU", "NA"])
+        self.assertEqual(TICKET_REGION_VALUES, frozenset({"EU", "NA"}))
+        self.assertEqual(region_flag("na"), "🇺🇸")
+        self.assertEqual(region_display("EU"), "🇪🇺 EU")
+        self.assertEqual(region_display("Asia"), "🌍 ASIA")
+        self.assertIn("North American", region_hint("NA"))
+
+        select = RegionSelect(SimpleNamespace(), "general", "Ticket General")
+        self.assertEqual([option.value for option in select.options], ["EU", "NA"])
+        self.assertTrue(all(option.emoji for option in select.options))
+        self.assertTrue(all(option.description for option in select.options))
+        self.assertEqual(select.custom_id, "grid-a1:ticket:region")
+
+    def test_ticket_embed_shows_the_region_that_was_chosen(self):
+        from grid_a1.embeds import ticket_embed
+
+        for region, flag in (("EU", "🇪🇺"), ("NA", "🇺🇸")):
+            panel = ticket_embed("general", region, "Details of the problem")
+            fields = {field.name: field.value for field in panel.fields}
+            self.assertEqual(fields["🌍 Region"], f"{flag} {region}")
+
+    def test_ticket_creation_refuses_regions_outside_eu_and_na(self):
+        from grid_a1.tickets import TicketService
+
+        class FakeResponse:
+            def is_done(self):
+                return False
+
+            async def defer(self, ephemeral=False):
+                return None
+
+        class FakeFollowup:
+            def __init__(self):
+                self.messages = []
+
+            async def send(self, content=None, **kwargs):
+                self.messages.append(content)
+
+        class FakeInteraction:
+            def __init__(self):
+                self.guild = SimpleNamespace(id=77)
+                self.user = SimpleNamespace(id=900, name="olly", display_name="Olly", mention="<@900>")
+                self.channel = SimpleNamespace(id=1)
+                self.response = FakeResponse()
+                self.followup = FakeFollowup()
+
+        with tempfile.TemporaryDirectory() as directory:
+            database = Database(Path(directory) / "manager.sqlite3")
+            database.migrate()
+            service = TicketService(database)
+            interaction = FakeInteraction()
+            asyncio.run(service.create(interaction, "general", "Ticket General", "ASIA", "details"))
+            self.assertEqual(
+                interaction.followup.messages,
+                ["❌ Choose EU or NA support and try again."],
             )
 
     def test_every_shipped_file_uses_the_spinback_brand(self):
