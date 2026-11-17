@@ -20,18 +20,21 @@ def embed(title: str, description: str, colour: discord.Colour = NEON_PURPLE) ->
 
 
 TICKET_PANEL_TITLE = "📩 Spinback - Support"
-TICKET_PANEL_INTRO = "For any issue you encounter or questions you have plz select one of the following choices."
+TICKET_PANEL_INTRO = (
+    "Ran into a problem or have a question? Pick the option below that fits best — every ticket "
+    "is private and goes straight to staff."
+)
 TICKET_PANEL_HELP = (
-    "If you are looking for the commands list|how they work do `/help` this will provide you the full list of "
-    "commands and make response time quicker!"
+    "Most questions are already answered by `/help`, which lists every command and what it does — "
+    "reading it is usually faster than waiting for a ticket."
 )
 TICKET_PANEL_CATEGORIES: tuple[tuple[str, str, str], ...] = (
-    ("📄", "Ticket General", "For any request or question that is not specified in the following categories"),
-    ("🏠", "Ticket Base", "Any questions or problems related to your base or your area can be discussed in this ticket"),
-    ("👥", "Ticket Clan", "Ticket made to respond to clan requests or possible specific problems"),
-    ("💎", "Ticket Shop", "Information about our online store or any product"),
-    ("⚠️", "Ticket Raid", "Ticket made for bounty raid or raid related problems"),
-    ("🐛", "Ticket Bug", "For any bug/glitch found in-game or with ours bots"),
+    ("📄", "Ticket General", "Anything that does not fit one of the categories below."),
+    ("🏠", "Ticket Base", "Questions and problems about your base or your area."),
+    ("👥", "Ticket Clan", "Clan requests, clan applications, and any clan-specific problem."),
+    ("💎", "Ticket Shop", "Our online store: orders, products, and payment questions."),
+    ("⚠️", "Ticket Raid", "Bounty raids and raid-related problems."),
+    ("🐛", "Ticket Bug", "A bug or glitch in-game or with one of our bots."),
 )
 """The public ticket panel's category lines: emoji, bold heading, and the line under it."""
 
@@ -46,7 +49,9 @@ def support_panel(guild: discord.Guild, database: Database) -> discord.Embed:
     """The public ticket panel: one heading, the guidance lines, then every issue type."""
     year = utcnow().year
     lines = [TICKET_PANEL_INTRO, "", TICKET_PANEL_HELP]
-    for emoji, heading, details in TICKET_PANEL_CATEGORIES:
+    for index, (emoji, heading, details) in enumerate(TICKET_PANEL_CATEGORIES):
+        if index:
+            lines.append("")
         lines.append(f"**{emoji} {heading}**")
         lines.append(details)
     result = embed(TICKET_PANEL_TITLE, "\n".join(lines), PANEL_COLOUR)
